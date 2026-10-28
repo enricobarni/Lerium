@@ -141,6 +141,41 @@ describe('settings-repository: load', () => {
   });
 });
 
+describe('settings-repository: dados armazenados hostis', () => {
+  it('endpoint remoto armazenado cai para o padrão sem gravar', async () => {
+    const area = new FakeStorageArea({ settings: { ...SAVED, endpoint: 'http://evil.com' } });
+    const before = area.snapshot();
+
+    const settings = await createSettingsRepository(area).load();
+
+    expect(settings).toEqual({ ...SAVED, endpoint: DEFAULT_SETTINGS.endpoint });
+    expect(area.setCalls).toBe(0);
+    expect(area.snapshot()).toEqual(before);
+  });
+
+  it('chave __proto__ armazenada não polui protótipos no load nem no save', async () => {
+    const hostile: unknown = JSON.parse(
+      '{"__proto__":{"polluted":1},"schemaVersion":1,"model":"qwen3:8b"}',
+    );
+    const area = new FakeStorageArea({ settings: hostile });
+    const repository = createSettingsRepository(area);
+
+    const loaded = await repository.load();
+    expect(loaded).toEqual({ ...DEFAULT_SETTINGS, model: 'qwen3:8b' });
+    expect(Object.getPrototypeOf(loaded)).toBe(Object.prototype);
+    expect(area.setCalls).toBe(0);
+
+    const result = await repository.save(VALID_INPUT);
+    expect(result).toEqual({ ok: true, settings: SAVED });
+
+    const saved = area.data.get(SETTINGS_STORAGE_KEY) as Record<string, unknown>;
+    expect(Object.getPrototypeOf(saved)).toBe(Object.prototype);
+    expect((saved as { polluted?: unknown }).polluted).toBeUndefined();
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+    expect(Object.prototype).not.toHaveProperty('polluted');
+  });
+});
+
 describe('settings-repository: save', () => {
   it('persiste valores normalizados e load devolve o mesmo', async () => {
     const area = new FakeStorageArea();
