@@ -1,7 +1,16 @@
 import { DEFAULT_SETTINGS, LANGUAGES } from '../core/constants';
+import { hasModel, listModels } from '../core/ollama-client';
 import type { TranslationSettings } from '../core/types';
+import { normalizeEndpoint, validateModel } from '../shared/validation';
 import { createSettingsRepository, type SettingsFieldErrors } from '../storage/settings-repository';
-import { endpointErrorMessage, languageErrorMessage, modelErrorMessage } from './messages';
+import {
+  connectedMessage,
+  endpointErrorMessage,
+  languageErrorMessage,
+  missingModelMessage,
+  modelErrorMessage,
+  ollamaErrorMessage,
+} from './messages';
 
 const SAVED_MESSAGE = 'Configurações salvas.';
 const INVALID_MESSAGE = 'Não foi possível salvar. Corrija os campos indicados.';
@@ -10,6 +19,9 @@ const LOAD_ERROR =
   'Não foi possível ler as configurações salvas. O formulário mostra os valores padrão; ' +
   'salvar agora substituirá o que estiver gravado.';
 const RESTORED_MESSAGE = 'Valores padrão preenchidos. Clique em Salvar para gravá-los.';
+const TESTING_MESSAGE = 'Testando conexão…';
+const TEST_INVALID_MESSAGE = 'Corrija o endereço do Ollama para testar a conexão.';
+const INSTALLED_PLACEHOLDER = 'Escolha um modelo instalado';
 
 type FieldName = keyof SettingsFieldErrors;
 
@@ -26,6 +38,13 @@ const form = byId('settings-form', HTMLFormElement);
 const saveButton = byId('save', HTMLButtonElement);
 const restoreButton = byId('restore', HTMLButtonElement);
 const feedback = byId('feedback', HTMLParagraphElement);
+const testButton = byId('test-connection', HTMLButtonElement);
+const connectionStatus = byId('connection-status', HTMLParagraphElement);
+const modelWarning = byId('model-warning', HTMLParagraphElement);
+const installedField = byId('installed-models-field', HTMLDivElement);
+const installedSelect = byId('installed-models', HTMLSelectElement);
+const originHelp = byId('origin-help', HTMLElement);
+const originHelpTitle = byId('origin-help-title', HTMLHeadingElement);
 
 const endpointInput = byId('endpoint', HTMLInputElement);
 const modelInput = byId('model', HTMLInputElement);
@@ -63,6 +82,24 @@ function setBusy(value: boolean): void {
   }
 }
 
+/**
+ * Bloqueia "Testar conexão" durante a leitura inicial e enquanto um teste
+ * roda; mesmo padrão de aria-disabled de `setBusy`. Salvar continua livre.
+ */
+let testing = true;
+
+function setTesting(value: boolean): void {
+  testing = value;
+  if (value) testButton.setAttribute('aria-disabled', 'true');
+  else testButton.removeAttribute('aria-disabled');
+}
+
+/** Modelos do último teste bem-sucedido; `undefined` se não houver lista válida. */
+let installedModels: readonly string[] | undefined;
+
+/** Identifica o teste mais recente; respostas de testes anteriores são ignoradas. */
+let testRun = 0;
+
 function populateLanguages(select: HTMLSelectElement): void {
   for (const language of LANGUAGES) {
     const option = document.createElement('option');
@@ -73,18 +110,111 @@ function populateLanguages(select: HTMLSelectElement): void {
 }
 
 function fillForm(settings: Readonly<TranslationSettings>): void {
+  const endpointChanged = endpointInput.value !== settings.endpoint;
   endpointInput.value = settings.endpoint;
   modelInput.value = settings.model;
   sourceSelect.value = settings.sourceLanguage;
   targetSelect.value = settings.targetLanguage;
+  if (endpointChanged) resetConnection();
+  else syncModelChoice();
+}
+
+function announceTo(region: HTMLElement, message: string): void {
+  // Limpa antes de escrever para que leitores de tela anunciem mensagens repetidas.
+  region.textContent = '';
+  requestAnimationFrame(() => {
+    region.textContent = message;
+  });
 }
 
 function announce(message: string): void {
-  // Limpa antes de escrever para que leitores de tela anunciem mensagens repetidas.
-  feedback.textContent = '';
-  requestAnimationFrame(() => {
-    feedback.textContent = message;
+  announceTo(feedback, message);
+}
+
+/**
+ * Sincroniza a lista de instalados e o aviso com o texto do campo Modelo,
+ * que é a fonte de verdade do que é salvo. O aviso não bloqueia o salvamento.
+ */
+function syncModelChoice(): void {
+  const models = installedModels;
+  const model = validateModel(modelInput.value);
+  if (!models || !model.ok) {
+    modelWarning.textContent = '';
+    installedSelect.value = '';
+    return;
+  }
+  installedSelect.value = models.find((name) => hasModel([name], model.value)) ?? '';
+  modelWarning.textContent = hasModel(models, model.value) ? '' : missingModelMessage(model.value);
+}
+
+function renderInstalledModels(models: readonly string[]): void {
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = INSTALLED_PLACEHOLDER;
+  const options = models.map((name) => {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = name;
+    return option;
   });
+  installedSelect.replaceChildren(placeholder, ...options);
+  // Sem modelos, uma lista só com o texto de escolha não ajuda; o aviso orienta.
+  installedField.hidden = models.length === 0;
+}
+
+/** Descarta o resultado de um teste anterior (ex.: o endereço mudou). */
+function resetConnection(): void {
+  testRun += 1;
+  installedModels = undefined;
+  installedField.hidden = true;
+  installedSelect.replaceChildren();
+  modelWarning.textContent = '';
+  connectionStatus.textContent = '';
+}
+
+function setEndpointError(message: string | undefined): void {
+  errorElements.endpoint.textContent = message ?? '';
+  if (message) endpointInput.setAttribute('aria-invalid', 'true');
+  else endpointInput.removeAttribute('aria-invalid');
+}
+
+/**
+ * Testa o endereço digitado (não o salvo). `userInitiated` controla o foco:
+ * o teste automático ao abrir a página não deve mover o foco do usuário.
+ */
+async function testConnection(userInitiated: boolean): Promise<void> {
+  const endpoint = normalizeEndpoint(endpointInput.value);
+  resetConnection();
+  if (!endpoint.ok) {
+    setEndpointError(endpointErrorMessage(endpoint.reason));
+    announceTo(connectionStatus, TEST_INVALID_MESSAGE);
+    if (userInitiated) endpointInput.focus();
+    return;
+  }
+  setEndpointError(undefined);
+
+  const run = testRun;
+  setTesting(true);
+  announceTo(connectionStatus, TESTING_MESSAGE);
+  try {
+    // Arrow function: chamar `fetch` desacoplado de `window` gera "Illegal invocation".
+    const result = await listModels(endpoint.value, { fetchFn: (...args) => fetch(...args) });
+    if (run !== testRun) return;
+    if (result.ok) {
+      installedModels = result.models;
+      renderInstalledModels(result.models);
+      syncModelChoice();
+      announceTo(connectionStatus, connectedMessage(result.models.length));
+      return;
+    }
+    announceTo(connectionStatus, ollamaErrorMessage(result.error, result.status));
+    if (result.error === 'forbidden') {
+      originHelp.hidden = false;
+      if (userInitiated) originHelpTitle.focus();
+    }
+  } finally {
+    setTesting(false);
+  }
 }
 
 function errorMessage(name: FieldName, errors: SettingsFieldErrors): string | undefined {
@@ -153,6 +283,18 @@ async function init(): Promise<void> {
     // Ignora submissões repetidas (Enter ou clique) enquanto houver leitura/gravação.
     if (!busy) void handleSubmit();
   });
+  testButton.addEventListener('click', () => {
+    if (!testing) void testConnection(true);
+  });
+  endpointInput.addEventListener('input', resetConnection);
+  modelInput.addEventListener('input', syncModelChoice);
+  installedSelect.addEventListener('change', () => {
+    if (installedSelect.value === '') return;
+    modelInput.value = installedSelect.value;
+    errorElements.model.textContent = '';
+    modelInput.removeAttribute('aria-invalid');
+    syncModelChoice();
+  });
   restoreButton.addEventListener('click', () => {
     // Sem isso, o load() inicial sobrescreveria os padrões restaurados.
     if (busy) return;
@@ -173,6 +315,11 @@ async function init(): Promise<void> {
   } finally {
     setBusy(false);
   }
+
+  // Teste automático com o endereço carregado: só vai ao loopback, sem dados
+  // da página, e mostra de imediato a lista de modelos ou o motivo da falha.
+  setTesting(false);
+  await testConnection(false);
 }
 
 void init();

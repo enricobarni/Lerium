@@ -95,3 +95,8 @@ export function ollamaErrorMessage(error: OllamaErrorKind, status?: number): str
 export function missingModelMessage(model: string): string {
   return `O modelo "${model}" não está instalado no Ollama. Instale-o com: ollama pull ${model}`;
 }
+
+/** Resultado do botão "Testar conexão" quando `/api/tags` respondeu. */
+export function connectedMessage(count: number): string {
+  return `Conectado. ${count} modelo(s) encontrado(s).`;
+}

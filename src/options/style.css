@@ -122,6 +122,44 @@ select {
   display: none;
 }
 
+/* Aviso não bloqueante: texto na cor normal, marcado por barra lateral (borda 4,83:1 / 6,99:1). */
+.warning {
+  padding-left: 0.5rem;
+  border-left: 4px solid var(--color-field-border);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.warning:empty {
+  display: none;
+}
+
+.field-actions {
+  margin-top: 0.25rem;
+}
+
+#connection-status {
+  font-size: 0.875rem;
+}
+
+/* Sem regra de display com [hidden] presente: o atributo precisa esconder o bloco. */
+.subfield:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.5rem;
+}
+
+.instructions {
+  margin-top: 2rem;
+}
+
+h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.25rem;
+  line-height: 1.3;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -171,7 +209,8 @@ button[aria-disabled='true'] {
 
 input:focus-visible,
 select:focus-visible,
-button:focus-visible {
+button:focus-visible,
+[tabindex='-1']:focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }

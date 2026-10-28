@@ -33,13 +33,19 @@
             aria-describedby="endpoint-help endpoint-error"
           />
           <p id="endpoint-error" class="error"></p>
+          <div class="field-actions">
+            <button type="button" id="test-connection" class="secondary" aria-disabled="true">
+              Testar conexão
+            </button>
+          </div>
+          <p id="connection-status" role="status"></p>
         </div>
 
         <div class="field">
           <label for="model">Modelo</label>
           <p id="model-help" class="help">
-            Nome do modelo instalado no Ollama, como aparece em "ollama list". A lista de modelos
-            instalados virá em breve.
+            Nome do modelo instalado no Ollama, como aparece em "ollama list". Depois de testar a
+            conexão, você também pode escolhê-lo na lista de modelos instalados.
           </p>
           <input
             id="model"
@@ -47,9 +53,17 @@
             type="text"
             autocomplete="off"
             spellcheck="false"
-            aria-describedby="model-help model-error"
+            aria-describedby="model-help model-error model-warning"
           />
           <p id="model-error" class="error"></p>
+          <p id="model-warning" class="warning"></p>
+          <div id="installed-models-field" class="subfield" hidden>
+            <label for="installed-models">Modelos instalados</label>
+            <p id="installed-models-help" class="help">
+              Escolher um modelo da lista preenche o campo Modelo; ele continua editável.
+            </p>
+            <select id="installed-models" aria-describedby="installed-models-help"></select>
+          </div>
         </div>
 
         <div class="field">
@@ -91,6 +105,14 @@
       </form>
 
       <p id="feedback" role="status"></p>
+
+      <section id="origin-help" class="instructions" aria-labelledby="origin-help-title" hidden>
+        <h2 id="origin-help-title" tabindex="-1">Liberar o Lerium no Ollama</h2>
+        <p>
+          O Ollama só aceita pedidos de origens liberadas na variável de ambiente OLLAMA_ORIGINS.
+          Libere a origem do Lerium e reinicie o Ollama.
+        </p>
+      </section>
     </main>
     <script type="module" src="./index.ts"></script>
   </body>

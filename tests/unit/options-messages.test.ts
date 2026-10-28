@@ -5,6 +5,7 @@ import {
   LANGUAGE_ERROR_MESSAGES,
   MODEL_ERROR_MESSAGES,
   OLLAMA_ERROR_MESSAGES,
+  connectedMessage,
   endpointErrorMessage,
   languageErrorMessage,
   missingModelMessage,
@@ -121,5 +122,10 @@ describe('mensagens de diagnóstico da conexão', () => {
     const message = missingModelMessage('translategemma:4b');
     expect(message).toContain('"translategemma:4b"');
     expect(message).toContain('ollama pull translategemma:4b');
+  });
+
+  it('conexão bem-sucedida informa a quantidade de modelos', () => {
+    expect(connectedMessage(3)).toBe('Conectado. 3 modelo(s) encontrado(s).');
+    expect(connectedMessage(0)).toBe('Conectado. 0 modelo(s) encontrado(s).');
   });
 });
