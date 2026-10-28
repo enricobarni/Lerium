@@ -179,12 +179,31 @@ esperado para detectar troca acidental. Validações pendentes no Chrome real:
 se o `Origin` é enviado em requisições `GET` das páginas da extensão e se o
 CORS funciona sem `host_permissions`.
 
+Riscos residuais e diagnóstico:
+
+- **A `key` é pública.** Qualquer extensão descompactada carregada com a
+  mesma `key` herda o ID do Lerium e teria acesso total ao Ollama liberado.
+  Mitigações: carregar o Lerium apenas a partir deste repositório; remover a
+  origem de `OLLAMA_ORIGINS` ao desinstalar; o ID mudará na publicação
+  (tratado em ADR futura).
+- **A liberação vale para a API inteira.** O Ollama não restringe origens por
+  rota; liberar a origem concede ao Lerium todos os endpoints, embora o
+  código só use `/api/tags` e `/api/chat`.
+- **O 403 é invisível ao `fetch`.** Sem `host_permissions`, a página está
+  sujeita a CORS: o 403 para origem não liberada vem sem
+  `Access-Control-Allow-Origin` e o `fetch` rejeita como erro de rede, igual
+  a um Ollama desligado. Para distinguir os casos, o cliente faz, após o erro
+  de rede, uma sondagem `GET` com `mode: 'no-cors'` dentro do mesmo prazo: se
+  ela resolver (resposta opaca, corpo não lido), o servidor está alcançável
+  e recusou a origem; se falhar, está inacessível. Não exige permissão
+  adicional.
+
 ## ADR-008 — Configurações locais por usuário
 
 **Status:** Aceita (28/10/2026)
 
-> Nota: o número 007 está reservado para a ADR sobre a origem das requisições
-> ao Ollama, que será registrada na branch `feat/ollama-discovery`.
+> Nota: o número 007 foi reservado para a ADR sobre a origem das requisições
+> ao Ollama, registrada acima como ADR-007.
 
 **Contexto.** RF01 exige persistir endpoint, modelo e idiomas, mantendo os
 valores após recarregar ou atualizar a extensão. A referência grava padrões
