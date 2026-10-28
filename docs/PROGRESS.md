@@ -6,10 +6,30 @@
 ## Estado atual
 
 - **Fase:** 1 — Fundação e ferramentas
-- **Tarefa:** `ci/quality-gates` em revisão; próxima: `feat/popup-shell`
+- **Tarefa:** `feat/popup-shell` em revisão (última branch da Fase 1)
 - **Versão:** `0.0.1` (pré-release; `0.1.0` reservada para a conexão com o Ollama, PLAN.md §5.4)
 - **Fase 0:** concluída — PRs #1 a #4 mesclados com merge commit (hashes preservados)
-- **Mesclados na Fase 1:** #5 (`chore/claude-config`) e #6 (`chore/project-bootstrap`)
+- **Mesclados na Fase 1:** #5 (`chore/claude-config`), #6 (`chore/project-bootstrap`) e #7 (`ci/quality-gates`)
+
+## Fase 1 — `feat/popup-shell`
+
+| Commit | Mensagem |
+|---|---|
+| `551b74d` | `feat(options): cria página de configurações vazia e navegável` |
+| `8de3bfc` | `feat(popup): cria popup em pt-br com acesso às configurações` |
+| `81376f6` | `docs(readme): documenta instalação via load unpacked` |
+| `a1f0549` | `fix(popup): separa aviso fixo da região de feedback de erro` |
+| `64c0473` | `fix(popup): delimita o botão no tema escuro com borda contrastante` |
+| (este commit) | `docs(progress): registra popup e opções da fase 1` |
+
+**Validações executadas:** `npm run lint`, `typecheck`, `test` (10/10) e `build` com código 0; `dist/` contém popup, opções, assets e ícones; sem `innerHTML`, `eval`, script ou estilo inline. Contrastes (WCAG 2.2 AA): texto 14,68:1 (claro) e 16,12:1 (escuro); rótulo do botão 6,29:1; foco 6,29:1 / 8,90:1; borda do botão no tema escuro 8,9:1. Revisão do reviewer: aprovado com ressalvas, todas tratadas.
+
+**Decisões:**
+- `options_ui` com `open_in_tab: true`, aberto por `chrome.runtime.openOptionsPage()` (não exige permissão); `permissions` segue vazio.
+- Popup fecha com `window.close()` após abrir as opções; em erro, mensagem genérica em PT-BR numa região `role="status"` própria, sem log.
+- Sugestão de clarear o botão para `#6366f1` no tema escuro recusada: o rótulo branco cairia para 4,47:1 (< 4,5:1). Adotada borda `#a5b4fc`.
+
+**Pendente (gate da Fase 1):** teste manual pelo responsável — *Load unpacked*, abrir popup, navegar por Tab/Enter até "Abrir configurações", verificar que a aba de opções abre, e conferir o tema escuro.
 
 ## Fase 1 — `chore/project-bootstrap`
 
@@ -111,4 +131,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 1 — `feat/popup-shell`: popup em PT-BR, página de opções vazia e navegável, README com instalação via *Load unpacked*.
+Após o aceite manual: encerrar a Fase 1 e iniciar a Fase 2 — `feat/settings-storage` (`TranslationSettings` e repositório de configurações com defaults não destrutivos).
