@@ -6,6 +6,7 @@ import { createSettingsRepository, type SettingsFieldErrors } from '../storage/s
 import {
   connectedMessage,
   endpointErrorMessage,
+  extensionOrigin,
   languageErrorMessage,
   missingModelMessage,
   modelErrorMessage,
@@ -22,6 +23,9 @@ const RESTORED_MESSAGE = 'Valores padrão preenchidos. Clique em Salvar para gra
 const TESTING_MESSAGE = 'Testando conexão…';
 const TEST_INVALID_MESSAGE = 'Corrija o endereço do Ollama para testar a conexão.';
 const INSTALLED_PLACEHOLDER = 'Escolha um modelo instalado';
+const COPIED_MESSAGE = 'Origem copiada. Cole-a no valor de OLLAMA_ORIGINS.';
+const COPY_ERROR =
+  'Não foi possível copiar automaticamente. Selecione a origem acima e copie com Ctrl+C.';
 
 type FieldName = keyof SettingsFieldErrors;
 
@@ -43,8 +47,10 @@ const connectionStatus = byId('connection-status', HTMLParagraphElement);
 const modelWarning = byId('model-warning', HTMLParagraphElement);
 const installedField = byId('installed-models-field', HTMLDivElement);
 const installedSelect = byId('installed-models', HTMLSelectElement);
-const originHelp = byId('origin-help', HTMLElement);
 const originHelpTitle = byId('origin-help-title', HTMLHeadingElement);
+const originCode = byId('extension-origin', HTMLElement);
+const copyButton = byId('copy-origin', HTMLButtonElement);
+const copyStatus = byId('copy-status', HTMLParagraphElement);
 
 const endpointInput = byId('endpoint', HTMLInputElement);
 const modelInput = byId('model', HTMLInputElement);
@@ -208,10 +214,9 @@ async function testConnection(userInitiated: boolean): Promise<void> {
       return;
     }
     announceTo(connectionStatus, ollamaErrorMessage(result.error, result.status));
-    if (result.error === 'forbidden') {
-      originHelp.hidden = false;
-      if (userInitiated) originHelpTitle.focus();
-    }
+    // A seção de liberação da origem está sempre visível; no teste manual,
+    // levar o foco até ela encurta o caminho até a solução.
+    if (result.error === 'forbidden' && userInitiated) originHelpTitle.focus();
   } finally {
     setTesting(false);
   }
@@ -273,7 +278,21 @@ async function handleSubmit(): Promise<void> {
   }
 }
 
+async function copyOrigin(origin: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(origin);
+    announceTo(copyStatus, COPIED_MESSAGE);
+  } catch {
+    announceTo(copyStatus, COPY_ERROR);
+  }
+}
+
 async function init(): Promise<void> {
+  // Calculada em runtime: o ID vem da `key` do manifesto (ADR-007).
+  const origin = extensionOrigin(chrome.runtime.id);
+  originCode.textContent = origin;
+  copyButton.addEventListener('click', () => void copyOrigin(origin));
+
   populateLanguages(sourceSelect);
   populateLanguages(targetSelect);
   fillForm(DEFAULT_SETTINGS);

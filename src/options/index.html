@@ -106,11 +106,43 @@
 
       <p id="feedback" role="status"></p>
 
-      <section id="origin-help" class="instructions" aria-labelledby="origin-help-title" hidden>
+      <section id="origin-help" class="instructions" aria-labelledby="origin-help-title">
         <h2 id="origin-help-title" tabindex="-1">Liberar o Lerium no Ollama</h2>
         <p>
           O Ollama só aceita pedidos de origens liberadas na variável de ambiente OLLAMA_ORIGINS.
-          Libere a origem do Lerium e reinicie o Ollama.
+          Faça isto uma vez, antes de usar o Lerium.
+        </p>
+
+        <p class="origin">Origem do Lerium: <code id="extension-origin"></code></p>
+        <div class="field-actions">
+          <button type="button" id="copy-origin" class="secondary">Copiar origem</button>
+        </div>
+        <p id="copy-status" role="status"></p>
+
+        <h3>No Windows</h3>
+        <ol class="steps">
+          <li>
+            No menu Iniciar, pesquise e abra "Editar as variáveis de ambiente para sua conta".
+          </li>
+          <li>
+            Em "Variáveis de usuário", crie a variável OLLAMA_ORIGINS com a origem copiada como
+            valor, ou edite-a se ela já existir.
+          </li>
+          <li>
+            Se OLLAMA_ORIGINS já tiver um valor, não o apague: acrescente uma vírgula ao final e
+            cole a origem depois dela.
+          </li>
+          <li>Clique em OK para salvar.</li>
+          <li>
+            Feche o Ollama pelo ícone na bandeja do sistema (ao lado do relógio, em "Quit Ollama") e
+            abra-o de novo, para que ele leia a variável.
+          </li>
+          <li>Volte a esta página e clique em "Testar conexão".</li>
+        </ol>
+
+        <p class="warning">
+          Não use * nem chrome-extension://* como valor: com eles, qualquer site ou extensão
+          instalada poderia usar o seu Ollama.
         </p>
       </section>
     </main>

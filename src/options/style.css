@@ -154,6 +154,35 @@ select {
   margin-top: 2rem;
 }
 
+h3 {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 1.0625rem;
+}
+
+.instructions > p {
+  margin-bottom: 0.75rem;
+}
+
+/* Origem longa sem espaços: quebra em telas estreitas em vez de rolar a página. */
+code {
+  font-family: ui-monospace, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+#copy-status {
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.steps {
+  margin: 0 0 1rem;
+  padding-left: 1.5rem;
+}
+
+.steps li + li {
+  margin-top: 0.375rem;
+}
+
 h2 {
   margin: 0 0 0.75rem;
   font-size: 1.25rem;
@@ -227,4 +256,8 @@ button:focus-visible,
   button {
     transition: none;
   }
+}
+
+#copy-status:empty {
+  margin: 0;
 }

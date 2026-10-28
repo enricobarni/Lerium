@@ -100,3 +100,8 @@ export function missingModelMessage(model: string): string {
 export function connectedMessage(count: number): string {
   return `Conectado. ${count} modelo(s) encontrado(s).`;
 }
+
+/** Origem que o Ollama recebe no cabeçalho `Origin` das páginas da extensão. */
+export function extensionOrigin(extensionId: string): string {
+  return `chrome-extension://${extensionId}`;
+}

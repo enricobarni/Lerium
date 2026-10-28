@@ -7,6 +7,7 @@ import {
   OLLAMA_ERROR_MESSAGES,
   connectedMessage,
   endpointErrorMessage,
+  extensionOrigin,
   languageErrorMessage,
   missingModelMessage,
   modelErrorMessage,
@@ -127,5 +128,11 @@ describe('mensagens de diagnóstico da conexão', () => {
   it('conexão bem-sucedida informa a quantidade de modelos', () => {
     expect(connectedMessage(3)).toBe('Conectado. 3 modelo(s) encontrado(s).');
     expect(connectedMessage(0)).toBe('Conectado. 0 modelo(s) encontrado(s).');
+  });
+
+  it('monta a origem da extensão a partir do ID, sem curinga', () => {
+    const origin = extensionOrigin('mjkoppimccgajnabfeheglepjapkchlk');
+    expect(origin).toBe('chrome-extension://mjkoppimccgajnabfeheglepjapkchlk');
+    expect(origin).not.toContain('*');
   });
 });
