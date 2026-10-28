@@ -53,3 +53,25 @@ Publicação na Chrome Web Store; sincronização em nuvem; contas; backend; pag
 | Detecção de idioma de origem | Heurísticas da referência são insuficientes; detectar vs fonte explícita (padrão `en`) muda UI e prompt. | Fase 2 (configuração) / Fase 6. |
 | Necessidade e restrição de CORS (`OLLAMA_ORIGINS`) | Não se sabe se o Ollama aceita a origem da extensão sem ajuste; se necessário, restringir à origem específica, nunca `*`. | Fase 2, testando a conexão real. |
 | Estratégia de merge de PRs | Squash simplifica o histórico, mas apaga commits atômicos; merge/rebase os preserva. Ver PLAN.md §5.1. | Fase 1, ao configurar o repositório remoto e a CI. |
+
+## Referência observada e licença
+
+**Repositório observado:** https://github.com/shikira/ollama-translator
+
+**Limites da engenharia reversa:** análise estática do código público, complementada pelo relato de uso do usuário. Não é auditoria completa nem cobre todos os sites. Ver PLAN.md §2.
+
+**Fatos verificados em 28/10/2026 via API do GitHub:**
+
+- O campo `license` do repositório é `null`.
+- A raiz contém `README.md`, `README.ja.md`, `background.js`, `content.js`, `popup.js`/`popup.html`, `options.js`/`options.html`, `manifest.json`, `create-icons.html` e ícones PNG.
+- **Não há arquivo `LICENSE`.**
+- O `README.md` declara "MIT License" em sua seção de licença.
+
+**Decisão:**
+
+- Implementar apenas o **comportamento observável** da referência (PLAN.md §2.1).
+- **Não reutilizar** código, ícones, textos ou marca da referência.
+- Qualquer reutilização futura exige licença verificada (PLAN.md §8, item 8).
+- Os 14 problemas listados em PLAN.md §2.2 **não devem ser reproduzidos**.
+
+**Status:** licença da referência permanece **não confirmada**. Não tratar como resolvida.
