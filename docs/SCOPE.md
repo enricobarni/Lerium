@@ -24,8 +24,8 @@ Detalhes e critérios completos em PLAN.md §3.
 | RF01 | Opções em PT-BR (endpoint, modelo, idiomas, paralelismo, modo, domínios excluídos); defaults `localhost:11434` + `translategemma:4b`; apenas loopback; migração não destrutiva. | Configurações sobrevivem a recarga da extensão; erros em português; nada sobrescrito indevidamente. |
 | RF02 | Traduzir seleção pelo popup e pelo menu de contexto, com indicador de carregamento e o mesmo `TranslationService`/prompt da página. | Funciona no conteúdo principal e em elementos inline; resultado correto em PT-BR; trata seleção vazia e páginas Chrome não suportadas. |
 | RF03 | Traduzir página inteira: só nós elegíveis, exclusões (`script`, `code`, campos editáveis etc.), prioridade ao conteúdo principal visível, atualização progressiva, original retido. | `<p>`, `<em>`, `<strong>` e `<a>` seguem navegáveis/estilizados; sem duplicação ou remoção de nós; progresso coerente. |
-| RF04 | Controles (iniciar, cancelar, original/tradução, tentar novamente) e estados explícitos; jobs isolados por aba + documento/navegação + job. | Desligar no meio não injeta texto depois; reativar não duplica; abas não interferem entre si. |
-| RF05 | Prompt literário universal, independente de obra, em `PromptBuilder` versionado e testado, com delimitação explícita do texto. | Mesma engine para romance, fantasia e sci-fi; saída só com a tradução; fixtures com nomes próprios, diálogo e termos recorrentes. |
+| RF04 | Controles (iniciar, pausar/cancelar, mostrar original, mostrar tradução, tentar novamente) e estados explícitos; jobs isolados por aba + documento/navegação + job. | Desligar no meio não injeta texto depois; reativar não duplica; abas não interferem entre si. |
+| RF05 | Prompt literário universal, independente de obra, em `PromptBuilder` versionado e testado, com delimitação explícita do texto; idioma de origem detectado ou selecionado (padrão `en`). | Mesma engine para romance, fantasia e sci-fi; saída só com a tradução; fixtures com nomes próprios, diálogo e termos recorrentes. |
 | RF06 | Cliente único Ollama (`/api/tags`, `/api/chat`), NDJSON incremental com buffer, scheduler de 1 a 5 (default 2), retry limitado só para falhas transitórias. | Nenhum token perdido em stream fragmentado; falha preserva o original; timeout/cancelamento controlados; sem requisições infinitas. |
 | RF07 | Sem backend, telemetria ou persistência de conteúdo; permissões mínimas; injeção sob demanda; página como dado não confiável; inserção via `textContent`/`nodeValue`. | Auditoria manual de permissões; nenhuma requisição a terceiros; `chrome://` e Chrome Web Store tratadas como não suportadas. |
 
@@ -45,8 +45,8 @@ Publicação na Chrome Web Store; sincronização em nuvem; contas; backend; pag
 
 | Questão | Por que está em aberto | Decidir em |
 |---|---|---|
-| Licença do próprio Lerium | Não há arquivo `LICENSE` no repositório; a escolha afeta distribuição e contribuições. | Fase 0, antes do primeiro código. |
-| Política de injeção | `activeTab` + `scripting` (menor privilégio, exige ação do usuário) vs permissões opcionais por domínio (permite tradução persistente por site). Ver PLAN.md §4 e §8. | Fase 0/1, antes do manifesto. |
+| Licença do próprio Lerium | Não há arquivo `LICENSE` no repositório; a escolha afeta distribuição e contribuições. | Antes do primeiro commit de código (início da Fase 1, `chore/project-bootstrap`). |
+| Política de injeção | `activeTab` + `scripting` (menor privilégio, exige ação do usuário) vs permissões opcionais por domínio (permite tradução persistente por site). Ver PLAN.md §4 e §8. | Fase 1, antes do manifesto (ADR-002). |
 | Estratégia DOM para markup inline | Tradução por nó preserva estrutura mas perde contexto; marcadores preservam contexto mas dependem do modelo respeitá-los. | Fase 4, com testes de restauração. |
 | Identificador de documento/job e reidratação | O service worker MV3 é suspenso e perde estado global; é preciso um ID comprovado e fonte de verdade fora do worker. | Fase 3/4, antes do scheduler. |
 | UX do resultado de seleção (RF02) | Balão na página independe do popup aberto; resultado no popup é mais simples, mas some ao fechar. | Fase 6. |
