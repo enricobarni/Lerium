@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "vite build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "test": "vitest run",
     "lint": "eslint . && prettier --check \"**/*.{ts,js,mjs,json,html,css}\"",
     "format": "prettier --write \"**/*.{ts,js,mjs,json,html,css}\"",
