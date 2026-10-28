@@ -124,3 +124,39 @@ mantendo o aviso de copyright. Dependências futuras devem ter licenças
 compatíveis (PLAN.md §8, item 9). O `package.json` da Fase 1 deve declarar
 `"license": "MIT"`. Esta decisão **não** altera a situação da licença da
 extensão de referência, que continua não confirmada (SCOPE.md).
+
+## ADR-008 — Configurações locais por usuário
+
+**Status:** Aceita (28/10/2026)
+
+> Nota: o número 007 está reservado para a ADR sobre a origem das requisições
+> ao Ollama, que será registrada na branch `feat/ollama-discovery`.
+
+**Contexto.** RF01 exige persistir endpoint, modelo e idiomas, mantendo os
+valores após recarregar ou atualizar a extensão. A referência grava padrões
+com `storage.sync.set` em `onInstalled` sem checar dados existentes e pode
+apagar preferências em atualizações ([PLAN.md §2.2](PLAN.md), item 13). O
+endpoint aponta para o Ollama da própria máquina, e sincronização em nuvem
+está fora do escopo do MVP ([PLAN.md §1](PLAN.md)).
+
+**Decisão.**
+
+- Área: `chrome.storage.local`. O endpoint pertence à máquina, não à conta;
+  `storage.sync` levaria a configuração a outros computadores.
+- Escopo: configurações globais por perfil do Chrome, sem sobrescrita por
+  aba. Estado por aba é assunto de job/sessão (ADR-004).
+- Padrões mesclados **na leitura**; gravação só quando o usuário salva. Isso
+  dispensa `onInstalled` e service worker nesta fase.
+- Chave única `settings`, com `schemaVersion: 1`, para permitir migrações
+  futuras não destrutivas.
+- Campo armazenado inválido cai no padrão apenas em memória e **nunca** é
+  regravado automaticamente.
+- Na gravação, chaves desconhecidas existentes dentro de `settings` são
+  preservadas (compatibilidade com versões futuras ou anteriores).
+
+**Consequências.** O manifesto passa a pedir a permissão `storage`.
+Atualizações da extensão não alteram o armazenamento; novos campos ganham
+padrão automaticamente na leitura. Um valor inválido persiste no storage até
+o usuário salvar novamente; a interface deve mostrar o valor efetivo. Uma
+mudança futura de formato exige migração explícita guiada por
+`schemaVersion`.
