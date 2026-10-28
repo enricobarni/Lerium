@@ -6,9 +6,10 @@
 ## Estado atual
 
 - **Fase:** 1 — Fundação e ferramentas
-- **Tarefa:** `chore/project-bootstrap` concluída localmente; próximas: `ci/quality-gates` e `feat/popup-shell`
+- **Tarefa:** `ci/quality-gates` em revisão; próxima: `feat/popup-shell`
 - **Versão:** `0.0.1` (pré-release; `0.1.0` reservada para a conexão com o Ollama, PLAN.md §5.4)
 - **Fase 0:** concluída — PRs #1 a #4 mesclados com merge commit (hashes preservados)
+- **Mesclados na Fase 1:** #5 (`chore/claude-config`) e #6 (`chore/project-bootstrap`)
 
 ## Fase 1 — `chore/project-bootstrap`
 
@@ -34,7 +35,28 @@
 - Prettier aplicado só a código (`ts, js, mjs, json, html, css`), sem reformatar a documentação.
 - Ícones originais gerados por `scripts/generate-icons.mjs`, sem dependências.
 
-**Pendências da branch:** teste manual de *Load unpacked* no Chrome (a ser feito pelo responsável). Nos commits `339463f`–`ca9dea8` o typecheck falha com TS18003 (ainda sem arquivos `.ts`), documentado no corpo de `339463f`.
+**Teste manual (responsável, após o merge do #6):** *Load unpacked* de `dist/` no Chrome sem erros; ícone e popup exibidos corretamente.
+
+**Observação:** nos commits `339463f`–`ca9dea8` o typecheck falha com TS18003 (ainda sem arquivos `.ts`), documentado no corpo de `339463f`.
+
+## Fase 1 — `chore/claude-config`
+
+| Commit | Mensagem |
+|---|---|
+| `dbc3680` | `chore(claude): versiona configuração do claude code no projeto` |
+| `6702f6c` | `chore(claude): adiciona skills do ECC com aviso de licença MIT` |
+
+Skills derivadas de https://github.com/affaan-m/ECC (MIT, licença verificada via API do GitHub); aviso de copyright em `.claude/skills/LICENSE`.
+
+## Fase 1 — `ci/quality-gates`
+
+| Commit | Mensagem |
+|---|---|
+| `5bcb92c` | `ci: executa lint, typecheck, testes e build no pull request` |
+| `1ec8841` | `docs(ci): adiciona template de pull request` |
+| (este commit) | `docs(progress): registra ci e teste manual da fase 1` |
+
+**Validação:** primeira execução do workflow no PR #7 passou (run `40755828921`, 16 s; Node 24.22.1 no runner, `npm ci` sem avisos). Workflow com `permissions: contents: read` e `persist-credentials: false`. Actions fixadas por tag major (`@v7`); fixar por SHA fica como melhoria futura.
 
 ## Fase 0 — Commits
 
@@ -89,4 +111,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 1 — `ci/quality-gates`: workflow do GitHub Actions (lint, typecheck, test, build) e template de PR.
+Fase 1 — `feat/popup-shell`: popup em PT-BR, página de opções vazia e navegável, README com instalação via *Load unpacked*.
