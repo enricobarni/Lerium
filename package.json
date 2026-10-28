@@ -1,0 +1,28 @@
+{
+  "name": "lerium",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Extensão do Chrome que traduz páginas e seleções com modelos locais do Ollama.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint . && prettier --check \"**/*.{ts,js,mjs,json,html,css}\"",
+    "format": "prettier --write \"**/*.{ts,js,mjs,json,html,css}\""
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/chrome": "^0.3.7",
+    "eslint": "^10.13.0",
+    "prettier": "^3.9.10",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.1",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}
