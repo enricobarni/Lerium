@@ -17,10 +17,15 @@
 | `docs/product-scope` | `f60cc42` | `docs(plan): move plano para docs/PLAN.md` |
 | `docs/product-scope` | `0333825` | `docs(scope): define requisitos e limites do MVP` |
 | `docs/product-scope` | `9e755f8` | `docs(scope): registra referência e limites de licença` |
+| `docs/product-scope` | `c9843ce` | `docs(scope): alinha prazos e completa resumos de RF04 e RF05` |
 | `docs/architecture` | `fc45153` | `docs(architecture): define limites de responsabilidade` |
 | `docs/architecture` | `242e9fe` | `docs(architecture): registra adr-001 mv3, typescript e ollama` |
 | `docs/architecture` | `236fac0` | `docs(test): define plano de testes e fixture própria` |
+| `docs/architecture` | `293ea6a` | `docs(test): inclui comentário html na fixture de novel` |
 | `docs/agent-rules` | `1746af7` | `docs(agents): resume regras de execução para agentes` |
+| `docs/agent-rules` | `96c2a65` | `docs(progress): registra estado da fase 0` |
+| `docs/agent-rules` | `2d242ab` | `docs(agents): esclarece o que é versionado no build` |
+| `docs/agent-rules` | (este commit) | `docs(progress): registra correções da revisão` |
 
 Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rules` (os links relativos para `PLAN.md` e `SCOPE.md` só resolvem após o primeiro merge).
 
@@ -39,6 +44,8 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 - Assuntos de commit no formato Conventional Commits, com até 72 caracteres.
 - Nenhum `package.json`, `tsconfig`, `manifest.json`, `src/` ou código criado (fora do escopo da Fase 0).
 - `npm run lint`, `typecheck`, `test` e `build` **não existem ainda**; serão criados na Fase 1.
+- Links relativos conferidos no estado combinado das três branches: nenhum quebrado; sem CRLF.
+- Revisão do reviewer: **aprovado com ressalvas**; ressalvas importantes (texto de versionamento no AGENTS.md e prazo da licença) e menores (prazos, RF04/RF05, comentário na fixture) corrigidas em commits próprios.
 
 ## Observações
 
@@ -48,7 +55,8 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Pendências
 
-- Definir a licença do próprio Lerium (SCOPE.md, "Questões em aberto").
+- **Bloqueia a Fase 1:** definir a licença do próprio Lerium antes do primeiro commit de código (SCOPE.md, "Questões em aberto").
+- CORS (`OLLAMA_ORIGINS`) fica registrado apenas em SCOPE.md; vira ADR quando for testado na Fase 2.
 - Demais decisões em aberto: ver SCOPE.md e DECISIONS.md (ADR-002 a ADR-005).
 
 ## Próxima tarefa
