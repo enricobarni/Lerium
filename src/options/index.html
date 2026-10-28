@@ -9,10 +9,82 @@
   <body>
     <main>
       <h1>Configurações</h1>
-      <p>
-        As opções do Lerium, como o endereço do Ollama, o modelo e os idiomas de origem e destino,
-        chegarão em uma próxima versão.
+      <p class="intro">
+        Defina onde o Ollama está rodando, qual modelo usar e os idiomas da tradução.
       </p>
+      <p class="intro">
+        Privacidade: estas configurações ficam salvas apenas neste navegador, neste computador, e
+        não são sincronizadas com sua conta.
+      </p>
+
+      <form id="settings-form" novalidate>
+        <div class="field">
+          <label for="endpoint">Endereço do Ollama</label>
+          <p id="endpoint-help" class="help">
+            Apenas endereços locais, por exemplo http://localhost:11434.
+          </p>
+          <input
+            id="endpoint"
+            name="endpoint"
+            type="text"
+            inputmode="url"
+            autocomplete="off"
+            spellcheck="false"
+            aria-describedby="endpoint-help endpoint-error"
+          />
+          <p id="endpoint-error" class="error"></p>
+        </div>
+
+        <div class="field">
+          <label for="model">Modelo</label>
+          <p id="model-help" class="help">
+            Nome do modelo instalado no Ollama, como aparece em "ollama list". A lista de modelos
+            instalados virá em breve.
+          </p>
+          <input
+            id="model"
+            name="model"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            aria-describedby="model-help model-error"
+          />
+          <p id="model-error" class="error"></p>
+        </div>
+
+        <div class="field">
+          <label for="source-language">Idioma de origem</label>
+          <select
+            id="source-language"
+            name="sourceLanguage"
+            aria-describedby="source-language-error"
+          ></select>
+          <p id="source-language-error" class="error"></p>
+        </div>
+
+        <div class="field">
+          <label for="target-language">Idioma de destino</label>
+          <select
+            id="target-language"
+            name="targetLanguage"
+            aria-describedby="target-language-error"
+          ></select>
+          <p id="target-language-error" class="error"></p>
+        </div>
+
+        <p id="restore-help" class="help">
+          "Restaurar padrões" apenas preenche o formulário com os valores iniciais; nada é gravado
+          até você clicar em Salvar.
+        </p>
+        <div class="actions">
+          <button type="submit" id="save" class="primary">Salvar</button>
+          <button type="button" id="restore" class="secondary" aria-describedby="restore-help">
+            Restaurar padrões
+          </button>
+        </div>
+      </form>
+
+      <p id="feedback" role="status"></p>
     </main>
     <script type="module" src="./index.ts"></script>
   </body>
