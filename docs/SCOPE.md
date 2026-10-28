@@ -45,7 +45,6 @@ Publicação na Chrome Web Store; sincronização em nuvem; contas; backend; pag
 
 | Questão | Por que está em aberto | Decidir em |
 |---|---|---|
-| Licença do próprio Lerium | Não há arquivo `LICENSE` no repositório; a escolha afeta distribuição e contribuições. | Antes do primeiro commit de código (início da Fase 1, `chore/project-bootstrap`). |
 | Política de injeção | `activeTab` + `scripting` (menor privilégio, exige ação do usuário) vs permissões opcionais por domínio (permite tradução persistente por site). Ver PLAN.md §4 e §8. | Fase 1, antes do manifesto (ADR-002). |
 | Estratégia DOM para markup inline | Tradução por nó preserva estrutura mas perde contexto; marcadores preservam contexto mas dependem do modelo respeitá-los. | Fase 4, com testes de restauração. |
 | Identificador de documento/job e reidratação | O service worker MV3 é suspenso e perde estado global; é preciso um ID comprovado e fonte de verdade fora do worker. | Fase 3/4, antes do scheduler. |
@@ -53,6 +52,8 @@ Publicação na Chrome Web Store; sincronização em nuvem; contas; backend; pag
 | Detecção de idioma de origem | Heurísticas da referência são insuficientes; detectar vs fonte explícita (padrão `en`) muda UI e prompt. | Fase 2 (configuração) / Fase 6. |
 | Necessidade e restrição de CORS (`OLLAMA_ORIGINS`) | Não se sabe se o Ollama aceita a origem da extensão sem ajuste; se necessário, restringir à origem específica, nunca `*`. | Fase 2, testando a conexão real. |
 | Estratégia de merge de PRs | Squash simplifica o histórico, mas apaga commits atômicos; merge/rebase os preserva. Ver PLAN.md §5.1. | Fase 1, ao configurar o repositório remoto e a CI. |
+
+**Resolvida:** licença do próprio Lerium — MIT ([DECISIONS.md, ADR-006](DECISIONS.md)).
 
 ## Referência observada e licença
 
