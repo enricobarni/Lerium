@@ -5,11 +5,43 @@
 
 ## Estado atual
 
-- **Fase:** 1 — Fundação e ferramentas
-- **Tarefa:** `feat/popup-shell` em revisão (última branch da Fase 1)
-- **Versão:** `0.0.1` (pré-release; `0.1.0` reservada para a conexão com o Ollama, PLAN.md §5.4)
-- **Fase 0:** concluída — PRs #1 a #4 mesclados com merge commit (hashes preservados)
-- **Mesclados na Fase 1:** #5 (`chore/claude-config`), #6 (`chore/project-bootstrap`) e #7 (`ci/quality-gates`)
+- **Fase:** 2 — Configurações e conexão local
+- **Tarefa:** `feat/settings-storage` em revisão; próxima: `feat/ollama-discovery`
+- **Versão:** `0.0.1` (`0.1.0` ao concluir a conexão com o Ollama, PLAN.md §5.4)
+- **Fase 0:** concluída (PRs #1–#4)
+- **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
+
+## Fase 2 — `feat/settings-storage`
+
+| Commit | Mensagem |
+|---|---|
+| `590f75c` | `docs(decisions): registra adr-008 de configurações locais por usuário` |
+| `6f1be21` | `feat(core): define TranslationSettings e valores padrão` |
+| `35054dc` | `feat(shared): valida endpoint loopback, modelo e idiomas` |
+| `b146e80` | `feat(storage): adiciona repositório com mescla de padrões na leitura` |
+| `565a140` | `feat(manifest): solicita permissão storage` |
+| `aec40e6` | `feat(options): traduz códigos de validação em mensagens pt-br` |
+| `81f75d2` | `feat(options): adiciona formulário de configurações persistentes` |
+| `93a8f04` | `fix(shared): reporta porta fora do intervalo e exige endereço ascii` |
+| `eb3f2d5` | `fix(shared): restringe nome do modelo a caracteres permitidos` |
+| `7804035` | `fix(storage): recusa idioma de origem igual ao de destino` |
+| `0727988` | `test(storage): cobre protótipo e endpoint malicioso armazenados` |
+| `f8f3dec` | `docs(decisions): registra limitação de schemaVersion na adr-008` |
+| `715ede4` | `fix(options): preserva foco ao salvar e bloqueia ações até carregar` |
+| (este commit) | `docs(progress): registra configurações persistentes da fase 2` |
+
+**Evidência que orientou a fase (máquina do responsável, Ollama 0.40.12, `OLLAMA_ORIGINS` indefinido):** `GET /api/tags` sem `Origin` → 200; com `Origin: chrome-extension://…` → 403; site → 403; preflight → 403. Em instância temporária isolada (porta 11999) com `OLLAMA_ORIGINS=chrome-extension://<ID>`: ID liberado → 200, outra extensão → 403, site → 403, preflight `POST /api/chat` → 204 restrito ao ID. Decisão de origem será registrada como ADR-007 em `feat/ollama-discovery`.
+
+**Validações executadas:** `npm run lint`, `typecheck`, `test` (178/178) e `build` com código 0; sem `innerHTML`, `eval` ou `console` em `src/`; manifesto com `permissions: ["storage"]` apenas. Revisões: reviewer (aprovado com ressalvas) e security (ressalvas, risco baixo) — todas as ressalvas tratadas em commits próprios.
+
+**Decisões:**
+- ADR-008: `chrome.storage.local`, configuração global por perfil, padrões mesclados na leitura, gravação só ao salvar (sem `onInstalled` nem service worker nesta fase).
+- Branch `fix/default-migration` do plano absorvida: o modelo de leitura não destrutiva evita o problema por construção, e os testes ("atualização simulada não grava", storage parcial/inválido) estão nesta branch.
+- Endpoint: apenas `http` em `localhost`/`127.0.0.1`, porta configurável, ASCII visível, sem credenciais/caminho/query/hash; valor gravado é sempre `url.origin`.
+- Modelo: allowlist `A-Z a-z 0-9 . _ : / -`, sem `..`; origem ≠ destino.
+- Paralelismo, modo e domínios excluídos ficam para as fases que implementam esses comportamentos.
+
+**Pendente (gate da branch):** teste manual pelo responsável — salvar configurações, recarregar a extensão e confirmar persistência; testar um endereço inválido e o erro associado ao campo.
 
 ## Fase 1 — `feat/popup-shell`
 
@@ -29,7 +61,7 @@
 - Popup fecha com `window.close()` após abrir as opções; em erro, mensagem genérica em PT-BR numa região `role="status"` própria, sem log.
 - Sugestão de clarear o botão para `#6366f1` no tema escuro recusada: o rótulo branco cairia para 4,47:1 (< 4,5:1). Adotada borda `#a5b4fc`.
 
-**Pendente (gate da Fase 1):** teste manual pelo responsável — *Load unpacked*, abrir popup, navegar por Tab/Enter até "Abrir configurações", verificar que a aba de opções abre, e conferir o tema escuro.
+**Teste manual (responsável):** aprovado — popup por teclado, aba de opções abre, tema escuro conferido.
 
 ## Fase 1 — `chore/project-bootstrap`
 
@@ -131,4 +163,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Após o aceite manual: encerrar a Fase 1 e iniciar a Fase 2 — `feat/settings-storage` (`TranslationSettings` e repositório de configurações com defaults não destrutivos).
+Fase 2 — `feat/ollama-discovery`: cliente de `/api/tags` com timeout, diagnósticos em PT-BR (incluindo 403 de origem), ADR-007 e `key` no manifesto para ID estável; o responsável define `OLLAMA_ORIGINS` com o ID do Lerium.
