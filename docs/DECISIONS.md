@@ -125,6 +125,60 @@ compatíveis (PLAN.md §8, item 9). O `package.json` da Fase 1 deve declarar
 `"license": "MIT"`. Esta decisão **não** altera a situação da licença da
 extensão de referência, que continua não confirmada (SCOPE.md).
 
+## ADR-007 — Origem da extensão no Ollama
+
+**Status:** Aceita (28/10/2026)
+
+**Contexto.** RF01 e RF06 exigem que as páginas da extensão consultem o
+Ollama local (`GET /api/tags`, depois `POST /api/chat`). O Ollama valida o
+cabeçalho `Origin` contra uma lista de origens permitidas. Evidência medida na
+máquina do responsável (Ollama 0.40.12, `OLLAMA_ORIGINS` indefinido):
+
+- sem `Origin` → 200;
+- `Origin: chrome-extension://…` → 403;
+- `Origin` de um site → 403;
+- preflight (`OPTIONS`) → 403.
+
+Em instância temporária isolada, com `OLLAMA_ORIGINS=chrome-extension://<ID>`:
+
+- `Origin` com o ID liberado → 200;
+- outra extensão → 403;
+- site → 403;
+- preflight de `POST /api/chat` → 204, com `Access-Control-Allow-Origin`
+  restrito ao ID liberado.
+
+Ou seja, o padrão do Ollama recusa a extensão, e liberar apenas o ID do
+Lerium é suficiente e não abre acesso a sites nem a outras extensões.
+
+**Decisão.**
+
+- O usuário define `OLLAMA_ORIGINS=chrome-extension://<ID do Lerium>`. Se a
+  variável já tiver valores, o ID é **acrescentado** a eles, separado por
+  vírgula, sem remover origens existentes.
+- O ID é estável via campo `key` (chave pública) no manifesto. A chave
+  privada correspondente é descartada: não é necessária para carregar a
+  extensão sem empacotamento (unpacked). Empacotar como `.crx` ou publicar na
+  Chrome Web Store exigirá nova ADR; a CWS atribui ID próprio.
+- Sem `host_permissions` enquanto o teste no Chrome real não demonstrar
+  necessidade.
+
+**Alternativas rejeitadas.**
+
+- `OLLAMA_ORIGINS=chrome-extension://*`: qualquer extensão instalada poderia
+  ler prompts e chamar endpoints destrutivos (`/api/delete`, `/api/pull`).
+- Remover o `Origin` via `declarativeNetRequest`: desliga a proteção do
+  Ollama contra sites, o escopo da regra não foi comprovado e a permissão
+  pesa na revisão da CWS.
+- Native messaging ou proxy local: contraria a premissa "sem backend"
+  (PLAN.md §0 e RF07).
+
+**Consequências.** A configuração passa a ter um passo manual (definir a
+variável e reiniciar o Ollama), que a página de opções deve explicar quando a
+conexão for recusada. O ID muda se a `key` mudar; um teste fixa o ID
+esperado para detectar troca acidental. Validações pendentes no Chrome real:
+se o `Origin` é enviado em requisições `GET` das páginas da extensão e se o
+CORS funciona sem `host_permissions`.
+
 ## ADR-008 — Configurações locais por usuário
 
 **Status:** Aceita (28/10/2026)
