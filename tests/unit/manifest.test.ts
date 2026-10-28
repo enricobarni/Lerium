@@ -14,12 +14,26 @@ const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.ur
 };
 
 const ICON_SIZES = ['16', '32', '48', '128'];
+// Toda chave nova no manifesto exige decisão explícita (ver ADR-002 em docs/DECISIONS.md).
+const ALLOWED_KEYS = [
+  'action',
+  'description',
+  'icons',
+  'manifest_version',
+  'name',
+  'permissions',
+  'version',
+];
 // Chrome aceita de 1 a 4 inteiros (0–65535) separados por ponto, sem zeros à esquerda.
 const CHROME_VERSION = /^(0|[1-9]\d{0,4})(\.(0|[1-9]\d{0,4})){0,3}$/;
 
 describe('manifest.json', () => {
   it('usa Manifest V3', () => {
     expect(manifest.manifest_version).toBe(3);
+  });
+
+  it('contém apenas chaves aprovadas', () => {
+    expect(Object.keys(manifest).sort()).toEqual(ALLOWED_KEYS);
   });
 
   it('não solicita permissões nem acesso a sites', () => {
