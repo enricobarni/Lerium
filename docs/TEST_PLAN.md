@@ -51,6 +51,7 @@ Esboço (ilustrativo; a fixture final pode variar):
   <nav><a href="#ch1">Chapter 1</a> | <a href="#notes">Notes</a></nav>
   <article id="ch1">
     <h1>Chapter 1: The Veilstone</h1>
+    <!-- Editor note: this comment must not be translated. -->
     <p>Kael pressed the <em>veilstone</em> to his chest. It was <strong>warm</strong>.</p>
     <p>— You shouldn't have taken it, Mirena said.</p>
     <p>"I had no choice," Kael answered. "The veilstone chose me."</p>
@@ -72,6 +73,7 @@ Esboço (ilustrativo; a fixture final pode variar):
 
 Verificações:
 
+- **Comentários HTML:** o comentário `<!-- ... -->` permanece intacto e não é traduzido.
 - **Ida e volta exata:** original → traduzido → original reproduz o DOM e o texto idênticos.
 - **Estrutura preservada:** links continuam clicáveis com o mesmo `href`; `<em>`/`<strong>` mantêm estilo e posição; nenhum nó duplicado ou esvaziado.
 - **Exclusões respeitadas:** `pre/code`, `input`, `textarea` e elemento oculto permanecem intactos.
