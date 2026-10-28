@@ -7,6 +7,7 @@ const manifest = JSON.parse(rawManifest) as Record<string, unknown> & {
   version: string;
   icons: Record<string, string>;
   action: { default_popup?: string; default_icon?: Record<string, string> };
+  options_ui?: { page?: string; open_in_tab?: boolean };
   permissions: unknown[];
 };
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as {
@@ -21,6 +22,7 @@ const ALLOWED_KEYS = [
   'icons',
   'manifest_version',
   'name',
+  'options_ui',
   'permissions',
   'version',
 ];
@@ -58,5 +60,10 @@ describe('manifest.json', () => {
 
   it('aponta o popup para popup/index.html', () => {
     expect(manifest.action.default_popup).toBe('popup/index.html');
+  });
+
+  it('abre as configurações em options/index.html, em nova aba', () => {
+    expect(manifest.options_ui?.page).toBe('options/index.html');
+    expect(manifest.options_ui?.open_in_tab).toBe(true);
   });
 });
