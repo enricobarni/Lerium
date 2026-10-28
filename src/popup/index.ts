@@ -1,7 +1,7 @@
 const OPEN_OPTIONS_ERROR = 'Não foi possível abrir as configurações. Tente novamente.';
 
 const openOptionsButton = document.getElementById('open-options');
-const statusMessage = document.getElementById('status');
+const feedback = document.getElementById('feedback');
 
 async function openOptions(): Promise<void> {
   try {
@@ -10,8 +10,12 @@ async function openOptions(): Promise<void> {
     window.close();
   } catch {
     // Sem registrar detalhes do erro: a mensagem ao usuário basta nesta fase.
-    if (statusMessage) {
-      statusMessage.textContent = OPEN_OPTIONS_ERROR;
+    if (feedback) {
+      // Limpa antes de escrever para que leitores de tela anunciem o erro mesmo se ele se repetir.
+      feedback.textContent = '';
+      requestAnimationFrame(() => {
+        feedback.textContent = OPEN_OPTIONS_ERROR;
+      });
     }
   }
 }

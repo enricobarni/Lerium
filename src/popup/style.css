@@ -45,6 +45,14 @@ p {
   margin: 0 0 1rem;
 }
 
+#feedback {
+  margin: 0.75rem 0 0;
+}
+
+#feedback:empty {
+  margin: 0;
+}
+
 button {
   width: 100%;
   min-height: 2.25rem;
