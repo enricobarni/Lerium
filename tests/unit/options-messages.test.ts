@@ -33,6 +33,7 @@ const MODEL_REASONS: ModelErrorReason[] = [
   'empty',
   'too_long',
   'invalid_characters',
+  'invalid_format',
 ];
 const LANGUAGE_REASONS: LanguageErrorReason[] = ['invalid_type', 'unsupported'];
 

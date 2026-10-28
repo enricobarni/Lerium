@@ -108,6 +108,10 @@ describe('validateModel', () => {
     ['translategemma:4b', 'translategemma:4b'],
     ['  llama3.1:8b  ', 'llama3.1:8b'],
     ['namespace/modelo:latest', 'namespace/modelo:latest'],
+    ['qwen3.5:latest', 'qwen3.5:latest'],
+    ['qwen3-coder:latest', 'qwen3-coder:latest'],
+    ['hf.co/user/repo:Q4_K_M', 'hf.co/user/repo:Q4_K_M'],
+    ['namespace/model:tag', 'namespace/model:tag'],
   ])('aceita %j como %j', (input, expected) => {
     expect(validateModel(input)).toEqual({ ok: true, value: expected });
   });
@@ -126,6 +130,19 @@ describe('validateModel', () => {
     ['mod\u007felo', 'invalid_characters'],
     ['mod\u0085elo', 'invalid_characters'],
     ['meu modelo', 'invalid_characters'],
+    ['modelo"x', 'invalid_characters'],
+    ['modelo?x=1', 'invalid_characters'],
+    ['modelo#tag', 'invalid_characters'],
+    ['modelo%20x', 'invalid_characters'],
+    ['modelo‮:4b', 'invalid_characters'],
+    ['modeloé', 'invalid_characters'],
+    ['..', 'invalid_format'],
+    ['../modelo', 'invalid_format'],
+    ['namespace/../modelo', 'invalid_format'],
+    ['namespace/./modelo', 'invalid_format'],
+    ['namespace//modelo', 'invalid_format'],
+    ['namespace/', 'invalid_format'],
+    ['/abs', 'invalid_format'],
   ])('rejeita %j com motivo %j', (input, reason) => {
     expect(validateModel(input)).toEqual({ ok: false, reason });
   });

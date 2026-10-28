@@ -32,7 +32,9 @@ export const MODEL_ERROR_MESSAGES: Readonly<Record<ModelErrorReason, string>> = 
   empty: 'Informe o nome do modelo, por exemplo translategemma:4b.',
   too_long: `O nome do modelo deve ter no máximo ${MODEL_MAX_LENGTH} caracteres.`,
   invalid_characters:
-    'O nome do modelo não pode conter espaços nem caracteres de controle. Use o nome exibido por "ollama list".',
+    'O nome do modelo só pode ter letras sem acento, números e os sinais . _ : / -. Use o nome exibido por "ollama list".',
+  invalid_format:
+    'Nome de modelo inválido: não comece com "/" nem use "//", "." ou ".." entre barras. Use o nome exibido por "ollama list".',
 });
 
 export const LANGUAGE_ERROR_MESSAGES: Readonly<Record<LanguageErrorReason, string>> = Object.freeze(

@@ -21,7 +21,8 @@ export type EndpointErrorReason =
   | 'port'
   | 'path';
 
-export type ModelErrorReason = 'invalid_type' | 'empty' | 'too_long' | 'invalid_characters';
+export type ModelErrorReason =
+  'invalid_type' | 'empty' | 'too_long' | 'invalid_characters' | 'invalid_format';
 
 export type LanguageErrorReason = 'invalid_type' | 'unsupported';
 
@@ -37,7 +38,8 @@ export const MODEL_MAX_LENGTH = 200;
 const ENDPOINT_NON_ASCII_VISIBLE = /[^\x21-\x7E]/;
 // A barra invertida é ASCII, mas o URL a trata como `/` em esquemas especiais.
 const ENDPOINT_BACKSLASH = /\\/;
-const MODEL_FORBIDDEN_CHARS = /[\s\p{Cc}]/u;
+// Allowlist dos nomes do Ollama (`hf.co/user/repo:Q4_K_M`, `qwen3.5:latest`).
+const MODEL_ALLOWED_CHARS = /^[A-Za-z0-9._:/-]+$/;
 const HTTP_PREFIX = /^http:\/\//i;
 const MAX_PORT = 65535;
 // Porta no fim da authority (após o último `@`). `]` fica de fora para não
@@ -108,7 +110,13 @@ export function validateModel(input: unknown): ValidationResult<string, ModelErr
   const model = input.trim();
   if (model === '') return fail('empty');
   if (model.length > MODEL_MAX_LENGTH) return fail('too_long');
-  if (MODEL_FORBIDDEN_CHARS.test(model)) return fail('invalid_characters');
+  if (!MODEL_ALLOWED_CHARS.test(model)) return fail('invalid_characters');
+  // Segmentos vazios, `.` e `..` (e o `/` inicial, que gera segmento vazio)
+  // não formam nomes válidos e poderiam ser lidos como caminho relativo.
+  const segments = model.split('/');
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    return fail('invalid_format');
+  }
   return { ok: true, value: model };
 }
 
