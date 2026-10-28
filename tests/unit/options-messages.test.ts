@@ -10,6 +10,7 @@ import {
 import type {
   EndpointErrorReason,
   LanguageErrorReason,
+  LanguagePairErrorReason,
   ModelErrorReason,
 } from '../../src/shared/validation';
 
@@ -35,7 +36,11 @@ const MODEL_REASONS: ModelErrorReason[] = [
   'invalid_characters',
   'invalid_format',
 ];
-const LANGUAGE_REASONS: LanguageErrorReason[] = ['invalid_type', 'unsupported'];
+const LANGUAGE_REASONS: (LanguageErrorReason | LanguagePairErrorReason)[] = [
+  'invalid_type',
+  'unsupported',
+  'same_language',
+];
 
 describe('mensagens de validação', () => {
   it('cobre exatamente os códigos conhecidos', () => {

@@ -98,6 +98,34 @@ describe('settings-repository: load', () => {
     expect(area.snapshot()).toEqual(before);
   });
 
+  it('par de idiomas igual armazenado cai para os padrões sem gravar', async () => {
+    const area = new FakeStorageArea({
+      settings: { ...SAVED, sourceLanguage: 'ja', targetLanguage: 'ja' },
+    });
+    const before = area.snapshot();
+    const settings = await createSettingsRepository(area).load();
+
+    expect(settings).toEqual({
+      ...SAVED,
+      sourceLanguage: DEFAULT_SETTINGS.sourceLanguage,
+      targetLanguage: DEFAULT_SETTINGS.targetLanguage,
+    });
+    expect(area.setCalls).toBe(0);
+    expect(area.snapshot()).toEqual(before);
+  });
+
+  it('par efetivo igual após mescla com padrão também cai para os padrões', async () => {
+    // Destino inválido vira pt-BR (padrão), igual à origem armazenada.
+    const area = new FakeStorageArea({
+      settings: { sourceLanguage: 'pt-BR', targetLanguage: 'klingon' },
+    });
+    const settings = await createSettingsRepository(area).load();
+
+    expect(settings.sourceLanguage).toBe(DEFAULT_SETTINGS.sourceLanguage);
+    expect(settings.targetLanguage).toBe(DEFAULT_SETTINGS.targetLanguage);
+    expect(area.setCalls).toBe(0);
+  });
+
   it('devolve sempre a versão de schema atual', async () => {
     const area = new FakeStorageArea({ settings: { schemaVersion: 'x', model: 'qwen3:8b' } });
     const settings = await createSettingsRepository(area).load();
@@ -153,6 +181,37 @@ describe('settings-repository: save', () => {
     });
 
     expect(result).toEqual({ ok: false, errors: { targetLanguage: 'invalid_type' } });
+    expect(area.setCalls).toBe(0);
+  });
+
+  it('recusa origem igual ao destino com erro em targetLanguage', async () => {
+    const area = new FakeStorageArea({ settings: SAVED });
+    const before = area.snapshot();
+
+    const result = await createSettingsRepository(area).save({
+      ...VALID_INPUT,
+      sourceLanguage: 'es',
+      targetLanguage: 'es',
+    });
+
+    expect(result).toEqual({ ok: false, errors: { targetLanguage: 'same_language' } });
+    expect(area.setCalls).toBe(0);
+    expect(area.snapshot()).toEqual(before);
+  });
+
+  it('erro de par igual acompanha erros de outros campos', async () => {
+    const area = new FakeStorageArea();
+    const result = await createSettingsRepository(area).save({
+      ...VALID_INPUT,
+      model: '',
+      sourceLanguage: 'ko',
+      targetLanguage: 'ko',
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: { model: 'empty', targetLanguage: 'same_language' },
+    });
     expect(area.setCalls).toBe(0);
   });
 

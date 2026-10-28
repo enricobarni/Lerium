@@ -26,6 +26,9 @@ export type ModelErrorReason =
 
 export type LanguageErrorReason = 'invalid_type' | 'unsupported';
 
+/** Erro entre campos: origem e destino não podem ser o mesmo idioma. */
+export type LanguagePairErrorReason = 'same_language';
+
 /** Hosts aceitos após a normalização do URL (MVP: apenas loopback, RF01/RF07). */
 const ALLOWED_HOSTNAMES: ReadonlySet<string> = new Set(['localhost', '127.0.0.1']);
 

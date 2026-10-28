@@ -1,6 +1,7 @@
 import type {
   EndpointErrorReason,
   LanguageErrorReason,
+  LanguagePairErrorReason,
   ModelErrorReason,
 } from '../shared/validation';
 import { MODEL_MAX_LENGTH } from '../shared/validation';
@@ -37,12 +38,15 @@ export const MODEL_ERROR_MESSAGES: Readonly<Record<ModelErrorReason, string>> = 
     'Nome de modelo inválido: não comece com "/" nem use "//", "." ou ".." entre barras. Use o nome exibido por "ollama list".',
 });
 
-export const LANGUAGE_ERROR_MESSAGES: Readonly<Record<LanguageErrorReason, string>> = Object.freeze(
-  {
+/** Códigos por campo de idioma, incluindo o erro entre origem e destino. */
+export type LanguageFieldErrorReason = LanguageErrorReason | LanguagePairErrorReason;
+
+export const LANGUAGE_ERROR_MESSAGES: Readonly<Record<LanguageFieldErrorReason, string>> =
+  Object.freeze({
     invalid_type: 'Escolha um idioma da lista.',
     unsupported: 'Idioma não suportado. Escolha um idioma da lista.',
-  },
-);
+    same_language: 'O idioma de destino deve ser diferente do idioma de origem.',
+  });
 
 export function endpointErrorMessage(reason: EndpointErrorReason): string {
   return ENDPOINT_ERROR_MESSAGES[reason];
@@ -52,6 +56,6 @@ export function modelErrorMessage(reason: ModelErrorReason): string {
   return MODEL_ERROR_MESSAGES[reason];
 }
 
-export function languageErrorMessage(reason: LanguageErrorReason): string {
+export function languageErrorMessage(reason: LanguageFieldErrorReason): string {
   return LANGUAGE_ERROR_MESSAGES[reason];
 }

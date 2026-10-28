@@ -6,6 +6,7 @@ import {
   validateModel,
   type EndpointErrorReason,
   type LanguageErrorReason,
+  type LanguagePairErrorReason,
   type ModelErrorReason,
 } from '../shared/validation';
 
@@ -32,7 +33,8 @@ export interface SettingsFieldErrors {
   endpoint?: EndpointErrorReason;
   model?: ModelErrorReason;
   sourceLanguage?: LanguageErrorReason;
-  targetLanguage?: LanguageErrorReason;
+  /** Também recebe `same_language` quando origem e destino coincidem. */
+  targetLanguage?: LanguageErrorReason | LanguagePairErrorReason;
 }
 
 export type SaveResult =
@@ -61,7 +63,10 @@ function validateInput(input: SettingsInput): SaveResult {
   const sourceLanguage = validateLanguage(input.sourceLanguage);
   const targetLanguage = validateLanguage(input.targetLanguage);
 
-  if (endpoint.ok && model.ok && sourceLanguage.ok && targetLanguage.ok) {
+  const sameLanguage =
+    sourceLanguage.ok && targetLanguage.ok && sourceLanguage.value === targetLanguage.value;
+
+  if (endpoint.ok && model.ok && sourceLanguage.ok && targetLanguage.ok && !sameLanguage) {
     return {
       ok: true,
       settings: {
@@ -79,6 +84,7 @@ function validateInput(input: SettingsInput): SaveResult {
   if (!model.ok) errors.model = model.reason;
   if (!sourceLanguage.ok) errors.sourceLanguage = sourceLanguage.reason;
   if (!targetLanguage.ok) errors.targetLanguage = targetLanguage.reason;
+  if (sameLanguage) errors.targetLanguage = 'same_language';
   return { ok: false, errors };
 }
 
@@ -92,12 +98,20 @@ export function createSettingsRepository(area: SettingsStorageArea): SettingsRep
       const model = validateModel(stored.model);
       const sourceLanguage = validateLanguage(stored.sourceLanguage);
       const targetLanguage = validateLanguage(stored.targetLanguage);
+      let source = sourceLanguage.ok ? sourceLanguage.value : DEFAULT_SETTINGS.sourceLanguage;
+      let target = targetLanguage.ok ? targetLanguage.value : DEFAULT_SETTINGS.targetLanguage;
+      // Par efetivo igual (armazenado ou após a mescla) não é traduzível:
+      // ambos voltam ao padrão, também só em memória.
+      if (source === target) {
+        source = DEFAULT_SETTINGS.sourceLanguage;
+        target = DEFAULT_SETTINGS.targetLanguage;
+      }
       return {
         schemaVersion: SETTINGS_SCHEMA_VERSION,
         endpoint: endpoint.ok ? endpoint.value : DEFAULT_SETTINGS.endpoint,
         model: model.ok ? model.value : DEFAULT_SETTINGS.model,
-        sourceLanguage: sourceLanguage.ok ? sourceLanguage.value : DEFAULT_SETTINGS.sourceLanguage,
-        targetLanguage: targetLanguage.ok ? targetLanguage.value : DEFAULT_SETTINGS.targetLanguage,
+        sourceLanguage: source,
+        targetLanguage: target,
       };
     },
 
