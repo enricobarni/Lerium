@@ -106,6 +106,9 @@ let installedModels: readonly string[] | undefined;
 /** Identifica o teste mais recente; respostas de testes anteriores são ignoradas. */
 let testRun = 0;
 
+/** Há um teste de conexão vigente (não obsoleto) aguardando resposta. */
+let testInFlight = false;
+
 function populateLanguages(select: HTMLSelectElement): void {
   for (const language of LANGUAGES) {
     const option = document.createElement('option');
@@ -171,6 +174,11 @@ function renderInstalledModels(models: readonly string[]): void {
 /** Descarta o resultado de um teste anterior (ex.: o endereço mudou). */
 function resetConnection(): void {
   testRun += 1;
+  // O teste em andamento ficou obsoleto: libera o botão já, sem esperar a resposta.
+  if (testInFlight) {
+    testInFlight = false;
+    setTesting(false);
+  }
   installedModels = undefined;
   installedField.hidden = true;
   installedSelect.replaceChildren();
@@ -200,6 +208,7 @@ async function testConnection(userInitiated: boolean): Promise<void> {
   setEndpointError(undefined);
 
   const run = testRun;
+  testInFlight = true;
   setTesting(true);
   announceTo(connectionStatus, TESTING_MESSAGE);
   try {
@@ -218,7 +227,11 @@ async function testConnection(userInitiated: boolean): Promise<void> {
     // levar o foco até ela encurta o caminho até a solução.
     if (result.error === 'forbidden' && userInitiated) originHelpTitle.focus();
   } finally {
-    setTesting(false);
+    // Um teste obsoleto não mexe no botão de um teste mais novo.
+    if (run === testRun) {
+      testInFlight = false;
+      setTesting(false);
+    }
   }
 }
 
