@@ -160,3 +160,9 @@ padrão automaticamente na leitura. Um valor inválido persiste no storage até
 o usuário salvar novamente; a interface deve mostrar o valor efetivo. Uma
 mudança futura de formato exige migração explícita guiada por
 `schemaVersion`.
+
+Limitação conhecida: esta versão sempre grava `schemaVersion: 1`. Se o
+usuário fizer downgrade depois de uma versão futura ter gravado um schema
+maior, salvar aqui rebaixaria o número para 1 mantendo as chaves
+desconhecidas do schema novo. A migração entre versões (incluindo esse caso)
+será tratada quando existir o schema 2.
