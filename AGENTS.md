@@ -60,7 +60,7 @@ Resumo de PLAN.md §8.
 
 ## Licença e referência
 
-Lerium é uma **implementação independente**. A extensão de referência orienta apenas comportamento observável; não reutilize código, ícones, textos ou marca. A licença da referência está **não confirmada** — ver [docs/SCOPE.md](docs/SCOPE.md), seção "Referência observada e licença".
+Lerium é licenciado sob **MIT** ([LICENSE](LICENSE), ADR-006) e é uma **implementação independente**. A extensão de referência orienta apenas comportamento observável; não reutilize código, ícones, textos ou marca. A licença da referência está **não confirmada** — ver [docs/SCOPE.md](docs/SCOPE.md), seção "Referência observada e licença".
 
 ## Checkpoint ao fim de cada tarefa
 
