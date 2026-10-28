@@ -7,7 +7,8 @@ const SAVED_MESSAGE = 'Configurações salvas.';
 const INVALID_MESSAGE = 'Não foi possível salvar. Corrija os campos indicados.';
 const SAVE_ERROR = 'Não foi possível salvar as configurações. Tente novamente.';
 const LOAD_ERROR =
-  'Não foi possível carregar as configurações salvas. O formulário mostra os valores padrão.';
+  'Não foi possível ler as configurações salvas. O formulário mostra os valores padrão; ' +
+  'salvar agora substituirá o que estiver gravado.';
 const RESTORED_MESSAGE = 'Valores padrão preenchidos. Clique em Salvar para gravá-los.';
 
 type FieldName = keyof SettingsFieldErrors;
@@ -46,6 +47,21 @@ const errorElements: Readonly<Record<FieldName, HTMLParagraphElement>> = {
 };
 
 const repository = createSettingsRepository(chrome.storage.local);
+
+/**
+ * Bloqueia Salvar e Restaurar durante a leitura inicial e a gravação.
+ * Usa aria-disabled em vez de `disabled`: `disabled` tira o foco do botão
+ * (vai para o body) e o usuário de teclado/leitor de tela perde a posição.
+ */
+let busy = true;
+
+function setBusy(value: boolean): void {
+  busy = value;
+  for (const button of [saveButton, restoreButton]) {
+    if (value) button.setAttribute('aria-disabled', 'true');
+    else button.removeAttribute('aria-disabled');
+  }
+}
 
 function populateLanguages(select: HTMLSelectElement): void {
   for (const language of LANGUAGES) {
@@ -102,7 +118,7 @@ function showErrors(errors: SettingsFieldErrors): void {
 }
 
 async function handleSubmit(): Promise<void> {
-  saveButton.disabled = true;
+  setBusy(true);
   try {
     const result = await repository.save({
       endpoint: endpointInput.value,
@@ -123,7 +139,7 @@ async function handleSubmit(): Promise<void> {
     // Sem registrar o erro: ele poderia conter valores digitados pelo usuário.
     announce(SAVE_ERROR);
   } finally {
-    saveButton.disabled = false;
+    setBusy(false);
   }
 }
 
@@ -134,22 +150,28 @@ async function init(): Promise<void> {
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    if (!saveButton.disabled) void handleSubmit();
+    // Ignora submissões repetidas (Enter ou clique) enquanto houver leitura/gravação.
+    if (!busy) void handleSubmit();
   });
   restoreButton.addEventListener('click', () => {
+    // Sem isso, o load() inicial sobrescreveria os padrões restaurados.
+    if (busy) return;
     fillForm(DEFAULT_SETTINGS);
     showErrors({});
     announce(RESTORED_MESSAGE);
   });
 
-  // Salvar fica bloqueado até a leitura terminar, para não gravar padrões por engano.
-  saveButton.disabled = true;
+  // Salvar e Restaurar ficam bloqueados até a leitura terminar, para não gravar
+  // padrões por engano nem ter o restaurado sobrescrito pelo valor lido.
+  setBusy(true);
   try {
     fillForm(await repository.load());
   } catch {
+    // Libera o formulário com os padrões, avisando que salvar sobrescreve o gravado.
+    fillForm(DEFAULT_SETTINGS);
     announce(LOAD_ERROR);
   } finally {
-    saveButton.disabled = false;
+    setBusy(false);
   }
 }
 

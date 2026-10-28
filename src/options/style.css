@@ -147,7 +147,7 @@ button {
   background-color: var(--color-brand);
 }
 
-.primary:hover {
+.primary:not([aria-disabled='true']):hover {
   background-color: var(--color-brand-hover);
 }
 
@@ -157,12 +157,14 @@ button {
   background-color: transparent;
 }
 
-.secondary:hover {
+.secondary:not([aria-disabled='true']):hover {
   color: var(--color-secondary-hover-text);
   background-color: var(--color-secondary-hover-bg);
 }
 
-button:disabled {
+/* aria-disabled mantém o foco no botão durante leitura/gravação; ver index.ts. */
+button:disabled,
+button[aria-disabled='true'] {
   cursor: not-allowed;
   opacity: 0.6;
 }
