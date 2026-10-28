@@ -14,7 +14,8 @@
     "test": "vitest run",
     "lint": "eslint . && prettier --check \"**/*.{ts,js,mjs,json,html,css}\"",
     "format": "prettier --write \"**/*.{ts,js,mjs,json,html,css}\"",
-    "icons": "node scripts/generate-icons.mjs"
+    "icons": "node scripts/generate-icons.mjs",
+    "extension-id": "node scripts/extension-id.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

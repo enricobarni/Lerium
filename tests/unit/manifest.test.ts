@@ -1,10 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { extensionIdFromKey } from '../../scripts/extension-id.mjs';
 
 const publicDir = new URL('../../public/', import.meta.url);
 const rawManifest = readFileSync(new URL('manifest.json', publicDir), 'utf8');
 const manifest = JSON.parse(rawManifest) as Record<string, unknown> & {
   version: string;
+  key: unknown;
   icons: Record<string, string>;
   action: { default_popup?: string; default_icon?: Record<string, string> };
   options_ui?: { page?: string; open_in_tab?: boolean };
@@ -20,12 +22,17 @@ const ALLOWED_KEYS = [
   'action',
   'description',
   'icons',
+  'key',
   'manifest_version',
   'name',
   'options_ui',
   'permissions',
   'version',
 ];
+// ID derivado da `key` (ADR-007). Mudar a chave muda o ID e exige que o
+// usuário atualize OLLAMA_ORIGINS; este valor detecta troca acidental.
+const EXPECTED_EXTENSION_ID = 'mjkoppimccgajnabfeheglepjapkchlk';
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 // Chrome aceita de 1 a 4 inteiros (0–65535) separados por ponto, sem zeros à esquerda.
 const CHROME_VERSION = /^(0|[1-9]\d{0,4})(\.(0|[1-9]\d{0,4})){0,3}$/;
 
@@ -66,5 +73,30 @@ describe('manifest.json', () => {
   it('abre as configurações em options/index.html, em nova aba', () => {
     expect(manifest.options_ui?.page).toBe('options/index.html');
     expect(manifest.options_ui?.open_in_tab).toBe(true);
+  });
+
+  it('fixa o ID com uma chave pública em base64 (ADR-007)', () => {
+    expect(typeof manifest.key).toBe('string');
+    const key = manifest.key as string;
+    expect(key).toMatch(BASE64);
+    expect(Buffer.from(key, 'base64').toString('base64')).toBe(key);
+    expect(rawManifest).not.toContain('PRIVATE KEY');
+  });
+
+  it('deriva o ID esperado da chave do manifesto', () => {
+    expect(extensionIdFromKey(manifest.key as string)).toBe(EXPECTED_EXTENSION_ID);
+  });
+});
+
+describe('extensionIdFromKey', () => {
+  it('mapeia os 32 primeiros dígitos hex do SHA-256 para a-p', () => {
+    // SHA-256 de "abc" = ba7816bf8f01cfea414140de5dae2223...
+    const key = Buffer.from('abc').toString('base64');
+    expect(extensionIdFromKey(key)).toBe('lkhibglpipabmpokebebeanofnkocccd');
+  });
+
+  it('rejeita chave vazia ou fora de base64', () => {
+    expect(() => extensionIdFromKey('')).toThrow();
+    expect(() => extensionIdFromKey('não é base64!')).toThrow();
   });
 });

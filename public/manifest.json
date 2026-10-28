@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "Lerium",
   "version": "0.0.1",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtnGyxr5InemCmCAT2EdYpUxi9BHnBWPR/Wne72905Fra6kbCWmHAKKj2owyHzH7ohAM6WvAdOP0Pg6THIxA5qDV7RKc4SJKFrKOs0DA9S0ZkD9zo9/DEaflp+8mWbVlGeLSYrmbZSKS0HrOlZfFUTUvEZ/eT8d7VEr76p8jKXth+Ay7B8FJygTJPRXGrJ8LvY/c8vN8T+/OrIoqU4Wm9EofQatjDnw6w+lN8IGKzFN5DbNCzkdRAzlJVIqveZbo6XVE4Tel5vJrGOhUZuOY4vV/BD44FBkVeM/ZTVpgfPd3wS5Aoys0l+GzAehTZtF1W1yYd84vRHdBRKtTB8r/rYwIDAQAB",
   "description": "Traduz páginas e seleções com modelos locais do Ollama, preservando o texto original.",
   "icons": {
     "16": "icons/icon-16.png",
