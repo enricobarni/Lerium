@@ -6,10 +6,38 @@
 ## Estado atual
 
 - **Fase:** 2 — Configurações e conexão local
-- **Tarefa:** `feat/settings-storage` em revisão; próxima: `feat/ollama-discovery`
+- **Tarefa:** `feat/ollama-discovery` em revisão (última branch da Fase 2)
+- **Mesclado na Fase 2:** #9 (`feat/settings-storage`), com aceite manual do responsável (persistência após recarregar, erros de campo)
 - **Versão:** `0.0.1` (`0.1.0` ao concluir a conexão com o Ollama, PLAN.md §5.4)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
+
+## Fase 2 — `feat/ollama-discovery`
+
+| Commit | Mensagem |
+|---|---|
+| `eb94bd5` | `docs(decisions): registra adr-007 sobre origem da extensão no ollama` |
+| `35df205` | `feat(manifest): fixa id da extensão com chave pública` |
+| `ae1b8c3` | `feat(core): adiciona cliente de modelos do ollama com timeout` |
+| `175219c` | `feat(options): adiciona mensagens de diagnóstico da conexão` |
+| `0287460` | `feat(options): testa conexão e lista modelos instalados` |
+| `6d06cc3` | `feat(options): orienta liberação da origem no ollama` |
+| `b60e8c7` | `docs(readme): documenta liberação da origem no ollama` |
+| `fff968b` | `fix(core): distingue origem recusada de ollama inacessível` |
+| `467e353` | `docs(decisions): registra riscos residuais e diagnóstico na adr-007` |
+| `3f28e4e` | `fix(options): libera teste de conexão ao editar o endereço` |
+| (este commit) | `docs(progress): registra descoberta do ollama da fase 2` |
+
+**ID fixo da extensão:** `mjkoppimccgajnabfeheglepjapkchlk` (`npm run extension-id`; conferido de forma independente em Python). Chave privada descartada; nenhuma chave privada no repositório.
+
+**Validações executadas:** `npm run lint`, `typecheck`, `test` (232/232) e `build` com código 0; sem `innerHTML`, `eval` ou `console` em `src/`; manifesto com `permissions: ["storage"]`, sem `host_permissions`. Revisões: reviewer (aprovado com ressalvas) e security (ressalvas, nada bloqueante) — tratadas em `fff968b`, `467e353` e `3f28e4e`.
+
+**Decisões:**
+- ADR-007: `OLLAMA_ORIGINS` com o ID exato; sem curinga, sem remoção de `Origin`, sem `host_permissions`.
+- Sem `host_permissions`, o 403 do Ollama chega ao `fetch` como erro de rede (CORS). O cliente faz uma sondagem `no-cors`: servidor alcançável → `forbidden`; inalcançável → `network`.
+- Página de opções testa o endereço salvo ao abrir (só loopback, sem dados da página) e o digitado ao clicar; o campo de texto do modelo segue como valor salvo, com `<select>` auxiliar.
+
+**Pendente (gate da Fase 2):** responsável define `OLLAMA_ORIGINS=chrome-extension://mjkoppimccgajnabfeheglepjapkchlk`, reinicia o Ollama e confirma no Chrome: (1) antes de liberar, "Testar conexão" mostra a mensagem de origem recusada; (2) depois, `translategemma:4b` é listado; (3) com o Ollama fechado, mensagem de Ollama inacessível. Também: copiar origem e navegação por teclado. Interface de opções sem teste automatizado de DOM (previsto para a Fase 4).
 
 ## Fase 2 — `feat/settings-storage`
 
@@ -41,7 +69,7 @@
 - Modelo: allowlist `A-Z a-z 0-9 . _ : / -`, sem `..`; origem ≠ destino.
 - Paralelismo, modo e domínios excluídos ficam para as fases que implementam esses comportamentos.
 
-**Pendente (gate da branch):** teste manual pelo responsável — salvar configurações, recarregar a extensão e confirmar persistência; testar um endereço inválido e o erro associado ao campo.
+**Teste manual (responsável):** aprovado — persistência após recarregar a extensão; erros de endereço e de idiomas iguais exibidos nos campos.
 
 ## Fase 1 — `feat/popup-shell`
 
@@ -163,4 +191,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 2 — `feat/ollama-discovery`: cliente de `/api/tags` com timeout, diagnósticos em PT-BR (incluindo 403 de origem), ADR-007 e `key` no manifesto para ID estável; o responsável define `OLLAMA_ORIGINS` com o ID do Lerium.
+Após o gate da Fase 2: registrar a versão `0.1.0` (PLAN.md §5.4) e iniciar a Fase 3 — `feat/ollama-chat` (`TranslationProvider` e cliente `/api/chat` sem DOM).
