@@ -38,8 +38,9 @@ describe('manifest.json', () => {
     expect(Object.keys(manifest).sort()).toEqual(ALLOWED_KEYS);
   });
 
-  it('não solicita permissões nem acesso a sites', () => {
-    expect(manifest.permissions).toEqual([]);
+  it('solicita apenas a permissão storage e nenhum acesso a sites', () => {
+    // storage: preferências em chrome.storage.local (ADR-008).
+    expect(manifest.permissions).toEqual(['storage']);
     expect(manifest).not.toHaveProperty('host_permissions');
     expect(manifest).not.toHaveProperty('optional_host_permissions');
     expect(manifest).not.toHaveProperty('content_scripts');

@@ -1,13 +1,40 @@
+/*
+ * Tokens alinhados ao popup (src/popup/style.css). Contrastes medidos (WCAG):
+ * claro (fundo #ffffff): erro #b91c1c 6,47:1; ajuda #4b5563 7,56:1;
+ *   borda do campo #6b7280 4,83:1; marca/foco #4f46e5 6,29:1.
+ * escuro (fundo #111827): erro #fca5a5 9,35:1; ajuda #d1d5db 12,04:1;
+ *   borda do campo #9ca3af 6,99:1; foco #a5b4fc 8,90:1.
+ */
 :root {
   color-scheme: light dark;
   --color-text: #1f2937;
+  --color-muted: #4b5563;
   --color-background: #ffffff;
+  --color-field-border: #6b7280;
+  --color-error: #b91c1c;
+  --color-brand: #4f46e5;
+  --color-brand-hover: #4338ca;
+  --color-on-brand: #ffffff;
+  --color-focus: #4f46e5;
+  --color-button-border: transparent;
+  --color-secondary-text: #4f46e5;
+  --color-secondary-hover-text: #4338ca;
+  --color-secondary-hover-bg: #eef2ff;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --color-text: #f3f4f6;
+    --color-muted: #d1d5db;
     --color-background: #111827;
+    --color-field-border: #9ca3af;
+    --color-error: #fca5a5;
+    --color-focus: #a5b4fc;
+    /* Botão #4f46e5 tem só 2,8:1 sobre o fundo escuro; a borda (8,9:1) delimita o controle. */
+    --color-button-border: #a5b4fc;
+    --color-secondary-text: #a5b4fc;
+    --color-secondary-hover-text: #c7d2fe;
+    --color-secondary-hover-bg: #1e1b4b;
   }
 }
 
@@ -39,4 +66,126 @@ h1 {
 
 p {
   margin: 0;
+}
+
+.intro {
+  margin-bottom: 0.75rem;
+}
+
+form {
+  margin-top: 1.5rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 1.25rem;
+}
+
+label {
+  font-weight: 600;
+}
+
+.help {
+  font-size: 0.875rem;
+  color: var(--color-muted);
+}
+
+input,
+select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-field-border);
+  border-radius: 0.375rem;
+  font: inherit;
+  color: var(--color-text);
+  background-color: var(--color-background);
+}
+
+/* Erro sinalizado também por borda mais grossa, além do texto e de aria-invalid. */
+[aria-invalid='true'] {
+  border-color: var(--color-error);
+  /* Sombra em vez de borda de 2px para não deslocar o layout. */
+  box-shadow: 0 0 0 1px var(--color-error);
+}
+
+.error {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-error);
+}
+
+.error:empty {
+  display: none;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+button {
+  min-height: 2.5rem;
+  padding: 0.5rem 1.25rem;
+  border-radius: 0.375rem;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 150ms ease-in-out,
+    color 150ms ease-in-out;
+}
+
+.primary {
+  border: 1px solid var(--color-button-border);
+  color: var(--color-on-brand);
+  background-color: var(--color-brand);
+}
+
+.primary:not([aria-disabled='true']):hover {
+  background-color: var(--color-brand-hover);
+}
+
+.secondary {
+  border: 1px solid var(--color-secondary-text);
+  color: var(--color-secondary-text);
+  background-color: transparent;
+}
+
+.secondary:not([aria-disabled='true']):hover {
+  color: var(--color-secondary-hover-text);
+  background-color: var(--color-secondary-hover-bg);
+}
+
+/* aria-disabled mantém o foco no botão durante leitura/gravação; ver index.ts. */
+button:disabled,
+button[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+#feedback {
+  margin-top: 1rem;
+}
+
+#feedback:empty {
+  margin: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button {
+    transition: none;
+  }
 }
