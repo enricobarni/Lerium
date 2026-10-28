@@ -13,8 +13,9 @@ export const ENDPOINT_ERROR_MESSAGES: Readonly<Record<EndpointErrorReason, strin
   {
     invalid_type: 'Informe o endereço do Ollama como texto, por exemplo http://localhost:11434.',
     empty: 'Informe o endereço do Ollama, por exemplo http://localhost:11434.',
-    invalid_url:
-      'Endereço inválido. Use o formato http://localhost:11434, sem espaços nem barras invertidas.',
+    invalid_url: 'Endereço inválido. Use o formato http://localhost:11434, sem barras invertidas.',
+    invalid_characters:
+      'O endereço contém espaços, acentos ou caracteres especiais. Digite-o novamente, como http://localhost:11434.',
     protocol:
       'Use um endereço começando com http://. O Ollama local não usa https; por exemplo http://localhost:11434.',
     credentials: 'Remova usuário e senha do endereço; o Ollama local não usa login.',

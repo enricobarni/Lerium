@@ -19,6 +19,7 @@ const ENDPOINT_REASONS: EndpointErrorReason[] = [
   'invalid_type',
   'empty',
   'invalid_url',
+  'invalid_characters',
   'protocol',
   'credentials',
   'query',

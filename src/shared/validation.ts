@@ -12,6 +12,7 @@ export type EndpointErrorReason =
   | 'invalid_type'
   | 'empty'
   | 'invalid_url'
+  | 'invalid_characters'
   | 'protocol'
   | 'credentials'
   | 'query'
@@ -30,11 +31,19 @@ const ALLOWED_HOSTNAMES: ReadonlySet<string> = new Set(['localhost', '127.0.0.1'
 /** Nomes de modelo do Ollama são curtos; o limite só barra entradas absurdas. */
 export const MODEL_MAX_LENGTH = 200;
 
-// Espaços, controles C0/C1 e barra invertida: o parser de URL os remove ou
-// reinterpreta em silêncio, então são recusados antes de chegar a ele.
-const ENDPOINT_FORBIDDEN_CHARS = /[\s\p{Cc}\\]/u;
+// Só ASCII visível (0x21-0x7E): espaços, controles, caracteres invisíveis
+// (\p{Cf}, como o soft hyphen) e formas largas são removidos ou mapeados em
+// silêncio pelo parser de URL, então são recusados antes de chegar a ele.
+const ENDPOINT_NON_ASCII_VISIBLE = /[^\x21-\x7E]/;
+// A barra invertida é ASCII, mas o URL a trata como `/` em esquemas especiais.
+const ENDPOINT_BACKSLASH = /\\/;
 const MODEL_FORBIDDEN_CHARS = /[\s\p{Cc}]/u;
 const HTTP_PREFIX = /^http:\/\//i;
+const MAX_PORT = 65535;
+// Porta no fim da authority (após o último `@`). `]` fica de fora para não
+// confundir os `:` de um IPv6 entre colchetes com a porta.
+const AUTHORITY_PORT = /:([^:\]]*)$/;
+const DIGITS = /^\d+$/;
 
 const fail = <R extends string>(reason: R): { ok: false; reason: R } => ({ ok: false, reason });
 
@@ -44,12 +53,30 @@ const fail = <R extends string>(reason: R): { ok: false; reason: R } => ({ ok: f
  *
  * Formas IPv4 alternativas (`127.1`, `0x7f.0.0.1`) são canonizadas pelo URL
  * para `127.0.0.1` e, por isso, aceitas; o valor devolvido é sempre canônico.
+ * O mesmo vale para escapes percentuais no host (`%6cocalhost` vira
+ * `localhost`): a lista de hosts é aplicada ao hostname já decodificado.
  */
 export function normalizeEndpoint(input: unknown): ValidationResult<string, EndpointErrorReason> {
   if (typeof input !== 'string') return fail('invalid_type');
   const raw = input.trim();
   if (raw === '') return fail('empty');
-  if (ENDPOINT_FORBIDDEN_CHARS.test(raw)) return fail('invalid_url');
+  if (ENDPOINT_NON_ASCII_VISIBLE.test(raw)) return fail('invalid_characters');
+  if (ENDPOINT_BACKSLASH.test(raw)) return fail('invalid_url');
+
+  const hasHttpPrefix = HTTP_PREFIX.test(raw);
+  const afterScheme = hasHttpPrefix ? raw.slice('http://'.length) : '';
+  const authority = afterScheme.split(/[/?#]/, 1)[0] ?? '';
+  if (hasHttpPrefix) {
+    // O URL aceitaria `http:///localhost`; exigimos o host logo após `http://`.
+    if (authority === '') return fail('invalid_url');
+    // Porta não numérica ou acima de 65535 faz o URL lançar erro genérico;
+    // checada antes para devolver o motivo específico.
+    const hostPort = authority.slice(authority.lastIndexOf('@') + 1);
+    const port = AUTHORITY_PORT.exec(hostPort)?.[1];
+    if (port !== undefined && port !== '' && (!DIGITS.test(port) || Number(port) > MAX_PORT)) {
+      return fail('port');
+    }
+  }
 
   let url: URL;
   try {
@@ -60,10 +87,8 @@ export function normalizeEndpoint(input: unknown): ValidationResult<string, Endp
 
   if (url.protocol !== 'http:') return fail('protocol');
   // O URL aceita `http:localhost`; exigimos a forma explícita `http://`.
-  if (!HTTP_PREFIX.test(raw)) return fail('invalid_url');
+  if (!hasHttpPrefix) return fail('invalid_url');
 
-  const afterScheme = raw.slice('http://'.length);
-  const authority = afterScheme.split(/[/?#]/, 1)[0] ?? '';
   if (url.username !== '' || url.password !== '' || authority.includes('@')) {
     return fail('credentials');
   }

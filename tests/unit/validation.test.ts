@@ -25,6 +25,15 @@ describe('normalizeEndpoint', () => {
     ['http://127.1:11434', 'http://127.0.0.1:11434'],
     ['http://0x7f.0.0.1:11434', 'http://127.0.0.1:11434'],
     ['http://2130706433:11434', 'http://127.0.0.1:11434'],
+    ['http://0177.0.0.1:11434', 'http://127.0.0.1:11434'],
+    // Zeros à esquerda na porta são canonizados.
+    ['http://localhost:011434', 'http://localhost:11434'],
+    // Host com escape percentual: o URL decodifica e canoniza antes da lista de
+    // hosts permitidos, e o valor devolvido é a origem canônica.
+    ['http://%6cocalhost:11434', 'http://localhost:11434'],
+    ['http://local%C2%ADhost:11434', 'http://localhost:11434'],
+    // `/%2e` resolve para `/`; o resultado é só a origem.
+    ['http://localhost/%2e', 'http://localhost'],
   ])('aceita %j como %j', (input, expected) => {
     expect(normalizeEndpoint(input)).toEqual({ ok: true, value: expected });
   });
@@ -34,13 +43,21 @@ describe('normalizeEndpoint', () => {
     ['   ', 'empty'],
     ['lixo', 'invalid_url'],
     ['http://', 'invalid_url'],
-    ['http://local host:11434', 'invalid_url'],
-    ['http://localhost:11434 /', 'invalid_url'],
-    ['http://local\nhost:11434', 'invalid_url'],
-    ['http://local\thost:11434', 'invalid_url'],
+    ['http://local host:11434', 'invalid_characters'],
+    ['http://localhost:11434 /', 'invalid_characters'],
+    ['http://local\nhost:11434', 'invalid_characters'],
+    ['http://local\thost:11434', 'invalid_characters'],
+    ['http://ｌｏｃａｌｈｏｓｔ:11434', 'invalid_characters'],
+    ['http://localhost­:11434', 'invalid_characters'],
+    ['http://local​host:11434', 'invalid_characters'],
+    ['http://localhost :11434', 'invalid_characters'],
+    ['http://localhost　:11434', 'invalid_characters'],
+    ['http://localhost:11434/caminhoé', 'invalid_characters'],
+    // Autoridade vazia: o URL a aceitaria como localhost; exigimos o host
+    // logo após `http://`, como já ocorre com `http:/localhost`.
+    ['http:///localhost', 'invalid_url'],
     ['http:\\\\localhost:11434', 'invalid_url'],
     ['http://localhost\\@evil.com', 'invalid_url'],
-    ['http://localhost:65536', 'invalid_url'],
     ['http:localhost:11434', 'invalid_url'],
     ['http:/localhost:11434', 'invalid_url'],
     ['localhost:11434', 'protocol'],
@@ -61,6 +78,14 @@ describe('normalizeEndpoint', () => {
     ['http://@localhost:11434', 'credentials'],
     ['http://localhost@evil.com', 'credentials'],
     ['http://localhost:0', 'port'],
+    ['http://localhost:65536', 'port'],
+    ['http://localhost:99999999999999999999', 'port'],
+    ['http://localhost:abc', 'port'],
+    ['http://user@localhost:70000', 'port'],
+    ['http://127.0.0.1@evil.com', 'credentials'],
+    ['http://127.0.0.1.nip.io', 'host'],
+    ['http://[::ffff:127.0.0.1]', 'host'],
+    ['http://localhost/%2e%2e/api', 'path'],
     ['http://localhost:11434/api', 'path'],
     ['http://localhost:11434/api/tags', 'path'],
     ['http://localhost:11434?x=1', 'query'],
