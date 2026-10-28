@@ -84,7 +84,7 @@ Conforme PLAN.md §11, uma tarefa só está pronta se:
 - [ ] Tem testes proporcionais ao risco, todos passando.
 - [ ] Respeita privacidade, segurança e integridade do DOM.
 - [ ] Está formatada, tipada e suficientemente documentada.
-- [ ] Gerados e segredos fora do Git; arquivos de build versionados (PLAN.md §5.5).
+- [ ] Artefatos gerados (bundles, cobertura, caches) e segredos fora do Git; arquivos necessários ao build (configs, lockfile, manifesto) versionados (PLAN.md §5.5).
 - [ ] Commit pequeno com Conventional Commits válido.
 - [ ] `docs/PROGRESS.md` atualizado.
 
