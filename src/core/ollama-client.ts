@@ -81,10 +81,35 @@ export async function listModels(
     controller.signal.addEventListener('abort', () => resolve('timeout'), { once: true });
   });
 
+  const url = new URL('/api/tags', normalized.value);
+
+  /**
+   * Sem host_permissions, o 403 do Ollama para origem não liberada vem sem
+   * `Access-Control-Allow-Origin` e o `fetch` rejeita como erro de rede, igual
+   * a um Ollama desligado. Uma GET `no-cors` não depende de CORS: se resolver
+   * (resposta opaca), o servidor está alcançável e recusou a origem. O corpo
+   * opaco nunca é lido. Usa o mesmo sinal, logo o mesmo prazo restante.
+   */
+  const probe = async (): Promise<ListModelsResult> => {
+    try {
+      await options.fetchFn(url, {
+        method: 'GET',
+        mode: 'no-cors',
+        credentials: 'omit',
+        cache: 'no-store',
+        redirect: 'error',
+        signal: controller.signal,
+      });
+      return { ok: false, error: 'forbidden' };
+    } catch {
+      return { ok: false, error: timedOut ? 'timeout' : 'network' };
+    }
+  };
+
   const request = async (): Promise<ListModelsResult> => {
     let response: Response;
     try {
-      response = await options.fetchFn(new URL('/api/tags', normalized.value), {
+      response = await options.fetchFn(url, {
         method: 'GET',
         credentials: 'omit',
         cache: 'no-store',
@@ -92,9 +117,14 @@ export async function listModels(
         redirect: 'error',
         signal: controller.signal,
       });
-    } catch {
-      // TypeError de rede (Ollama desligado, porta errada, CORS) ou aborto.
-      return { ok: false, error: timedOut ? 'timeout' : 'network' };
+    } catch (error) {
+      if (timedOut) return { ok: false, error: 'timeout' };
+      // Aborto que não veio do nosso timeout: não há o que sondar.
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return { ok: false, error: 'network' };
+      }
+      // TypeError de rede: Ollama inacessível ou origem recusada (CORS).
+      return probe();
     }
     if (!response.ok) return httpError(response.status);
 

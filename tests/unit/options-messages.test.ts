@@ -95,11 +95,13 @@ describe('mensagens de diagnóstico da conexão', () => {
     expect(ollamaErrorMessage(error).trim()).not.toBe('');
   });
 
-  it('forbidden explica a recusa da origem e a liberação do ID', () => {
+  it('forbidden aponta a origem provável sem afirmar certeza', () => {
     const message = ollamaErrorMessage('forbidden');
-    expect(message).toMatch(/recusou/);
+    expect(message).toMatch(/respondeu, mas recusou/);
+    expect(message).toMatch(/provavelmente/);
+    expect(message).toMatch(/origem do Lerium/);
     expect(message).toMatch(/OLLAMA_ORIGINS/);
-    expect(message).toMatch(/ID/);
+    expect(message).toMatch(/instruções abaixo/);
     expect(message).not.toContain('*');
   });
 

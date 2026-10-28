@@ -72,7 +72,7 @@ export const OLLAMA_ERROR_MESSAGES: Readonly<Record<OllamaErrorKind, string>> = 
   timeout:
     'O Ollama demorou demais para responder. Verifique se ele está em execução e tente novamente.',
   forbidden:
-    'O Ollama recusou a origem da extensão. Libere o ID do Lerium em OLLAMA_ORIGINS e reinicie o Ollama.',
+    'O Ollama respondeu, mas recusou a conexão da extensão — provavelmente a origem do Lerium não está liberada em OLLAMA_ORIGINS. Veja as instruções abaixo.',
   not_found:
     'Algo respondeu nesse endereço, mas não parece ser o Ollama. Confira o host e a porta.',
   http_error: 'O Ollama respondeu com erro. Tente novamente; se persistir, reinicie o Ollama.',
