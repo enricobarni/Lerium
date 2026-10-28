@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import type { OllamaErrorKind } from '../../src/core/ollama-client';
 import {
   ENDPOINT_ERROR_MESSAGES,
   LANGUAGE_ERROR_MESSAGES,
   MODEL_ERROR_MESSAGES,
+  OLLAMA_ERROR_MESSAGES,
   endpointErrorMessage,
   languageErrorMessage,
+  missingModelMessage,
   modelErrorMessage,
+  ollamaErrorMessage,
 } from '../../src/options/messages';
 import type {
   EndpointErrorReason,
@@ -67,5 +71,55 @@ describe('mensagens de validação', () => {
     );
     expect(endpointErrorMessage('protocol')).toMatch(/http:\/\//);
     expect(endpointErrorMessage('protocol')).toMatch(/https/);
+  });
+});
+
+const OLLAMA_ERRORS: OllamaErrorKind[] = [
+  'invalid_endpoint',
+  'network',
+  'timeout',
+  'forbidden',
+  'not_found',
+  'http_error',
+  'invalid_response',
+];
+
+describe('mensagens de diagnóstico da conexão', () => {
+  it('cobre exatamente os erros do cliente do Ollama', () => {
+    expect(Object.keys(OLLAMA_ERROR_MESSAGES).sort()).toEqual([...OLLAMA_ERRORS].sort());
+  });
+
+  it.each(OLLAMA_ERRORS)('erro "%s" tem mensagem não vazia', (error) => {
+    expect(ollamaErrorMessage(error).trim()).not.toBe('');
+  });
+
+  it('forbidden explica a recusa da origem e a liberação do ID', () => {
+    const message = ollamaErrorMessage('forbidden');
+    expect(message).toMatch(/recusou/);
+    expect(message).toMatch(/OLLAMA_ORIGINS/);
+    expect(message).toMatch(/ID/);
+    expect(message).not.toContain('*');
+  });
+
+  it('network cobre Ollama desligado ou porta errada', () => {
+    const message = ollamaErrorMessage('network');
+    expect(message).toMatch(/em execução|aberto|ligado/);
+    expect(message).toMatch(/porta/);
+  });
+
+  it('not_found e invalid_response indicam que não parece ser o Ollama', () => {
+    expect(ollamaErrorMessage('not_found')).toMatch(/não parece ser o Ollama/);
+    expect(ollamaErrorMessage('invalid_response')).toMatch(/não parece ser o Ollama/);
+  });
+
+  it('http_error inclui o status quando informado', () => {
+    expect(ollamaErrorMessage('http_error', 500)).toMatch(/500/);
+    expect(ollamaErrorMessage('http_error').trim()).not.toBe('');
+  });
+
+  it('modelo ausente cita o nome e o comando ollama pull', () => {
+    const message = missingModelMessage('translategemma:4b');
+    expect(message).toContain('"translategemma:4b"');
+    expect(message).toContain('ollama pull translategemma:4b');
   });
 });

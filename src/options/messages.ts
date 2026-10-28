@@ -1,3 +1,4 @@
+import type { OllamaErrorKind } from '../core/ollama-client';
 import type {
   EndpointErrorReason,
   LanguageErrorReason,
@@ -58,4 +59,39 @@ export function modelErrorMessage(reason: ModelErrorReason): string {
 
 export function languageErrorMessage(reason: LanguageFieldErrorReason): string {
   return LANGUAGE_ERROR_MESSAGES[reason];
+}
+
+/**
+ * Diagnóstico da conexão com o Ollama (RF01). Mensagens curtas; o passo a
+ * passo de `OLLAMA_ORIGINS` (ADR-007) fica na página de opções.
+ */
+export const OLLAMA_ERROR_MESSAGES: Readonly<Record<OllamaErrorKind, string>> = Object.freeze({
+  invalid_endpoint: 'Endereço do Ollama inválido. Corrija-o, por exemplo http://localhost:11434.',
+  network:
+    'Não foi possível conectar ao Ollama. Verifique se ele está em execução e se a porta do endereço está correta (padrão 11434).',
+  timeout:
+    'O Ollama demorou demais para responder. Verifique se ele está em execução e tente novamente.',
+  forbidden:
+    'O Ollama recusou a origem da extensão. Libere o ID do Lerium em OLLAMA_ORIGINS e reinicie o Ollama.',
+  not_found:
+    'Algo respondeu nesse endereço, mas não parece ser o Ollama. Confira o host e a porta.',
+  http_error: 'O Ollama respondeu com erro. Tente novamente; se persistir, reinicie o Ollama.',
+  invalid_response:
+    'Algo respondeu nesse endereço, mas não parece ser o Ollama. Confira o host e a porta.',
+});
+
+/** Mensagem do erro de conexão; `status` HTTP é citado quando informado. */
+export function ollamaErrorMessage(error: OllamaErrorKind, status?: number): string {
+  if (error === 'http_error' && status !== undefined) {
+    return `O Ollama respondeu com erro HTTP ${status}. Tente novamente; se persistir, reinicie o Ollama.`;
+  }
+  return OLLAMA_ERROR_MESSAGES[error];
+}
+
+/**
+ * Modelo configurado ausente em `/api/tags`. O nome já passou pela
+ * allowlist de `validateModel`, então pode compor o comando sugerido.
+ */
+export function missingModelMessage(model: string): string {
+  return `O modelo "${model}" não está instalado no Ollama. Instale-o com: ollama pull ${model}`;
 }
