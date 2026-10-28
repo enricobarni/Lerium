@@ -1,0 +1,34 @@
+# Dependências instaladas (não ignorar package-lock.json)
+node_modules/
+
+# Saídas geradas de build/empacotamento
+dist/
+build/
+
+# Cobertura e relatórios gerados por testes
+coverage/
+playwright-report/
+test-results/
+
+# Variáveis de ambiente locais e segredos
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+
+# Cache e artefatos incrementais
+.cache/
+.vite/
+*.tsbuildinfo
+
+# Logs e arquivos temporários
+*.log
+npm-debug.log*
+*.tmp
+*.bak
+
+# Arquivos do sistema operacional
+.DS_Store
+Thumbs.db
