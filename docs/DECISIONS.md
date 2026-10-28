@@ -108,3 +108,19 @@ interromper a exibição do resultado.
 
 **Quando decidir.** Na Fase 6, antes de implementar seleção e menus de
 contexto.
+
+## ADR-006 — Licença do Lerium
+
+**Status:** Aceita (28/10/2026)
+
+**Contexto.** O repositório é público e não tinha licença, o que na prática
+significa "todos os direitos reservados". A escolha afeta uso, distribuição e
+contribuições, e precisava ser feita antes do primeiro commit de código.
+
+**Decisão.** Lerium é distribuído sob a licença MIT (arquivo `LICENSE` na raiz).
+
+**Consequências.** Terceiros podem usar, modificar e redistribuir o código
+mantendo o aviso de copyright. Dependências futuras devem ter licenças
+compatíveis (PLAN.md §8, item 9). O `package.json` da Fase 1 deve declarar
+`"license": "MIT"`. Esta decisão **não** altera a situação da licença da
+extensão de referência, que continua não confirmada (SCOPE.md).

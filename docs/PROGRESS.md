@@ -6,7 +6,7 @@
 ## Estado atual
 
 - **Fase:** 0 — Descoberta e especificação
-- **Status:** documentação criada; aguardando revisão e merge dos PRs
+- **Status:** Fase 0 concluída — PRs #1, #2 e #3 mesclados com merge commit (hashes preservados); licença MIT em PR próprio
 - **Versão:** nenhuma (versionamento começa em `0.1.0`, ver PLAN.md §5.4)
 
 ## Fase 0 — Commits
@@ -37,6 +37,7 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 - [x] `docs/DECISIONS.md` com ADR-001 (aceita) e ADR-002 a ADR-005 (propostas).
 - [x] `docs/TEST_PLAN.md` com cenário de novel e fixture HTML própria (a ser criada na Fase 4).
 - [x] `docs/PROGRESS.md` e `AGENTS.md`.
+- [x] Licença do Lerium definida: MIT (`LICENSE`, [ADR-006](DECISIONS.md)), branch `docs/license`.
 
 ## Validações executadas
 
@@ -55,7 +56,7 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Pendências
 
-- **Bloqueia a Fase 1:** definir a licença do próprio Lerium antes do primeiro commit de código (SCOPE.md, "Questões em aberto").
+- Incluir `"license": "MIT"` no `package.json` ao criá-lo em `chore/project-bootstrap`.
 - CORS (`OLLAMA_ORIGINS`) fica registrado apenas em SCOPE.md; vira ADR quando for testado na Fase 2.
 - Demais decisões em aberto: ver SCOPE.md e DECISIONS.md (ADR-002 a ADR-005).
 
