@@ -4,5 +4,7 @@
     "lib": ["ES2022"],
     "types": ["node"]
   },
-  "include": ["tests", "*.config.ts"]
+  "include": ["tests", "*.config.ts"],
+  // Os E2E usam DOM nos callbacks de page.evaluate: ficam em tsconfig.e2e.json.
+  "exclude": ["tests/e2e"]
 }

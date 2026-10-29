@@ -28,7 +28,8 @@ export default defineConfig({
   test: {
     // Os testes ficam fora de src/, então a raiz do Vitest é a do repositório.
     root: fromRoot('.'),
-    include: ['tests/**/*.test.ts'],
+    // Só unitários: os E2E (tests/e2e, *.spec.ts) rodam no Playwright.
+    include: ['tests/unit/**/*.test.ts'],
     environment: 'node',
     passWithNoTests: false,
   },
