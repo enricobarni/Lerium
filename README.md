@@ -27,6 +27,8 @@ Após cada novo `npm run build`, clique no botão de recarregar da extensão em 
 
 ## Conectar ao Ollama
 
+O Lerium fala com o Ollama somente pelo seu service worker e somente no seu computador. Por isso, ao carregar a extensão, o Chrome informa que ela pode acessar `localhost:11434` e `127.0.0.1:11434` (a porta padrão do Ollama). Se você configurar outra porta, o Lerium pede permissão para essa porta exata ao clicar em **Testar conexão** ou **Salvar** ([ADR-009](docs/DECISIONS.md)).
+
 Por segurança, o Ollama recusa pedidos de extensões cuja origem não esteja liberada na variável de ambiente `OLLAMA_ORIGINS`. Libere apenas a origem do Lerium:
 
 ```text
@@ -46,6 +48,16 @@ No Windows:
 
 Para verificar, use o botão **Testar conexão**: ele deve mostrar "Conectado" e a quantidade de modelos. Um teste com `curl` não serve, porque o `curl` não envia o cabeçalho `Origin` e é aceito mesmo sem a liberação.
 
+### Se aparecer o erro HTTP 403
+
+O Ollama está aberto, mas recusou o Lerium. Confira:
+
+1. Se `OLLAMA_ORIGINS` contém exatamente `chrome-extension://mjkoppimccgajnabfeheglepjapkchlk`.
+2. Se o Ollama foi **fechado totalmente** (ícone da bandeja → **Quit Ollama**) e aberto de novo depois de salvar a variável. Ele só lê a variável ao iniciar.
+3. Se o ID mostrado em `chrome://extensions` é o mesmo acima. Se você carregou uma versão antiga do Lerium, remova-a e carregue `dist/` de novo.
+
+Se a mensagem for "Não foi possível conectar ao Ollama", o problema é outro: o Ollama está fechado ou a porta está errada. Nesse caso, a liberação da origem não ajuda.
+
 > **Não use `*` nem `chrome-extension://*`** em `OLLAMA_ORIGINS`: com eles, qualquer site ou extensão instalada poderia usar o seu Ollama.
 
 ## Scripts
@@ -59,6 +71,7 @@ Para verificar, use o botão **Testar conexão**: ele deve mostrar "Conectado" e
 | `npm run format`       | Formata os arquivos com Prettier.                       |
 | `npm run icons`        | Gera os ícones da extensão.                             |
 | `npm run extension-id` | Imprime a origem (com o ID fixo) para `OLLAMA_ORIGINS`. |
+| `npm run test:e2e`     | Testes de ponta a ponta no Chromium (exige `npm run build` e a porta 11434 livre). |
 
 ## Documentação
 

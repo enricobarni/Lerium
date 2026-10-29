@@ -248,7 +248,9 @@ será tratada quando existir o schema 2.
 
 ## ADR-009 — Service worker como cliente HTTP e acesso ao Ollama em loopback
 
-**Status:** Proposta
+**Status:** Aceita (29/10/2026)
+
+**Validação.** Chromium 156 (Playwright) com `dist/` carregado e Ollama 0.40.12 real na porta 11434, endpoint `http://localhost:11434`: sem `OLLAMA_ORIGINS` → mensagem de HTTP 403, seção de liberação revelada e foco no título; com o ID liberado → conectado e 4 modelos listados; modelo inexistente → aviso de `ollama pull`; Ollama desligado → mensagem de inacessível. Nenhum erro de console sobre `no-cors`, `Access-Control-Allow-Origin` ou modo de redirecionamento. O ID carregado é o fixo. Cenários também cobertos por E2E com mock (`tests/e2e`). Padrões de permissão usam porta explícita: `http://127.0.0.1:80/*` concede só a porta 80, enquanto `http://127.0.0.1/*` concederia todas (verificado com `chrome.permissions.contains`).
 
 **Contexto.** A sondagem `no-cors` da ADR-007 não funciona: no Chrome, um
 `fetch` com `mode: 'no-cors'` e `redirect: 'error'` é combinação proibida e
