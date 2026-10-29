@@ -26,7 +26,42 @@
 | `fff968b` | `fix(core): distingue origem recusada de ollama inacessível` |
 | `467e353` | `docs(decisions): registra riscos residuais e diagnóstico na adr-007` |
 | `3f28e4e` | `fix(options): libera teste de conexão ao editar o endereço` |
-| (este commit) | `docs(progress): registra descoberta do ollama da fase 2` |
+| `6b868a7` | `docs(progress): registra descoberta do ollama da fase 2` |
+
+### Correção da conexão no Chrome real (relatada pelo responsável)
+
+| Commit | Mensagem |
+|---|---|
+| `6b868a7` | `docs(progress): registra descoberta do ollama da fase 2` |
+| `ceae315` | `docs(decisions): propõe adr-009 para service worker e loopback` |
+| `8c945c1` | `fix(core): remove sondagem no-cors do cliente do ollama` |
+| `170aff2` | `feat(core): verifica autorização e modelo via api/show` |
+| `ed14484` | `feat(shared): define contrato da mensagem de teste de conexão` |
+| `bde47a3` | `feat(background): adiciona service worker e roteador de mensagens` |
+| `2ec8c8b` | `feat(manifest): registra service worker e acesso ao ollama local` |
+| `2fac304` | `fix(options): consulta o ollama pelo service worker` |
+| `8001d4a` | `feat(options): revela liberação da origem só em recusa` |
+| `3bd8cbe` | `feat(options): pede permissão para porta personalizada` |
+| `a133ec3` | `fix(shared): gera padrão de permissão sempre com porta explícita` |
+| `cedd3cb` | `test(e2e): adiciona playwright com extensão carregada no chromium` |
+| `5cc2ddc` | `test(e2e): cobre cenários do teste de conexão nas opções` |
+| `914482d` | `ci: executa testes e2e no chromium` |
+| `48657e6` | `docs: aceita adr-009 e atualiza arquitetura e readme` |
+| (este commit) | `docs(progress): registra correção da conexão com o ollama` |
+
+**Sintomas no Chrome:** `No 'Access-Control-Allow-Origin' header`; `Request mode is "no-cors" but the redirect mode is not "follow"`; falha em `/api/tags`; foco não ia para "Liberar o Lerium no Ollama".
+
+**Causas raiz (com evidência):**
+1. A sondagem `mode: 'no-cors'` usava `redirect: 'error'`, combinação proibida pelo Chrome → `TypeError` imediato → todo erro virava `network` → o código de foco (só em `forbidden`) nunca rodava.
+2. Sem `host_permissions`, o 403 do Ollama (sem cabeçalhos CORS) chega ao `fetch` como `TypeError: Failed to fetch`, indistinguível de porta fechada (medido no Chromium 156).
+3. No teste do responsável, o Ollama em execução não tinha lido `OLLAMA_ORIGINS` (variável correta, mas processo não reiniciado). No momento da investigação, o Ollama estava fechado.
+4. Descoberto no experimento: com `host_permissions`, o Chrome **não envia `Origin` em GET** e envia em POST. Um teste só com `GET /api/tags` diria "conectado" sem a liberação, e a tradução (POST) falharia depois.
+
+**Correção (ADR-009, aceita):** service worker como cliente HTTP único; `host_permissions` só `localhost:11434`/`127.0.0.1:11434`; portas personalizadas via permissão opcional com **porta explícita** (padrão sem porta cobriria todas — verificado); teste de conexão = `GET /api/tags` + `POST /api/show` (envia `Origin`, verifica autorização e modelo); sondagem `no-cors` removida; seção de liberação oculta por padrão, revelada só em 403, com rolagem suave (respeita *reduced motion*) e foco no título apenas quando iniciado pelo usuário.
+
+**Validação no navegador real:** Chromium 156 com `dist/` e Ollama 0.40.12 real na porta 11434 (instâncias temporárias com `OLLAMA_ORIGINS` explícito no processo; a variável da conta não foi alterada), endpoint `http://localhost:11434`: (1) sem liberação → mensagem de HTTP 403, seção visível, foco no título; (2) liberado → "Conectado. 4 modelo(s)", `translategemma:4b` listado; (3) modelo inexistente → aviso de `ollama pull`; (4) Ollama desligado → mensagem de inacessível, seção oculta. Nenhuma mensagem de console sobre `no-cors`, ACAO ou redirect. E2E (mock): 8/8. Unit: 398/398. Revisões: reviewer (aprovado com ressalvas) e security (sem bloqueantes).
+
+**Pendências registradas:** E2E do pedido de permissão para porta personalizada (hoje só unitário; diálogo do Chrome exige teste manual); `retries: 1` no CI pode mascarar instabilidade; negar a permissão impede salvar porta personalizada (decisão de UX); sem fluxo para revogar portas concedidas; o ID mudará na publicação (rever `OLLAMA_ORIGINS`); revisão da CWS avaliará as permissões de loopback; validação no **Chrome estável** do responsável ainda pendente.
 
 **ID fixo da extensão:** `mjkoppimccgajnabfeheglepjapkchlk` (`npm run extension-id`; conferido de forma independente em Python). Chave privada descartada; nenhuma chave privada no repositório.
 
@@ -37,7 +72,7 @@
 - Sem `host_permissions`, o 403 do Ollama chega ao `fetch` como erro de rede (CORS). O cliente faz uma sondagem `no-cors`: servidor alcançável → `forbidden`; inalcançável → `network`.
 - Página de opções testa o endereço salvo ao abrir (só loopback, sem dados da página) e o digitado ao clicar; o campo de texto do modelo segue como valor salvo, com `<select>` auxiliar.
 
-**Pendente (gate da Fase 2):** responsável define `OLLAMA_ORIGINS=chrome-extension://mjkoppimccgajnabfeheglepjapkchlk`, reinicia o Ollama e confirma no Chrome: (1) antes de liberar, "Testar conexão" mostra a mensagem de origem recusada; (2) depois, `translategemma:4b` é listado; (3) com o Ollama fechado, mensagem de Ollama inacessível. Também: copiar origem e navegação por teclado. Interface de opções sem teste automatizado de DOM (previsto para a Fase 4).
+**Pendente (gate da Fase 2):** `OLLAMA_ORIGINS` já definido pelo responsável (verificado: contém o ID, sem curinga). Falta: fechar o Ollama pela bandeja (Quit), abrir de novo e confirmar no Chrome estável os cenários abaixo. Roteiro original: responsável define `OLLAMA_ORIGINS=chrome-extension://mjkoppimccgajnabfeheglepjapkchlk`, reinicia o Ollama e confirma no Chrome: (1) antes de liberar, "Testar conexão" mostra a mensagem de origem recusada; (2) depois, `translategemma:4b` é listado; (3) com o Ollama fechado, mensagem de Ollama inacessível. Também: copiar origem e navegação por teclado. Interface de opções sem teste automatizado de DOM (previsto para a Fase 4).
 
 ## Fase 2 — `feat/settings-storage`
 
