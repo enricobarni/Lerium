@@ -15,6 +15,13 @@ export default defineConfig({
       input: {
         popup: fromRoot('./src/popup/index.html'),
         options: fromRoot('./src/options/index.html'),
+        background: fromRoot('./src/background/index.ts'),
+      },
+      output: {
+        // O manifesto referencia o service worker por nome fixo, na raiz de
+        // dist; os demais bundles mantêm hash para evitar cache antigo.
+        entryFileNames: (chunk) =>
+          chunk.name === 'background' ? 'background.js' : 'assets/[name]-[hash].js',
       },
     },
   },

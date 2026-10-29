@@ -20,11 +20,14 @@ const ICON_SIZES = ['16', '32', '48', '128'];
 // Toda chave nova no manifesto exige decisão explícita (ver ADR-002 em docs/DECISIONS.md).
 const ALLOWED_KEYS = [
   'action',
+  'background',
   'description',
+  'host_permissions',
   'icons',
   'key',
   'manifest_version',
   'name',
+  'optional_host_permissions',
   'options_ui',
   'permissions',
   'version',
@@ -45,13 +48,29 @@ describe('manifest.json', () => {
     expect(Object.keys(manifest).sort()).toEqual(ALLOWED_KEYS);
   });
 
-  it('solicita apenas a permissão storage e nenhum acesso a sites', () => {
+  it('solicita apenas a permissão storage, sem content scripts nem <all_urls>', () => {
     // storage: preferências em chrome.storage.local (ADR-008).
     expect(manifest.permissions).toEqual(['storage']);
-    expect(manifest).not.toHaveProperty('host_permissions');
-    expect(manifest).not.toHaveProperty('optional_host_permissions');
     expect(manifest).not.toHaveProperty('content_scripts');
     expect(rawManifest).not.toContain('<all_urls>');
+  });
+
+  it('acessa só o Ollama em loopback na porta padrão (ADR-009)', () => {
+    expect(manifest.host_permissions).toEqual([
+      'http://localhost:11434/*',
+      'http://127.0.0.1:11434/*',
+    ]);
+  });
+
+  it('pede outras portas de loopback só como permissão opcional (ADR-009)', () => {
+    expect(manifest.optional_host_permissions).toEqual([
+      'http://localhost/*',
+      'http://127.0.0.1/*',
+    ]);
+  });
+
+  it('registra o service worker como módulo em background.js', () => {
+    expect(manifest.background).toEqual({ service_worker: 'background.js', type: 'module' });
   });
 
   it('tem versão válida para o Chrome e igual à do package.json', () => {
