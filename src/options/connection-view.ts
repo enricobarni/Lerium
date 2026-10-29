@@ -1,4 +1,5 @@
 import type { TestConnectionResponse } from '../shared/runtime-messages';
+import { originMatchPattern } from '../shared/host-permission';
 import { connectedMessage, connectionErrorMessage, missingModelMessage } from './messages';
 
 /**
@@ -69,5 +70,5 @@ export const DEFAULT_OLLAMA_ORIGINS: ReadonlySet<string> = new Set([
  * que o service worker consulta em `chrome.permissions.contains`.
  */
 export function hostPermissionPattern(origin: string): string | undefined {
-  return DEFAULT_OLLAMA_ORIGINS.has(origin) ? undefined : `${origin}/*`;
+  return DEFAULT_OLLAMA_ORIGINS.has(origin) ? undefined : originMatchPattern(origin);
 }

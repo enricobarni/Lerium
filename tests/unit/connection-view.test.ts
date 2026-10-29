@@ -136,14 +136,16 @@ describe('hostPermissionPattern', () => {
     },
   );
 
-  it.each(['http://localhost:8080', 'http://127.0.0.1:11435', 'http://localhost'])(
-    'porta personalizada %s pede só a origem exata',
-    (origin) => {
-      const pattern = hostPermissionPattern(origin);
-      expect(pattern).toBe(`${origin}/*`);
-      expect(coveredByOptional(pattern as string)).toBe(true);
-    },
-  );
+  it.each([
+    ['http://localhost:8080', 'http://localhost:8080/*'],
+    ['http://127.0.0.1:11435', 'http://127.0.0.1:11435/*'],
+    // Porta padrão implícita: o padrão precisa da porta 80 explícita, senão cobriria todas.
+    ['http://localhost', 'http://localhost:80/*'],
+  ])('porta personalizada %s pede só a origem exata (%s)', (origin, expected) => {
+    const pattern = hostPermissionPattern(origin);
+    expect(pattern).toBe(expected);
+    expect(coveredByOptional(pattern as string)).toBe(true);
+  });
 
   it('negação cita a origem e não sugere curinga', () => {
     const message = permissionDeniedMessage('http://localhost:8080');

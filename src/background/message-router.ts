@@ -4,6 +4,7 @@ import {
   parseTestConnectionRequest,
   type TestConnectionResponse,
 } from '../shared/runtime-messages';
+import { originMatchPattern } from '../shared/host-permission';
 import { normalizeEndpoint, validateModel } from '../shared/validation';
 
 /**
@@ -69,7 +70,7 @@ export function createMessageHandler(deps: MessageHandlerDeps): MessageHandler {
 
     let granted: boolean;
     try {
-      granted = await deps.permissionsContains(`${endpoint.value}/*`);
+      granted = await deps.permissionsContains(originMatchPattern(endpoint.value));
     } catch {
       granted = false;
     }

@@ -99,6 +99,13 @@ describe('createMessageHandler: permissão de host', () => {
     expect(permissionsContains).toHaveBeenCalledExactlyOnceWith('http://127.0.0.1:8080/*');
   });
 
+  it('usa porta explícita quando a porta padrão está implícita', async () => {
+    const { permissionsContains, handle } = setup();
+    await handle({ ...MESSAGE, endpoint: 'http://localhost' }, SENDER);
+    // Sem a porta, o padrão cobriria todas as portas do host.
+    expect(permissionsContains).toHaveBeenCalledWith('http://localhost:80/*');
+  });
+
   it('sem permissão devolve permission_required sem rede', async () => {
     const { fetchFn, handle } = setup({ granted: false });
 
