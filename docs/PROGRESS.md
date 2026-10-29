@@ -5,12 +5,37 @@
 
 ## Estado atual
 
-- **Fase:** 3 — Motor de tradução e streaming (planejamento)
-- **Tarefa:** `chore/release-0.1.0` em revisão
+- **Fase:** 3 — Motor de tradução e streaming (em andamento)
+- **Tarefa:** `feat/ollama-chat` (contrato do provider e chat em streaming no cliente, sem DOM)
 - **Versão:** `0.1.0` (esqueleto + conexão com o Ollama, PLAN.md §5.4; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.1.0` pendente de autorização do responsável.
 - **Fase 2:** concluída — PRs #9 e #10 mesclados; aceite manual do responsável no Chrome estável (conexão, modelos listados, Ollama fechado)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
+
+## Fase 3 — `feat/ollama-chat`
+
+| Commit | Mensagem |
+|---|---|
+| `50aa5ab` | `feat(core): define contrato do translation provider` |
+| `3001d3f` | `refactor(core): generaliza prazo do cliente ollama` |
+| `5aa2414` | `feat(core): adiciona chat em streaming ao cliente` |
+| (este commit) | `docs(progress): registra chat em streaming do cliente` |
+
+**O que foi feito:**
+- `src/core/translation-provider.ts`: só tipos (`TranslationProvider`, `TranslationInput`, `TranslateOptions`, `TranslationResult`, `TranslationErrorKind`). O provider nasce com snapshot de endpoint/modelo, nunca lança e, em `ok: false`, o consumidor descarta o que recebeu por `onToken` (sem parcial em erro, RF06).
+- `withTimeout` substituído por `createDeadlineScope` interno: fases nomeadas, primeiro motivo vence (`timeout`/`cancelled`/`consumer_error`), sinal externo com listener removido no `dispose`. `listModels`/`showModel` usam uma fase `total` com a mesma semântica; `tests/unit/ollama-client.test.ts` passou sem edição.
+- `chatStream(endpoint, request, options)`: `POST /api/chat` com `BASE_INIT`, tokens via `onToken`, parser NDJSON incremental, prazos `first_token` 120 s / `idle` 30 s / `total` 300 s (parciais mesclados com o padrão). Erros só por código: `model_missing` (404), `forbidden`, `http_error`, `network`, `timeout` (+ fase), `cancelled`, `ollama_error` (mensagem descartada), `invalid_response`, `truncated` (`done_reason: length`), `empty_response`, `incomplete_stream`, `consumer_error`. Leitor sempre cancelado e timers sempre limpos ao fim.
+
+**Validações executadas:** `npm run lint`, `typecheck`, `test` e `build` com código 0. Testes: 447 antes da branch → 504 (`tests/unit/ollama-chat-stream.test.ts` novo, com fake timers e `ReadableStream` controlado, e `vi.getTimerCount() === 0` verificado após cada teste; 4 testes de timers em `showModel`). Mutações manuais (remover rearme de `idle`, `reader.cancel`, desarme de `first_token`, encerramento em `done`, `dispose`, "primeiro motivo vence") são todas detectadas pelos testes.
+
+**Decisões em pontos ambíguos:**
+- Corpo enviado com `model` já validado (`validateModel`, com trim); idêntico ao `ChatRequest` do `buildChatRequest`.
+- Falha de `reader.read()` no meio do corpo (conexão caída) sem motivo do escopo vira `network`.
+- `fetch` também entra em `Promise.race` com o abort do escopo, para não depender de um `fetch` que respeite o sinal; exceção síncrona do `fetch` vira `network`.
+- Em resposta HTTP de erro o corpo não é lido, só cancelado (libera a conexão).
+- Se `onToken` abortar o sinal externo, o resultado é `cancelled`, mesmo que a linha seja `done`.
+
+**Pendências:** `TranslationProvider` concreto sobre `chatStream` (mapeamento de erros e `retryable`) e retry conservador; teste com o modelo real; registrar em `docs/PROGRESS.md` as branches `fix/ndjson-parser` e `feat/literary-prompt` (PRs #13 e #14), ainda ausentes.
 
 ## Fase 2 — `chore/release-0.1.0`
 
@@ -236,4 +261,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 3 — motor de tradução: planejamento pelo architect em andamento; primeira branch prevista `feat/ollama-chat` (`TranslationProvider` e cliente `/api/chat` com streaming, sem DOM).
+Fase 3 — implementar o `TranslationProvider` do Ollama sobre `chatStream` (mapeamento de erros, `retryable`, `durationMs`), sem DOM.
