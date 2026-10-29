@@ -611,3 +611,154 @@ describe('chatStream: cancelamento e consumidor', () => {
     expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
   });
 });
+
+/** `fetch` surdo ao sinal: só resolve ou rejeita quando o teste mandar. */
+function deafFetch() {
+  let resolve: (response: Response) => void = () => {};
+  let reject: (error: unknown) => void = () => {};
+  const fetchFn = vi.fn<typeof fetch>(
+    () =>
+      new Promise<Response>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      }),
+  );
+  return {
+    fetchFn,
+    resolve: (response: Response) => resolve(response),
+    reject: (error: unknown) => reject(error),
+  };
+}
+
+const doneWithText = (content: string): string =>
+  `${JSON.stringify({ message: { role: 'assistant', content }, done: true, done_reason: 'stop' })}\n`;
+
+describe('chatStream: corridas com o cancelamento', () => {
+  it('linha done com texto e abort no mesmo tick vira cancelled', async () => {
+    const body = controlledBody();
+    const onToken = vi.fn();
+    const controller = new AbortController();
+    const pending = run(fetchReturning(okResponse(body.stream)), {
+      signal: controller.signal,
+      onToken,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    body.push(doneWithText('fim'));
+    controller.abort();
+
+    await expect(pending).resolves.toEqual({ ok: false, error: 'cancelled' });
+    expect(onToken).not.toHaveBeenCalled();
+    expect(body.cancel).toHaveBeenCalled();
+  });
+
+  it('token e abort no mesmo tick: onToken não é chamado após o abort', async () => {
+    const body = controlledBody();
+    const onToken = vi.fn();
+    const controller = new AbortController();
+    const pending = run(fetchReturning(okResponse(body.stream)), {
+      signal: controller.signal,
+      onToken,
+    });
+    body.push(token('a'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onToken).toHaveBeenCalledTimes(1);
+
+    body.push(token('b'));
+    controller.abort();
+
+    await expect(pending).resolves.toEqual({ ok: false, error: 'cancelled' });
+    expect(onToken).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([404, 500])('resposta %i no mesmo tick do abort vira cancelled', async (status) => {
+    const deaf = deafFetch();
+    const errorBody = controlledBody();
+    const controller = new AbortController();
+    const pending = run(deaf.fetchFn, { signal: controller.signal });
+    await vi.advanceTimersByTimeAsync(0);
+
+    deaf.resolve(new Response(errorBody.stream, { status }));
+    controller.abort();
+
+    await expect(pending).resolves.toEqual({ ok: false, error: 'cancelled' });
+    expect(errorBody.cancel).toHaveBeenCalled();
+  });
+
+  it('fetch surdo ao sinal: first_token vence em 120 s', async () => {
+    const deaf = deafFetch();
+    const pending = run(deaf.fetchFn);
+    const state = track(pending);
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_CHAT_TIMEOUTS.firstTokenMs - 1);
+    expect(state.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pending).resolves.toEqual({ ok: false, error: 'timeout', timeout: 'first_token' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('fetch surdo ao sinal: abort externo vira cancelled', async () => {
+    const deaf = deafFetch();
+    const controller = new AbortController();
+    const pending = run(deaf.fetchFn, { signal: controller.signal });
+
+    await vi.advanceTimersByTimeAsync(10);
+    controller.abort();
+
+    await expect(pending).resolves.toEqual({ ok: false, error: 'cancelled' });
+  });
+
+  it('Response que chega depois do abort tem o corpo cancelado', async () => {
+    const deaf = deafFetch();
+    const body = controlledBody();
+    const controller = new AbortController();
+    const pending = run(deaf.fetchFn, { signal: controller.signal });
+
+    await vi.advanceTimersByTimeAsync(10);
+    controller.abort();
+    await expect(pending).resolves.toEqual({ ok: false, error: 'cancelled' });
+
+    deaf.resolve(okResponse(body.stream));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(body.cancel).toHaveBeenCalled();
+  });
+
+  it('fetch que rejeita depois do abort não gera rejeição sem tratamento', async () => {
+    const deaf = deafFetch();
+    const controller = new AbortController();
+    const pending = run(deaf.fetchFn, { signal: controller.signal });
+
+    await vi.advanceTimersByTimeAsync(10);
+    controller.abort();
+    await expect(pending).resolves.toEqual({ ok: false, error: 'cancelled' });
+
+    deaf.reject(new TypeError('Failed to fetch'));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+});
+
+describe('chatStream: pedido inválido', () => {
+  it.each([undefined, null, 'texto', 42, ['a']])(
+    'pedido %j vira invalid_request sem chamar fetch',
+    async (request) => {
+      const fetchFn = hangingFetch();
+
+      await expect(
+        chatStream(ENDPOINT, request as unknown as ChatRequest, { fetchFn }),
+      ).resolves.toEqual({ ok: false, error: 'invalid_request' });
+      expect(fetchFn).not.toHaveBeenCalled();
+    },
+  );
+
+  it('pedido não serializável vira invalid_request sem chamar fetch', async () => {
+    const fetchFn = hangingFetch();
+    const request: Record<string, unknown> = { ...REQUEST };
+    request.self = request;
+
+    await expect(
+      chatStream(ENDPOINT, request as unknown as ChatRequest, { fetchFn }),
+    ).resolves.toEqual({ ok: false, error: 'invalid_request' });
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+});

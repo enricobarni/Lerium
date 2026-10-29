@@ -232,7 +232,8 @@ export function hasModel(models: readonly string[], wanted: string): boolean {
  * - `truncated`: `done_reason` `length` (limite `num_predict` atingido);
  * - `incomplete_stream`: o corpo terminou sem linha `done: true`;
  * - `empty_response`: `done: true` sem nenhum texto gerado;
- * - `consumer_error`: `onToken` lançou.
+ * - `consumer_error`: `onToken` lançou;
+ * - `invalid_request`: o pedido não é um objeto serializável em JSON.
  */
 export type ChatStreamErrorKind =
   | OllamaErrorKind
@@ -242,7 +243,8 @@ export type ChatStreamErrorKind =
   | 'truncated'
   | 'incomplete_stream'
   | 'empty_response'
-  | 'consumer_error';
+  | 'consumer_error'
+  | 'invalid_request';
 
 /**
  * Fases de prazo do chat: `first_token` vai do início até o primeiro token
@@ -319,6 +321,11 @@ function reasonFailure(reason: DeadlineReason<ChatTimeoutPhase>): ChatFailure {
   return chatFail(reason.kind);
 }
 
+/** Cancela um corpo que não será lido; só libera a conexão. */
+const discardBody = (response: Response): void => {
+  response.body?.cancel().catch(() => {});
+};
+
 /**
  * Conversa com `POST /api/chat` em streaming (RF06). Nunca lança nem
  * rejeita: toda falha vira `{ ok: false }` com um código, sem texto parcial,
@@ -327,7 +334,9 @@ function reasonFailure(reason: DeadlineReason<ChatTimeoutPhase>): ChatFailure {
  * Cada token (linha com `message.content` não vazio) é entregue a `onToken`
  * e acumulado. A primeira linha `done: true` encerra a leitura; o restante
  * do corpo é ignorado. Prazos por fase em `ChatStreamTimeouts`; o primeiro
- * motivo de encerramento (prazo, cancelamento, erro do consumidor) vence.
+ * motivo de encerramento (prazo, cancelamento, erro do consumidor) vence e
+ * tem prioridade sobre qualquer dado já lido: depois de registrado, nenhuma
+ * linha é processada e `onToken` não é mais chamado.
  */
 export async function chatStream(
   endpoint: string,
@@ -336,6 +345,8 @@ export async function chatStream(
 ): Promise<ChatStreamResult> {
   const normalized = normalizeEndpoint(endpoint);
   if (!normalized.ok) return chatFail('invalid_endpoint');
+  // Defesa em tempo de execução: o tipo não protege chamadas vindas de JS.
+  if (!isRecord(request)) return chatFail('invalid_request');
   const validModel = validateModel(request.model);
   if (!validModel.ok) return chatFail('invalid_model');
   if (options.signal?.aborted) return chatFail('cancelled');
@@ -346,10 +357,15 @@ export async function chatStream(
     totalMs: options.timeouts?.totalMs ?? DEFAULT_CHAT_TIMEOUTS.totalMs,
   };
   const url = new URL('/api/chat', normalized.value);
-  const body = JSON.stringify({ ...request, model: validModel.value });
+  let body: string;
+  try {
+    body = JSON.stringify({ ...request, model: validModel.value });
+  } catch {
+    // Valor não serializável (ciclo, BigInt) no pedido.
+    return chatFail('invalid_request');
+  }
 
   const scope = createDeadlineScope<ChatTimeoutPhase>(options.signal);
-  const abortedMarker = scope.aborted.then((): typeof ABORTED => ABORTED);
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let text = '';
   let receivedToken = false;
@@ -362,6 +378,8 @@ export async function chatStream(
 
   /** Processa uma linha; devolve o resultado final quando ela encerra o chat. */
   const handleLine = (line: ParsedLine): ChatStreamResult | undefined => {
+    const early = scope.reason();
+    if (early !== undefined) return reasonFailure(early);
     if (!line.ok || !isRecord(line.value)) return chatFail('invalid_response');
     const value = line.value;
     if ('error' in value) return chatFail('ollama_error');
@@ -374,14 +392,16 @@ export async function chatStream(
         scope.disarm('first_token');
       }
       scope.arm('idle', timeouts.idleMs);
+      const before = scope.reason();
+      if (before !== undefined) return reasonFailure(before);
       try {
         options.onToken?.(delta);
       } catch {
         scope.fail({ kind: 'consumer_error' });
       }
       // `onToken` pode ter lançado ou abortado o sinal externo.
-      const reason = scope.reason();
-      if (reason !== undefined) return reasonFailure(reason);
+      const after = scope.reason();
+      if (after !== undefined) return reasonFailure(after);
       text += delta;
     }
 
@@ -408,9 +428,9 @@ export async function chatStream(
     scope.arm('total', timeouts.totalMs);
     scope.arm('first_token', timeouts.firstTokenMs);
 
-    let response: Response | typeof ABORTED;
+    let fetching: Promise<Response>;
     try {
-      response = await Promise.race([
+      fetching = Promise.resolve(
         options.fetchFn(url, {
           ...BASE_INIT,
           method: 'POST',
@@ -418,31 +438,51 @@ export async function chatStream(
           body,
           signal: scope.signal,
         }),
-        abortedMarker,
-      ]);
+      );
     } catch {
       return failWith('network');
     }
-    if (response === ABORTED) return failWith('network');
+
+    // O race cobre um `fetch` que ignore o sinal; a `Response` que chegar
+    // depois do abort tem o corpo cancelado.
+    let response: Response | typeof ABORTED;
+    try {
+      response = await Promise.race([fetching, scope.aborted.then((): typeof ABORTED => ABORTED)]);
+    } catch {
+      return failWith('network');
+    }
+    const afterFetch = scope.reason();
+    if (afterFetch !== undefined || response === ABORTED) {
+      if (response === ABORTED) fetching.then(discardBody, () => {});
+      else discardBody(response);
+      return failWith('network');
+    }
     if (!response.ok) {
-      // O corpo de erro nunca é lido; cancelá-lo só libera a conexão.
-      response.body?.cancel().catch(() => {});
+      // O corpo de erro nunca é lido.
+      discardBody(response);
       if (response.status === 404) return { ok: false, error: 'model_missing', status: 404 };
       return httpError(response.status);
     }
     if (response.body === null) return chatFail('invalid_response');
 
-    reader = response.body.getReader();
+    const activeReader = response.body.getReader();
+    reader = activeReader;
+    // Um abort do escopo encerra a leitura pendente, sem `Promise.race`.
+    scope.signal.addEventListener('abort', () => void activeReader.cancel().catch(() => {}), {
+      once: true,
+    });
     const parser = createNdjsonParser();
     for (;;) {
-      let chunk: Awaited<ReturnType<typeof reader.read>> | typeof ABORTED;
+      let chunk: Awaited<ReturnType<typeof activeReader.read>>;
       try {
-        chunk = await Promise.race([reader.read(), abortedMarker]);
+        chunk = await activeReader.read();
       } catch {
-        // Conexão interrompida no meio do corpo (ou abortada pelo escopo).
+        // Conexão interrompida no meio do corpo.
         return failWith('network');
       }
-      if (chunk === ABORTED) return failWith('network');
+      // O motivo do escopo vence qualquer chunk já lido no mesmo tick.
+      const afterRead = scope.reason();
+      if (afterRead !== undefined) return reasonFailure(afterRead);
       if (chunk.done) return handleLines(parser.end()) ?? failWith('incomplete_stream');
       const result = handleLines(parser.push(chunk.value));
       if (result !== undefined) return result;
