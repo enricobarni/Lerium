@@ -55,6 +55,10 @@ persistente a sites.
 **Quando decidir.** Na Fase 1 (manifesto mínimo), com revisão na Fase 7
 (domínios excluídos e permissões opcionais).
 
+Nota: as permissões de loopback da ADR-009 (`localhost`/`127.0.0.1`) são
+de acesso à API local do Ollama, não de injeção em sites; não decidem esta
+ADR.
+
 ## ADR-003 — Estratégia de DOM para markup inline
 
 **Status:** Proposta
@@ -128,6 +132,8 @@ extensão de referência, que continua não confirmada (SCOPE.md).
 ## ADR-007 — Origem da extensão no Ollama
 
 **Status:** Aceita (28/10/2026)
+
+Parcialmente substituída pela ADR-009 (host_permissions e diagnóstico; a sondagem no-cors foi removida).
 
 **Contexto.** RF01 e RF06 exigem que as páginas da extensão consultem o
 Ollama local (`GET /api/tags`, depois `POST /api/chat`). O Ollama valida o
@@ -239,3 +245,75 @@ usuário fizer downgrade depois de uma versão futura ter gravado um schema
 maior, salvar aqui rebaixaria o número para 1 mantendo as chaves
 desconhecidas do schema novo. A migração entre versões (incluindo esse caso)
 será tratada quando existir o schema 2.
+
+## ADR-009 — Service worker como cliente HTTP e acesso ao Ollama em loopback
+
+**Status:** Proposta
+
+**Contexto.** A sondagem `no-cors` da ADR-007 não funciona: no Chrome, um
+`fetch` com `mode: 'no-cors'` e `redirect: 'error'` é combinação proibida e
+rejeita na hora com `TypeError`. Todo erro virava `network`, a mensagem de
+origem recusada nunca aparecia e o foco nunca ia para a seção de instruções.
+Evidência medida no Chromium 156 (Playwright), com uma extensão de teste:
+
+- **Sem `host_permissions`**, um servidor que responde 403 sem CORS gera
+  `TypeError: Failed to fetch`, indistinguível de porta fechada, tanto no
+  service worker quanto na página da extensão.
+- **Com `host_permissions`**, o status 403 fica legível. O padrão
+  `http://127.0.0.1/*` (sem porta) cobre todas as portas.
+- Com `host_permissions`, o Chrome **não envia** `Origin` em `GET` (o servidor
+  viu o cabeçalho ausente) e **envia** `Origin: chrome-extension://<ID>` em
+  `POST`, no service worker e na página.
+- Sem `host_permissions`, o Chrome envia `Origin` em `GET` e faz preflight
+  `OPTIONS` antes de um `POST` JSON.
+
+No Ollama 0.40.12, em instância isolada:
+
+- sem `OLLAMA_ORIGINS`, `POST /api/show` com o `Origin` do Lerium → 403;
+- com o ID liberado → 200;
+- modelo inexistente → 404 `{"error":"model '...' not found"}`;
+- `qwen` sem tag → 200;
+- `GET /api/tags` sem `Origin` → 200, mesmo sem liberação.
+
+Conclusão: com `host_permissions`, `GET /api/tags` não prova que a origem
+está liberada. Só um `POST`, que leva o `Origin`, revela a recusa.
+
+**Decisão.**
+
+- O **service worker é o único cliente HTTP** do Ollama. Opções, popup e
+  content scripts enviam mensagens tipadas e validadas; o worker valida
+  remetente, endpoint e modelo antes de qualquer `fetch`.
+- `host_permissions`: exatamente `http://localhost:11434/*` e
+  `http://127.0.0.1:11434/*` (porta padrão).
+- `optional_host_permissions`: `http://localhost/*` e `http://127.0.0.1/*`.
+  A página de opções as solicita no gesto do usuário, apenas para a origem
+  exata de uma porta personalizada (ex.: `http://localhost:8080/*`).
+- Teste de conexão = `GET /api/tags` (alcance e lista de modelos) +
+  `POST /api/show` (somente leitura; envia `Origin`, prova a liberação e
+  verifica se o modelo configurado existe). O corpo de `/api/show` não é
+  lido nem repassado (modelfile, licença).
+- Sem `mode: 'no-cors'` em nenhum lugar.
+- O `Origin` continua sendo enviado no `POST`: as permissões de host **não**
+  contornam a proteção do Ollama. `OLLAMA_ORIGINS` com o ID do Lerium
+  continua obrigatório para `/api/show` e `/api/chat` (ADR-007).
+
+**Alternativas rejeitadas.**
+
+- Manter a sondagem `no-cors` sem `redirect: 'error'`: reabre o risco de
+  seguir redirecionamento para outro host e só distingue "alcançável", não
+  o motivo.
+- `host_permissions` amplas (`http://localhost/*` fixas, `<all_urls>`):
+  privilégio maior que o necessário para a porta padrão.
+- Diagnosticar só por `/api/tags`: com `host_permissions` ele responde 200
+  mesmo com a origem recusada, e o erro só apareceria na tradução.
+
+**Consequências.**
+
+- A instalação exibe aviso de permissão de acesso a `localhost` e
+  `127.0.0.1`; a revisão da Chrome Web Store avaliará essas permissões.
+- O manifesto ganha `background` (service worker) e as chaves de host;
+  o teste de manifesto fixa as listas exatas.
+- A ADR-007 fica parcialmente substituída: `host_permissions` e o
+  diagnóstico passam a seguir esta ADR; a sondagem `no-cors` foi removida.
+- Porta personalizada sem permissão concedida resulta em
+  `permission_required`, tratado pela página de opções.
