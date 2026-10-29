@@ -310,6 +310,21 @@ describe('chatStream: fim do stream', () => {
     });
   });
 
+  it('chunk string vira invalid_response, sem esperar o prazo', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue('texto' as unknown as Uint8Array);
+      },
+    });
+    // Objeto mínimo no lugar de `Response`, que validaria o chunk por conta própria.
+    const response = { ok: true, status: 200, body: stream } as unknown as Response;
+
+    await expect(run(fetchReturning(response))).resolves.toEqual({
+      ok: false,
+      error: 'invalid_response',
+    });
+  });
+
   it('linha { error } vira ollama_error sem copiar a mensagem', async () => {
     const body = bodyOf(token('a'), '{"error":"segredo interno do servidor"}\n');
 

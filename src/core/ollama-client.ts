@@ -509,6 +509,9 @@ export async function chatStream(
       const afterRead = scope.reason();
       if (afterRead !== undefined) return reasonFailure(afterRead);
       if (chunk.done) return handleLines(parser.end()) ?? failWith('incomplete_stream');
+      // Sem esta guarda, um chunk que não é bytes (sem `byteLength`) seria ignorado
+      // e a leitura só terminaria no prazo.
+      if (!(chunk.value instanceof Uint8Array)) return chatFail('invalid_response');
       const result = handleLines(parser.push(chunk.value));
       if (result !== undefined) return result;
     }
