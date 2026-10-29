@@ -1,4 +1,6 @@
 import { normalizeEndpoint, validateModel } from '../shared/validation';
+import { createNdjsonParser, type ParsedLine } from './ndjson-parser';
+import type { ChatRequest } from './prompt-builder';
 
 /**
  * Cliente da API local do Ollama (RF06). Módulo puro: recebe `fetch` por
@@ -295,4 +297,235 @@ function withDefaultTag(name: string): string {
 export function hasModel(models: readonly string[], wanted: string): boolean {
   const target = withDefaultTag(wanted);
   return models.some((model) => withDefaultTag(model) === target);
+}
+
+/**
+ * Erros de `chatStream`:
+ * - `model_missing`: `/api/chat` respondeu 404 (modelo não instalado);
+ * - `cancelled`: o sinal externo abortou;
+ * - `ollama_error`: o stream trouxe uma linha `{ error }` (mensagem descartada);
+ * - `truncated`: `done_reason` `length` (limite `num_predict` atingido);
+ * - `incomplete_stream`: o corpo terminou sem linha `done: true`;
+ * - `empty_response`: `done: true` sem nenhum texto gerado;
+ * - `consumer_error`: `onToken` lançou.
+ */
+export type ChatStreamErrorKind =
+  | OllamaErrorKind
+  | 'model_missing'
+  | 'cancelled'
+  | 'ollama_error'
+  | 'truncated'
+  | 'incomplete_stream'
+  | 'empty_response'
+  | 'consumer_error';
+
+/**
+ * Fases de prazo do chat: `first_token` vai do início até o primeiro token
+ * (inclui carregar o modelo); `idle` é o intervalo máximo entre tokens;
+ * `total` cobre a requisição inteira e nunca reinicia.
+ */
+export type ChatTimeoutPhase = 'first_token' | 'idle' | 'total';
+
+export interface ChatStreamTimeouts {
+  firstTokenMs: number;
+  idleMs: number;
+  totalMs: number;
+}
+
+/**
+ * Padrões conservadores para hardware modesto: o primeiro token pode esperar
+ * o carregamento do modelo do disco; depois disso, 30 s sem token indica
+ * travamento; 5 min limitam um segmento inteiro.
+ */
+export const DEFAULT_CHAT_TIMEOUTS: Readonly<ChatStreamTimeouts> = Object.freeze({
+  firstTokenMs: 120_000,
+  idleMs: 30_000,
+  totalMs: 300_000,
+});
+
+export interface ChatStreamOptions {
+  fetchFn: typeof fetch;
+  signal?: AbortSignal;
+  /** Recebe cada trecho de texto, em ordem. Se lançar, o chat é abortado. */
+  onToken?: (delta: string) => void;
+  /** Campos ausentes usam `DEFAULT_CHAT_TIMEOUTS`. */
+  timeouts?: Partial<ChatStreamTimeouts>;
+}
+
+/** Métricas da linha final do Ollama; durações em nanossegundos. */
+export interface ChatMetrics {
+  evalCount?: number;
+  promptEvalCount?: number;
+  totalDurationNs?: number;
+  loadDurationNs?: number;
+  evalDurationNs?: number;
+}
+
+export type ChatStreamResult =
+  | { ok: true; text: string; doneReason?: string; metrics: ChatMetrics }
+  | { ok: false; error: ChatStreamErrorKind; status?: number; timeout?: ChatTimeoutPhase };
+
+type ChatFailure = Extract<ChatStreamResult, { ok: false }>;
+
+const chatFail = (error: ChatStreamErrorKind): ChatFailure => ({ ok: false, error });
+
+const ABORTED: unique symbol = Symbol('aborted');
+
+const METRIC_FIELDS: ReadonlyArray<readonly [string, keyof ChatMetrics]> = [
+  ['eval_count', 'evalCount'],
+  ['prompt_eval_count', 'promptEvalCount'],
+  ['total_duration', 'totalDurationNs'],
+  ['load_duration', 'loadDurationNs'],
+  ['eval_duration', 'evalDurationNs'],
+];
+
+/** Copia só métricas numéricas finitas; outros tipos são ignorados. */
+function readMetrics(line: Record<string, unknown>): ChatMetrics {
+  const metrics: ChatMetrics = {};
+  for (const [field, key] of METRIC_FIELDS) {
+    const value = line[field];
+    if (typeof value === 'number' && Number.isFinite(value)) metrics[key] = value;
+  }
+  return metrics;
+}
+
+function reasonFailure(reason: DeadlineReason<ChatTimeoutPhase>): ChatFailure {
+  if (reason.kind === 'timeout') return { ok: false, error: 'timeout', timeout: reason.phase };
+  return chatFail(reason.kind);
+}
+
+/**
+ * Conversa com `POST /api/chat` em streaming (RF06). Nunca lança nem
+ * rejeita: toda falha vira `{ ok: false }` com um código, sem texto parcial,
+ * sem conteúdo do modelo e sem mensagem do Ollama.
+ *
+ * Cada token (linha com `message.content` não vazio) é entregue a `onToken`
+ * e acumulado. A primeira linha `done: true` encerra a leitura; o restante
+ * do corpo é ignorado. Prazos por fase em `ChatStreamTimeouts`; o primeiro
+ * motivo de encerramento (prazo, cancelamento, erro do consumidor) vence.
+ */
+export async function chatStream(
+  endpoint: string,
+  request: ChatRequest,
+  options: ChatStreamOptions,
+): Promise<ChatStreamResult> {
+  const normalized = normalizeEndpoint(endpoint);
+  if (!normalized.ok) return chatFail('invalid_endpoint');
+  const validModel = validateModel(request.model);
+  if (!validModel.ok) return chatFail('invalid_model');
+  if (options.signal?.aborted) return chatFail('cancelled');
+
+  const timeouts: ChatStreamTimeouts = {
+    firstTokenMs: options.timeouts?.firstTokenMs ?? DEFAULT_CHAT_TIMEOUTS.firstTokenMs,
+    idleMs: options.timeouts?.idleMs ?? DEFAULT_CHAT_TIMEOUTS.idleMs,
+    totalMs: options.timeouts?.totalMs ?? DEFAULT_CHAT_TIMEOUTS.totalMs,
+  };
+  const url = new URL('/api/chat', normalized.value);
+  const body = JSON.stringify({ ...request, model: validModel.value });
+
+  const scope = createDeadlineScope<ChatTimeoutPhase>(options.signal);
+  const abortedMarker = scope.aborted.then((): typeof ABORTED => ABORTED);
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let text = '';
+  let receivedToken = false;
+
+  /** Falha após exceção ou abort: o motivo do escopo, se houver, vence. */
+  const failWith = (fallback: ChatStreamErrorKind): ChatFailure => {
+    const reason = scope.reason();
+    return reason !== undefined ? reasonFailure(reason) : chatFail(fallback);
+  };
+
+  /** Processa uma linha; devolve o resultado final quando ela encerra o chat. */
+  const handleLine = (line: ParsedLine): ChatStreamResult | undefined => {
+    if (!line.ok || !isRecord(line.value)) return chatFail('invalid_response');
+    const value = line.value;
+    if ('error' in value) return chatFail('ollama_error');
+
+    const message = value.message;
+    if (isRecord(message) && typeof message.content === 'string' && message.content !== '') {
+      const delta = message.content;
+      if (!receivedToken) {
+        receivedToken = true;
+        scope.disarm('first_token');
+      }
+      scope.arm('idle', timeouts.idleMs);
+      try {
+        options.onToken?.(delta);
+      } catch {
+        scope.fail({ kind: 'consumer_error' });
+      }
+      // `onToken` pode ter lançado ou abortado o sinal externo.
+      const reason = scope.reason();
+      if (reason !== undefined) return reasonFailure(reason);
+      text += delta;
+    }
+
+    if (value.done !== true) return undefined;
+    if (value.done_reason === 'length') return chatFail('truncated');
+    if (text === '') return chatFail('empty_response');
+    return {
+      ok: true,
+      text,
+      ...(typeof value.done_reason === 'string' ? { doneReason: value.done_reason } : {}),
+      metrics: readMetrics(value),
+    };
+  };
+
+  const handleLines = (lines: readonly ParsedLine[]): ChatStreamResult | undefined => {
+    for (const line of lines) {
+      const result = handleLine(line);
+      if (result !== undefined) return result;
+    }
+    return undefined;
+  };
+
+  try {
+    scope.arm('total', timeouts.totalMs);
+    scope.arm('first_token', timeouts.firstTokenMs);
+
+    let response: Response | typeof ABORTED;
+    try {
+      response = await Promise.race([
+        options.fetchFn(url, {
+          ...BASE_INIT,
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body,
+          signal: scope.signal,
+        }),
+        abortedMarker,
+      ]);
+    } catch {
+      return failWith('network');
+    }
+    if (response === ABORTED) return failWith('network');
+    if (!response.ok) {
+      // O corpo de erro nunca é lido; cancelá-lo só libera a conexão.
+      response.body?.cancel().catch(() => {});
+      if (response.status === 404) return { ok: false, error: 'model_missing', status: 404 };
+      return httpError(response.status);
+    }
+    if (response.body === null) return chatFail('invalid_response');
+
+    reader = response.body.getReader();
+    const parser = createNdjsonParser();
+    for (;;) {
+      let chunk: Awaited<ReturnType<typeof reader.read>> | typeof ABORTED;
+      try {
+        chunk = await Promise.race([reader.read(), abortedMarker]);
+      } catch {
+        // Conexão interrompida no meio do corpo (ou abortada pelo escopo).
+        return failWith('network');
+      }
+      if (chunk === ABORTED) return failWith('network');
+      if (chunk.done) return handleLines(parser.end()) ?? failWith('incomplete_stream');
+      const result = handleLines(parser.push(chunk.value));
+      if (result !== undefined) return result;
+    }
+  } catch {
+    return failWith('invalid_response');
+  } finally {
+    scope.dispose();
+    reader?.cancel().catch(() => {});
+  }
 }
