@@ -95,20 +95,17 @@ describe('mensagens de diagnóstico da conexão', () => {
     expect(ollamaErrorMessage(error).trim()).not.toBe('');
   });
 
-  it('forbidden aponta a origem provável sem afirmar certeza', () => {
-    const message = ollamaErrorMessage('forbidden');
-    expect(message).toMatch(/respondeu, mas recusou/);
-    expect(message).toMatch(/provavelmente/);
-    expect(message).toMatch(/origem do Lerium/);
-    expect(message).toMatch(/OLLAMA_ORIGINS/);
-    expect(message).toMatch(/instruções abaixo/);
-    expect(message).not.toContain('*');
+  it('forbidden cita o HTTP 403, OLLAMA_ORIGINS e o reinício, sem curinga', () => {
+    expect(ollamaErrorMessage('forbidden')).toBe(
+      'O Ollama recusou a conexão do Lerium (HTTP 403): a origem da extensão não está liberada em OLLAMA_ORIGINS, ou o Ollama não foi reiniciado depois de configurá-la.',
+    );
+    expect(ollamaErrorMessage('forbidden')).not.toContain('*');
   });
 
   it('network cobre Ollama desligado ou porta errada', () => {
-    const message = ollamaErrorMessage('network');
-    expect(message).toMatch(/em execução|aberto|ligado/);
-    expect(message).toMatch(/porta/);
+    expect(ollamaErrorMessage('network')).toBe(
+      'Não foi possível conectar ao Ollama. Verifique se ele está aberto e se a porta está correta.',
+    );
   });
 
   it('not_found e invalid_response indicam que não parece ser o Ollama', () => {

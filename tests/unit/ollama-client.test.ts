@@ -132,7 +132,7 @@ describe('listModels: resposta inválida', () => {
 });
 
 describe('listModels: rede e timeout', () => {
-  it('TypeError de rede + sondagem que falha (Ollama desligado) vira network', async () => {
+  it('TypeError de rede vira network, com um único fetch', async () => {
     const fetchFn = vi.fn<typeof fetch>(async () => {
       throw new TypeError('Failed to fetch');
     });
@@ -141,73 +141,33 @@ describe('listModels: rede e timeout', () => {
       ok: false,
       error: 'network',
     });
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-  });
-
-  it('TypeError de rede + sondagem que responde (origem recusada) vira forbidden', async () => {
-    const fetchFn = vi.fn<typeof fetch>(async (_input, init) => {
-      if (init?.mode === 'no-cors') return new Response(null, { status: 200 });
-      throw new TypeError('Failed to fetch');
-    });
-
-    await expect(listModels(ENDPOINT, { fetchFn })).resolves.toEqual({
-      ok: false,
-      error: 'forbidden',
-    });
-  });
-
-  it('a sondagem é uma única GET no-cors, sem credenciais, com o mesmo sinal', async () => {
-    const fetchFn = vi.fn<typeof fetch>(async (_input, init) => {
-      if (init?.mode === 'no-cors') return new Response(null, { status: 200 });
-      throw new TypeError('Failed to fetch');
-    });
-
-    await listModels(ENDPOINT, { fetchFn });
-
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-    const [mainUrl, mainInit] = fetchFn.mock.calls[0] ?? [];
-    const [probeUrl, probeInit] = fetchFn.mock.calls[1] ?? [];
-    expect(mainInit?.mode).toBeUndefined();
-    expect(String(probeUrl)).toBe(String(mainUrl));
-    expect(probeInit?.method).toBe('GET');
-    expect(probeInit?.mode).toBe('no-cors');
-    expect(probeInit?.credentials).toBe('omit');
-    expect(probeInit?.cache).toBe('no-store');
-    expect(probeInit?.redirect).toBe('error');
-    expect(probeInit?.signal).toBe(mainInit?.signal);
-  });
-
-  it('não lê o corpo da resposta opaca da sondagem', async () => {
-    const json = vi.fn();
-    const text = vi.fn();
-    const opaque = { ok: false, status: 0, type: 'opaque', json, text } as unknown as Response;
-    const fetchFn = vi.fn<typeof fetch>(async (_input, init) => {
-      if (init?.mode === 'no-cors') return opaque;
-      throw new TypeError('Failed to fetch');
-    });
-
-    await expect(listModels(ENDPOINT, { fetchFn })).resolves.toEqual({
-      ok: false,
-      error: 'forbidden',
-    });
-    expect(json).not.toHaveBeenCalled();
-    expect(text).not.toHaveBeenCalled();
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it.each([
     ['2xx', () => jsonResponse({ models: [] })],
+    ['403', () => jsonResponse({ error: 'x' }, 403)],
     ['404', () => jsonResponse({ error: 'x' }, 404)],
     ['500', () => jsonResponse({ error: 'x' }, 500)],
     ['JSON inválido', () => new Response('<html></html>', { status: 200 })],
-  ])('não faz sondagem quando o fetch principal resolve (%s)', async (_label, make) => {
+    [
+      'TypeError',
+      () => {
+        throw new TypeError('Failed to fetch');
+      },
+    ],
+  ])('faz exatamente um fetch, nunca no-cors (%s)', async (_label, make) => {
     const fetchFn = vi.fn<typeof fetch>(async () => make());
 
     await listModels(ENDPOINT, { fetchFn });
 
     expect(fetchFn).toHaveBeenCalledTimes(1);
+    for (const [, init] of fetchFn.mock.calls) {
+      expect(init?.mode).not.toBe('no-cors');
+    }
   });
 
-  it('aborto não causado pelo timeout vira network, sem sondagem', async () => {
+  it('aborto não causado pelo timeout vira network', async () => {
     const fetchFn = vi.fn<typeof fetch>(async () => {
       throw new DOMException('Aborted', 'AbortError');
     });
@@ -217,28 +177,6 @@ describe('listModels: rede e timeout', () => {
       error: 'network',
     });
     expect(fetchFn).toHaveBeenCalledTimes(1);
-  });
-
-  it('timeout durante a sondagem vira timeout, no mesmo orçamento', async () => {
-    vi.useFakeTimers();
-    const fetchFn = vi.fn<typeof fetch>((_input, init) => {
-      if (init?.mode !== 'no-cors') return Promise.reject(new TypeError('Failed to fetch'));
-      return new Promise<Response>((_resolve, reject) => {
-        init.signal?.addEventListener('abort', () => {
-          reject(new DOMException('Aborted', 'AbortError'));
-        });
-      });
-    });
-
-    const pending = listModels(ENDPOINT, { fetchFn, timeoutMs: 100 });
-    await vi.advanceTimersByTimeAsync(99);
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-    expect(fetchFn.mock.calls[1]?.[1]?.signal?.aborted).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-
-    await expect(pending).resolves.toEqual({ ok: false, error: 'timeout' });
-    expect(fetchFn.mock.calls[1]?.[1]?.signal?.aborted).toBe(true);
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   const hangingFetch = () =>

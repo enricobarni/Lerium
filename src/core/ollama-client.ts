@@ -83,29 +83,6 @@ export async function listModels(
 
   const url = new URL('/api/tags', normalized.value);
 
-  /**
-   * Sem host_permissions, o 403 do Ollama para origem não liberada vem sem
-   * `Access-Control-Allow-Origin` e o `fetch` rejeita como erro de rede, igual
-   * a um Ollama desligado. Uma GET `no-cors` não depende de CORS: se resolver
-   * (resposta opaca), o servidor está alcançável e recusou a origem. O corpo
-   * opaco nunca é lido. Usa o mesmo sinal, logo o mesmo prazo restante.
-   */
-  const probe = async (): Promise<ListModelsResult> => {
-    try {
-      await options.fetchFn(url, {
-        method: 'GET',
-        mode: 'no-cors',
-        credentials: 'omit',
-        cache: 'no-store',
-        redirect: 'error',
-        signal: controller.signal,
-      });
-      return { ok: false, error: 'forbidden' };
-    } catch {
-      return { ok: false, error: timedOut ? 'timeout' : 'network' };
-    }
-  };
-
   const request = async (): Promise<ListModelsResult> => {
     let response: Response;
     try {
@@ -117,14 +94,10 @@ export async function listModels(
         redirect: 'error',
         signal: controller.signal,
       });
-    } catch (error) {
-      if (timedOut) return { ok: false, error: 'timeout' };
-      // Aborto que não veio do nosso timeout: não há o que sondar.
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        return { ok: false, error: 'network' };
-      }
-      // TypeError de rede: Ollama inacessível ou origem recusada (CORS).
-      return probe();
+    } catch {
+      // TypeError de rede (Ollama desligado, porta errada) ou aborto externo.
+      // Com host_permissions (ADR-009) o 403 chega como status, não aqui.
+      return { ok: false, error: timedOut ? 'timeout' : 'network' };
     }
     if (!response.ok) return httpError(response.status);
 

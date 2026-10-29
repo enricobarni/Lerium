@@ -68,11 +68,11 @@ export function languageErrorMessage(reason: LanguageFieldErrorReason): string {
 export const OLLAMA_ERROR_MESSAGES: Readonly<Record<OllamaErrorKind, string>> = Object.freeze({
   invalid_endpoint: 'Endereço do Ollama inválido. Corrija-o, por exemplo http://localhost:11434.',
   network:
-    'Não foi possível conectar ao Ollama. Verifique se ele está em execução e se a porta do endereço está correta (padrão 11434).',
+    'Não foi possível conectar ao Ollama. Verifique se ele está aberto e se a porta está correta.',
   timeout:
     'O Ollama demorou demais para responder. Verifique se ele está em execução e tente novamente.',
   forbidden:
-    'O Ollama respondeu, mas recusou a conexão da extensão — provavelmente a origem do Lerium não está liberada em OLLAMA_ORIGINS. Veja as instruções abaixo.',
+    'O Ollama recusou a conexão do Lerium (HTTP 403): a origem da extensão não está liberada em OLLAMA_ORIGINS, ou o Ollama não foi reiniciado depois de configurá-la.',
   not_found:
     'Algo respondeu nesse endereço, mas não parece ser o Ollama. Confira o host e a porta.',
   http_error: 'O Ollama respondeu com erro. Tente novamente; se persistir, reinicie o Ollama.',
