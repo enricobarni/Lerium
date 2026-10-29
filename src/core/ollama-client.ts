@@ -76,30 +76,104 @@ function httpError(status: number): { ok: false; error: OllamaErrorKind; status:
   return { ok: false, error: 'http_error', status };
 }
 
-const TIMED_OUT = Symbol('timeout');
+/** Motivo que encerrou um escopo de prazo. O primeiro registrado vence. */
+type DeadlineReason<P extends string> =
+  { kind: 'timeout'; phase: P } | { kind: 'cancelled' } | { kind: 'consumer_error' };
+
+interface DeadlineScope<P extends string> {
+  /** Sinal a repassar ao `fetch`; aborta no primeiro motivo registrado. */
+  readonly signal: AbortSignal;
+  /** Arma (ou rearma, do zero) o prazo de `phase`. Ignorado após o abort. */
+  arm(phase: P, ms: number): void;
+  disarm(phase: P): void;
+  /** Registra o motivo (só o primeiro vale) e aborta o controller interno. */
+  fail(reason: DeadlineReason<P>): void;
+  reason(): DeadlineReason<P> | undefined;
+  /** Resolve quando o escopo aborta; para usar em `Promise.race`. */
+  readonly aborted: Promise<void>;
+  /** Limpa todos os timers e o listener do sinal externo. Idempotente. */
+  dispose(): void;
+}
 
 /**
- * Executa `task` com prazo próprio. O prazo cobre também a leitura do corpo,
- * que pode travar após o status. `task` não deve rejeitar; recebe o sinal a
- * repassar ao `fetch` e uma função que indica se o prazo estourou.
+ * Escopo de prazos com fases independentes (ex.: total, primeiro token,
+ * ociosidade) sobre um único `AbortController`. Um sinal externo abortado,
+ * antes ou durante o escopo, vira o motivo `cancelled`.
  */
-async function withTimeout<R>(
+function createDeadlineScope<P extends string>(external?: AbortSignal): DeadlineScope<P> {
+  const controller = new AbortController();
+  const timers = new Map<P, ReturnType<typeof setTimeout>>();
+  let current: DeadlineReason<P> | undefined;
+  let resolveAborted: () => void = () => {};
+  const aborted = new Promise<void>((resolve) => {
+    resolveAborted = resolve;
+  });
+
+  const clearTimers = (): void => {
+    for (const timer of timers.values()) clearTimeout(timer);
+    timers.clear();
+  };
+  const fail = (reason: DeadlineReason<P>): void => {
+    if (current !== undefined) return;
+    current = reason;
+    clearTimers();
+    controller.abort();
+    resolveAborted();
+  };
+  const onExternalAbort = (): void => fail({ kind: 'cancelled' });
+
+  if (external?.aborted) fail({ kind: 'cancelled' });
+  else external?.addEventListener('abort', onExternalAbort, { once: true });
+
+  return {
+    signal: controller.signal,
+    arm(phase, ms) {
+      if (current !== undefined) return;
+      const previous = timers.get(phase);
+      if (previous !== undefined) clearTimeout(previous);
+      timers.set(
+        phase,
+        setTimeout(() => fail({ kind: 'timeout', phase }), ms),
+      );
+    },
+    disarm(phase) {
+      const timer = timers.get(phase);
+      if (timer === undefined) return;
+      clearTimeout(timer);
+      timers.delete(phase);
+    },
+    fail,
+    reason: () => current,
+    aborted,
+    dispose() {
+      clearTimers();
+      external?.removeEventListener('abort', onExternalAbort);
+    },
+  };
+}
+
+const TIMED_OUT: unique symbol = Symbol('timeout');
+
+/**
+ * Executa `task` com um prazo único (fase `total`), que cobre também a
+ * leitura do corpo, que pode travar após o status. `task` não deve rejeitar;
+ * recebe o sinal a repassar ao `fetch` e uma função que indica se o prazo
+ * estourou.
+ */
+async function withTotalDeadline<R>(
   timeoutMs: number,
   task: (signal: AbortSignal, timedOut: () => boolean) => Promise<R>,
 ): Promise<R | typeof TIMED_OUT> {
-  const controller = new AbortController();
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
-  const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
-    controller.signal.addEventListener('abort', () => resolve(TIMED_OUT), { once: true });
-  });
+  const scope = createDeadlineScope<'total'>();
+  scope.arm('total', timeoutMs);
+  const timedOut = (): boolean => scope.reason()?.kind === 'timeout';
   try {
-    return await Promise.race([task(controller.signal, () => timedOut), timeout]);
+    return await Promise.race([
+      task(scope.signal, timedOut),
+      scope.aborted.then((): typeof TIMED_OUT => TIMED_OUT),
+    ]);
   } finally {
-    clearTimeout(timer);
+    scope.dispose();
   }
 }
 
@@ -119,7 +193,7 @@ export async function listModels(
   if (!normalized.ok) return { ok: false, error: 'invalid_endpoint' };
   const url = new URL('/api/tags', normalized.value);
 
-  const result = await withTimeout(
+  const result = await withTotalDeadline(
     options.timeoutMs ?? DEFAULT_LIST_MODELS_TIMEOUT_MS,
     async (signal, timedOut): Promise<ListModelsResult> => {
       let response: Response;
@@ -162,7 +236,7 @@ export async function showModel(
   const url = new URL('/api/show', normalized.value);
   const body = JSON.stringify({ model: validModel.value });
 
-  const result = await withTimeout(
+  const result = await withTotalDeadline(
     options.timeoutMs ?? DEFAULT_LIST_MODELS_TIMEOUT_MS,
     async (signal, timedOut): Promise<ShowModelResult> => {
       let response: Response;
