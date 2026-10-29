@@ -7,7 +7,7 @@
 
 - **Fase:** 3 — Motor de tradução e streaming (em andamento)
 - **Tarefa:** `feat/ollama-chat` (contrato do provider e chat em streaming no cliente, sem DOM)
-- **Versão:** `0.1.0` (esqueleto + conexão com o Ollama, PLAN.md §5.4; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.1.0` pendente de autorização do responsável.
+- **Versão:** `0.1.0` (esqueleto + conexão com o Ollama, PLAN.md §5.4; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.1.0` autorizada pelo responsável, em `ab06507` (validado: lint, typecheck, 398 testes, build, 8 E2E); criação manual pendente.
 - **Fase 2:** concluída — PRs #9 e #10 mesclados; aceite manual do responsável no Chrome estável (conexão, modelos listados, Ollama fechado)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
@@ -19,7 +19,13 @@
 | `50aa5ab` | `feat(core): define contrato do translation provider` |
 | `3001d3f` | `refactor(core): generaliza prazo do cliente ollama` |
 | `5aa2414` | `feat(core): adiciona chat em streaming ao cliente` |
-| (este commit) | `docs(progress): registra chat em streaming do cliente` |
+| `ca4a35c` | `docs(progress): registra chat em streaming do cliente` |
+| `078c00c` | `refactor(core): extrai escopo de prazos para módulo próprio` |
+| `5e68e6a` | `fix(core): prioriza cancelamento sobre chunk já lido no chat` |
+| `6067cc6` | `fix(core): valida prazos e métricas do chat em streaming` |
+| `8bc183b` | `fix(core): recusa chunk que não é Uint8Array no chat` |
+| `5eb1560` | `test(core): reforça cenários do chat em streaming` |
+| (este commit) | `docs(progress): registra correções da revisão do chat` |
 
 **O que foi feito:**
 - `src/core/translation-provider.ts`: só tipos (`TranslationProvider`, `TranslationInput`, `TranslateOptions`, `TranslationResult`, `TranslationErrorKind`). O provider nasce com snapshot de endpoint/modelo, nunca lança e, em `ok: false`, o consumidor descarta o que recebeu por `onToken` (sem parcial em erro, RF06).
@@ -35,7 +41,49 @@
 - Em resposta HTTP de erro o corpo não é lido, só cancelado (libera a conexão).
 - Se `onToken` abortar o sinal externo, o resultado é `cancelled`, mesmo que a linha seja `done`.
 
-**Pendências:** `TranslationProvider` concreto sobre `chatStream` (mapeamento de erros e `retryable`) e retry conservador; teste com o modelo real; registrar em `docs/PROGRESS.md` as branches `fix/ndjson-parser` e `feat/literary-prompt` (PRs #13 e #14), ainda ausentes.
+**Correções da revisão (reviewer + auditoria de testes com 30 mutações manuais):**
+- Corrida reproduzida: abort e chunk no mesmo tick devolviam `ok: true` ou chamavam `onToken` após o cancelamento. Agora o motivo do escopo é verificado após cada `await`, antes de cada linha e antes de `onToken`; o abort cancela o leitor por listener, sem `Promise.race` por chunk (elimina também o acúmulo de reações na promise de abort).
+- `fetch` que ignora o sinal: o prazo vence mesmo assim, e a `Response` tardia tem o corpo cancelado.
+- Pedido que não é objeto ou não serializável → `invalid_request` (o contrato é "nunca rejeita").
+- Prazos aceitos só como inteiros entre 1 e 2 147 483 647 ms; fora disso, o padrão da fase. Métricas só como inteiros seguros ≥ 0.
+- `ChatStreamErrorKind` sem `not_found` (404 é sempre `model_missing`); `done_reason: length` tem precedência sobre texto vazio.
+- Chunk que não é `Uint8Array` → `invalid_response` imediato (antes era ignorado e só o prazo encerrava).
+- `createDeadlineScope` extraído para `src/core/deadline-scope.ts`, com testes diretos; `arm`/`fail` após `dispose` não criam timer.
+- Testes para os 8 mutantes sobreviventes relevantes (prazos `totalMs`/`firstTokenMs` personalizados, cancelamento do corpo em 403/404/500, modelo normalizado no corpo, `done` não booleano etc.).
+
+**Validações finais:** `npm run lint`, `typecheck`, `test` (563/563, 15 arquivos) e `build` com código 0; `tests/unit/ollama-client.test.ts` sem edição; sem `console`/`chrome` em `src/core`.
+
+**Validação com o modelo real** (instância Ollama 0.40.12 isolada na porta 11998, `translategemma:4b`, i5-13420H, script Node fora do repositório com o cliente empacotado):
+- Frio: 1º token em 7,8 s, total 10,7 s (carga 6,1 s), `doneReason: stop`.
+- Quente: 1º token em 0,16 s, total 3,0 s, 45 tokens gerados.
+- `num_predict: 5` → `truncated`.
+- Abort após tokens → `cancelled` em ~0,3 s, com `stop: cancel task` no log do servidor (a geração é interrompida no Ollama).
+
+**Pendências:** `TranslationProvider` concreto sobre `chatStream`, com mapeamento explícito de `incomplete_stream`, `consumer_error` e `invalid_request` para `TranslationErrorKind` e `retryable`; retry conservador; fixtures literárias (branch `test/translation-service`).
+
+## Fase 3 — `feat/literary-prompt` (PR #14, mesclado)
+
+| Commit | Mensagem |
+|---|---|
+| `6662ba6` | `feat(core): adiciona promptbuilder versionado` |
+| `16362b3` | `docs(decisions): propõe adr-011 para o prompt de tradução` |
+| `eeb3812` | `docs(decisions): ajusta formatação da adr-011` |
+
+`PROMPT_VERSION = v1-translategemma-baseline`: mensagem `user` única (o template do `translategemma:4b` não tem papel `system`), temperatura 0,2 e `num_predict` proporcional ao texto. ADR-011 em "Proposta" até a validação com fixtures literárias. Validações: lint, typecheck, test (424) e build.
+
+## Fase 3 — `fix/ndjson-parser` (PR #13, mesclado)
+
+| Commit | Mensagem |
+|---|---|
+| `a542008` | `feat(core): adiciona parser ndjson incremental` |
+
+Parser NDJSON incremental com `TextDecoder` em modo stream, CRLF, linha final sem `\n` e limite de tamanho de linha; testes com todos os pontos de corte e 200 divisões aleatórias com semente fixa. Validações: lint, typecheck, test (421) e build.
+
+## Fase 2 — `chore/ignore-agent-worktrees` (PR #12, mesclado)
+
+| Commit | Mensagem |
+|---|---|
+| `80e4aeb` | `chore(git): ignora worktrees temporárias de agentes` |
 
 ## Fase 2 — `chore/release-0.1.0`
 
