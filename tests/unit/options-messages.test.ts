@@ -1,17 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import type { OllamaErrorKind } from '../../src/core/ollama-client';
 import {
+  CONNECTION_ERROR_MESSAGES,
   ENDPOINT_ERROR_MESSAGES,
   LANGUAGE_ERROR_MESSAGES,
   MODEL_ERROR_MESSAGES,
   OLLAMA_ERROR_MESSAGES,
   connectedMessage,
+  connectionErrorMessage,
   endpointErrorMessage,
   extensionOrigin,
   languageErrorMessage,
   missingModelMessage,
   modelErrorMessage,
   ollamaErrorMessage,
+  type ConnectionErrorKind,
 } from '../../src/options/messages';
 import type {
   EndpointErrorReason,
@@ -134,5 +137,39 @@ describe('mensagens de diagnóstico da conexão', () => {
     const origin = extensionOrigin('mjkoppimccgajnabfeheglepjapkchlk');
     expect(origin).toBe('chrome-extension://mjkoppimccgajnabfeheglepjapkchlk');
     expect(origin).not.toContain('*');
+  });
+});
+
+const CONNECTION_ERRORS: ConnectionErrorKind[] = [
+  ...OLLAMA_ERRORS,
+  'permission_required',
+  'invalid_request',
+  'extension_error',
+];
+
+describe('mensagens do teste de conexão pelo service worker', () => {
+  it('cobre exatamente os códigos do worker e o erro local', () => {
+    expect(Object.keys(CONNECTION_ERROR_MESSAGES).sort()).toEqual([...CONNECTION_ERRORS].sort());
+  });
+
+  it.each(CONNECTION_ERRORS)('erro "%s" tem mensagem não vazia', (error) => {
+    expect(connectionErrorMessage(error).trim()).not.toBe('');
+  });
+
+  it('reaproveita as mensagens do cliente do Ollama', () => {
+    for (const error of OLLAMA_ERRORS) {
+      expect(connectionErrorMessage(error)).toBe(ollamaErrorMessage(error));
+    }
+    expect(connectionErrorMessage('http_error', 502)).toMatch(/502/);
+  });
+
+  it('extension_error orienta recarregar a extensão', () => {
+    expect(connectionErrorMessage('extension_error')).toBe(
+      'Não foi possível falar com o serviço da extensão. Recarregue o Lerium em chrome://extensions e tente de novo.',
+    );
+  });
+
+  it('permission_required pede o clique em "Testar conexão"', () => {
+    expect(connectionErrorMessage('permission_required')).toContain('"Testar conexão"');
   });
 });

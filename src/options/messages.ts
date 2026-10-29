@@ -1,4 +1,5 @@
 import type { OllamaErrorKind } from '../core/ollama-client';
+import type { TestConnectionErrorKind } from '../shared/runtime-messages';
 import type {
   EndpointErrorReason,
   LanguageErrorReason,
@@ -90,14 +91,39 @@ export function ollamaErrorMessage(error: OllamaErrorKind, status?: number): str
 }
 
 /**
- * Modelo configurado ausente em `/api/tags`. O nome já passou pela
- * allowlist de `validateModel`, então pode compor o comando sugerido.
+ * Códigos que a página de opções pode exibir após "Testar conexão": os do
+ * service worker mais `extension_error`, falha local ao falar com ele
+ * (worker inativo, extensão recarregada, resposta fora do contrato).
+ */
+export type ConnectionErrorKind = TestConnectionErrorKind | 'extension_error';
+
+export const CONNECTION_ERROR_MESSAGES: Readonly<Record<ConnectionErrorKind, string>> =
+  Object.freeze({
+    ...OLLAMA_ERROR_MESSAGES,
+    permission_required:
+      'O Lerium ainda não tem permissão para acessar esse endereço. Clique em "Testar conexão" para concedê-la.',
+    invalid_request:
+      'O serviço da extensão recusou o pedido. Confira o endereço e o modelo e tente de novo.',
+    extension_error:
+      'Não foi possível falar com o serviço da extensão. Recarregue o Lerium em chrome://extensions e tente de novo.',
+  });
+
+/** Mensagem de falha do teste de conexão; `status` HTTP é citado quando informado. */
+export function connectionErrorMessage(error: ConnectionErrorKind, status?: number): string {
+  if (error === 'http_error') return ollamaErrorMessage(error, status);
+  return CONNECTION_ERROR_MESSAGES[error];
+}
+
+/**
+ * Modelo configurado ausente no Ollama (`/api/show` respondeu 404). O nome
+ * já passou pela allowlist de `validateModel`, então pode compor o comando
+ * sugerido.
  */
 export function missingModelMessage(model: string): string {
   return `O modelo "${model}" não está instalado no Ollama. Instale-o com: ollama pull ${model}`;
 }
 
-/** Resultado do botão "Testar conexão" quando `/api/tags` respondeu. */
+/** Resultado do botão "Testar conexão" quando o Ollama respondeu. */
 export function connectedMessage(count: number): string {
   return `Conectado. ${count} modelo(s) encontrado(s).`;
 }
