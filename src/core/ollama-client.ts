@@ -229,14 +229,17 @@ export function hasModel(models: readonly string[], wanted: string): boolean {
  * - `model_missing`: `/api/chat` respondeu 404 (modelo não instalado);
  * - `cancelled`: o sinal externo abortou;
  * - `ollama_error`: o stream trouxe uma linha `{ error }` (mensagem descartada);
- * - `truncated`: `done_reason` `length` (limite `num_predict` atingido);
+ * - `truncated`: `done_reason` `length` (limite `num_predict` atingido); tem
+ *   precedência sobre o texto vazio, então `length` sem token também é
+ *   `truncated`, nunca `empty_response`;
  * - `incomplete_stream`: o corpo terminou sem linha `done: true`;
  * - `empty_response`: `done: true` sem nenhum texto gerado;
  * - `consumer_error`: `onToken` lançou;
  * - `invalid_request`: o pedido não é um objeto serializável em JSON.
  */
 export type ChatStreamErrorKind =
-  | OllamaErrorKind
+  // `chatStream` nunca devolve `not_found`: o 404 vira `model_missing`.
+  | Exclude<OllamaErrorKind, 'not_found'>
   | 'model_missing'
   | 'cancelled'
   | 'ollama_error'
@@ -275,7 +278,11 @@ export interface ChatStreamOptions {
   signal?: AbortSignal;
   /** Recebe cada trecho de texto, em ordem. Se lançar, o chat é abortado. */
   onToken?: (delta: string) => void;
-  /** Campos ausentes usam `DEFAULT_CHAT_TIMEOUTS`. */
+  /**
+   * Campos ausentes ou inválidos usam `DEFAULT_CHAT_TIMEOUTS`. Válido é um
+   * inteiro de 1 a `MAX_TIMEOUT_MS`; fora disso (0, negativo, fracionário,
+   * `NaN`, `Infinity`, acima do limite) vale o padrão daquela fase.
+   */
   timeouts?: Partial<ChatStreamTimeouts>;
 }
 
@@ -294,6 +301,21 @@ export type ChatStreamResult =
 
 type ChatFailure = Extract<ChatStreamResult, { ok: false }>;
 
+/** Maior atraso aceito por `setTimeout` (2^31 - 1 ms); acima disso dispara já. */
+export const MAX_TIMEOUT_MS = 2_147_483_647;
+
+const isValidTimeout = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= MAX_TIMEOUT_MS;
+
+/** Mescla os prazos pedidos com o padrão, descartando valores inválidos. */
+function resolveTimeouts(partial: Partial<ChatStreamTimeouts> | undefined): ChatStreamTimeouts {
+  const pick = (key: keyof ChatStreamTimeouts): number => {
+    const value: unknown = partial?.[key];
+    return isValidTimeout(value) ? value : DEFAULT_CHAT_TIMEOUTS[key];
+  };
+  return { firstTokenMs: pick('firstTokenMs'), idleMs: pick('idleMs'), totalMs: pick('totalMs') };
+}
+
 const chatFail = (error: ChatStreamErrorKind): ChatFailure => ({ ok: false, error });
 
 const ABORTED: unique symbol = Symbol('aborted');
@@ -306,12 +328,18 @@ const METRIC_FIELDS: ReadonlyArray<readonly [string, keyof ChatMetrics]> = [
   ['eval_duration', 'evalDurationNs'],
 ];
 
-/** Copia só métricas numéricas finitas; outros tipos são ignorados. */
+/**
+ * Copia só métricas que são inteiros seguros não negativos (contagens e
+ * nanossegundos); negativos, fracionários, `Infinity` e outros tipos são
+ * ignorados.
+ */
 function readMetrics(line: Record<string, unknown>): ChatMetrics {
   const metrics: ChatMetrics = {};
   for (const [field, key] of METRIC_FIELDS) {
     const value = line[field];
-    if (typeof value === 'number' && Number.isFinite(value)) metrics[key] = value;
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+      metrics[key] = value;
+    }
   }
   return metrics;
 }
@@ -351,11 +379,7 @@ export async function chatStream(
   if (!validModel.ok) return chatFail('invalid_model');
   if (options.signal?.aborted) return chatFail('cancelled');
 
-  const timeouts: ChatStreamTimeouts = {
-    firstTokenMs: options.timeouts?.firstTokenMs ?? DEFAULT_CHAT_TIMEOUTS.firstTokenMs,
-    idleMs: options.timeouts?.idleMs ?? DEFAULT_CHAT_TIMEOUTS.idleMs,
-    totalMs: options.timeouts?.totalMs ?? DEFAULT_CHAT_TIMEOUTS.totalMs,
-  };
+  const timeouts = resolveTimeouts(options.timeouts);
   const url = new URL('/api/chat', normalized.value);
   let body: string;
   try {
@@ -460,8 +484,9 @@ export async function chatStream(
     if (!response.ok) {
       // O corpo de erro nunca é lido.
       discardBody(response);
-      if (response.status === 404) return { ok: false, error: 'model_missing', status: 404 };
-      return httpError(response.status);
+      const { status } = response;
+      if (status === 404) return { ok: false, error: 'model_missing', status };
+      return { ok: false, error: status === 403 ? 'forbidden' : 'http_error', status };
     }
     if (response.body === null) return chatFail('invalid_response');
 

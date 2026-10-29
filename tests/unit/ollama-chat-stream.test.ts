@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   chatStream,
   DEFAULT_CHAT_TIMEOUTS,
+  MAX_TIMEOUT_MS,
   type ChatStreamOptions,
 } from '../../src/core/ollama-client';
 import type { ChatRequest } from '../../src/core/prompt-builder';
@@ -760,5 +761,101 @@ describe('chatStream: pedido inválido', () => {
       chatStream(ENDPOINT, request as unknown as ChatRequest, { fetchFn }),
     ).resolves.toEqual({ ok: false, error: 'invalid_request' });
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+});
+
+const INVALID_TIMEOUTS: ReadonlyArray<readonly [string, number]> = [
+  ['Infinity', Number.POSITIVE_INFINITY],
+  ['NaN', Number.NaN],
+  ['negativo', -1],
+  ['zero', 0],
+  ['fracionário', 1.5],
+  ['acima do limite', MAX_TIMEOUT_MS + 1],
+];
+
+describe('chatStream: validação dos prazos', () => {
+  it.each(INVALID_TIMEOUTS)('firstTokenMs %s usa o padrão', async (_label, value) => {
+    const pending = run(hangingFetch(), { timeouts: { firstTokenMs: value } });
+    const state = track(pending);
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_CHAT_TIMEOUTS.firstTokenMs - 1);
+    expect(state.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pending).resolves.toEqual({ ok: false, error: 'timeout', timeout: 'first_token' });
+  });
+
+  it.each(INVALID_TIMEOUTS)('idleMs %s usa o padrão', async (_label, value) => {
+    const body = controlledBody();
+    const pending = run(fetchReturning(okResponse(body.stream)), { timeouts: { idleMs: value } });
+    const state = track(pending);
+
+    body.push(token('a'));
+    await vi.advanceTimersByTimeAsync(DEFAULT_CHAT_TIMEOUTS.idleMs - 1);
+    expect(state.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pending).resolves.toEqual({ ok: false, error: 'timeout', timeout: 'idle' });
+  });
+
+  it.each(INVALID_TIMEOUTS)('totalMs %s usa o padrão', async (_label, value) => {
+    const pending = run(hangingFetch(), {
+      timeouts: { totalMs: value, firstTokenMs: MAX_TIMEOUT_MS },
+    });
+    const state = track(pending);
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_CHAT_TIMEOUTS.totalMs - 1);
+    expect(state.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pending).resolves.toEqual({ ok: false, error: 'timeout', timeout: 'total' });
+  });
+
+  it('aceita o limite MAX_TIMEOUT_MS', async () => {
+    const controller = new AbortController();
+    const pending = run(hangingFetch(), {
+      signal: controller.signal,
+      timeouts: { firstTokenMs: MAX_TIMEOUT_MS, totalMs: MAX_TIMEOUT_MS },
+    });
+    const state = track(pending);
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_CHAT_TIMEOUTS.totalMs);
+    expect(state.settled).toBe(false);
+    controller.abort();
+
+    await expect(pending).resolves.toEqual({ ok: false, error: 'cancelled' });
+  });
+});
+
+describe('chatStream: validação das métricas', () => {
+  it.each([
+    ['negativo', '-1'],
+    ['fracionário', '1.5'],
+    ['1e400 (Infinity)', '1e400'],
+    ['string', '"12"'],
+    ['acima de MAX_SAFE_INTEGER', '9007199254740993'],
+  ])('ignora métrica %s', async (_label, raw) => {
+    const last = `{"message":{"content":""},"done":true,"done_reason":"stop","eval_count":${raw},"total_duration":${raw}}
+`;
+    const body = bodyOf(token('x'), last);
+
+    await expect(run(fetchReturning(okResponse(body.stream)))).resolves.toEqual({
+      ok: true,
+      text: 'x',
+      doneReason: 'stop',
+      metrics: {},
+    });
+  });
+
+  it('aceita zero e MAX_SAFE_INTEGER', async () => {
+    const body = bodyOf(
+      token('x'),
+      doneLine({ eval_count: 0, total_duration: Number.MAX_SAFE_INTEGER }),
+    );
+
+    await expect(run(fetchReturning(okResponse(body.stream)))).resolves.toMatchObject({
+      ok: true,
+      metrics: { evalCount: 0, totalDurationNs: Number.MAX_SAFE_INTEGER },
+    });
   });
 });
