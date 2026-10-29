@@ -67,6 +67,7 @@ export function languageErrorMessage(reason: LanguageFieldErrorReason): string {
  */
 export const OLLAMA_ERROR_MESSAGES: Readonly<Record<OllamaErrorKind, string>> = Object.freeze({
   invalid_endpoint: 'Endereço do Ollama inválido. Corrija-o, por exemplo http://localhost:11434.',
+  invalid_model: 'Nome de modelo inválido. Use o nome exibido por "ollama list".',
   network:
     'Não foi possível conectar ao Ollama. Verifique se ele está aberto e se a porta está correta.',
   timeout:

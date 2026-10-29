@@ -9,6 +9,7 @@ import { normalizeEndpoint, validateModel } from '../shared/validation';
  */
 export type OllamaErrorKind =
   | 'invalid_endpoint'
+  | 'invalid_model'
   | 'network'
   | 'timeout'
   | 'forbidden'
@@ -19,15 +20,33 @@ export type OllamaErrorKind =
 export type ListModelsResult =
   { ok: true; models: string[] } | { ok: false; error: OllamaErrorKind; status?: number };
 
-export interface ListModelsOptions {
+/** `model_missing`: `/api/show` respondeu 404 para o modelo pedido. */
+export type ShowModelResult =
+  { ok: true } | { ok: false; error: OllamaErrorKind | 'model_missing'; status?: number };
+
+export type TestConnectionResult =
+  | { ok: true; models: string[]; modelInstalled: boolean }
+  | { ok: false; error: OllamaErrorKind; status?: number };
+
+export interface OllamaRequestOptions {
   fetchFn: typeof fetch;
-  /** Prazo total (conexão + corpo), em milissegundos. */
+  /** Prazo de cada requisição (conexão + corpo), em milissegundos. */
   timeoutMs?: number;
 }
+
+export type ListModelsOptions = OllamaRequestOptions;
 
 export const DEFAULT_LIST_MODELS_TIMEOUT_MS = 5000;
 
 const LATEST_TAG = ':latest';
+
+/** Opções comuns a toda requisição ao Ollama. Nunca `mode: 'no-cors'` (ADR-009). */
+const BASE_INIT: Readonly<RequestInit> = Object.freeze({
+  credentials: 'omit',
+  cache: 'no-store',
+  // O endpoint é loopback; seguir redirecionamento poderia levar a outro host.
+  redirect: 'error',
+});
 
 type ParsedTags = { ok: true; models: string[] } | { ok: false };
 
@@ -51,73 +70,145 @@ function parseTags(body: unknown): ParsedTags {
   return { ok: true, models: [...names].sort() };
 }
 
-function httpError(status: number): ListModelsResult {
+function httpError(status: number): { ok: false; error: OllamaErrorKind; status: number } {
   if (status === 403) return { ok: false, error: 'forbidden', status };
   if (status === 404) return { ok: false, error: 'not_found', status };
   return { ok: false, error: 'http_error', status };
 }
 
-/**
- * Lista os modelos instalados via `GET /api/tags`. Nunca lança: falhas de
- * rede, timeout, status HTTP e corpo inesperado viram `{ ok: false }`.
- */
-export async function listModels(
-  endpoint: string,
-  options: ListModelsOptions,
-): Promise<ListModelsResult> {
-  const normalized = normalizeEndpoint(endpoint);
-  if (!normalized.ok) return { ok: false, error: 'invalid_endpoint' };
+const TIMED_OUT = Symbol('timeout');
 
-  const { timeoutMs = DEFAULT_LIST_MODELS_TIMEOUT_MS } = options;
+/**
+ * Executa `task` com prazo próprio. O prazo cobre também a leitura do corpo,
+ * que pode travar após o status. `task` não deve rejeitar; recebe o sinal a
+ * repassar ao `fetch` e uma função que indica se o prazo estourou.
+ */
+async function withTimeout<R>(
+  timeoutMs: number,
+  task: (signal: AbortSignal, timedOut: () => boolean) => Promise<R>,
+): Promise<R | typeof TIMED_OUT> {
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
   }, timeoutMs);
-
-  // O prazo cobre também a leitura do corpo, que pode travar após o status.
-  const timeout = new Promise<'timeout'>((resolve) => {
-    controller.signal.addEventListener('abort', () => resolve('timeout'), { once: true });
+  const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
+    controller.signal.addEventListener('abort', () => resolve(TIMED_OUT), { once: true });
   });
-
-  const url = new URL('/api/tags', normalized.value);
-
-  const request = async (): Promise<ListModelsResult> => {
-    let response: Response;
-    try {
-      response = await options.fetchFn(url, {
-        method: 'GET',
-        credentials: 'omit',
-        cache: 'no-store',
-        // O endpoint é loopback; seguir redirecionamento poderia levar a outro host.
-        redirect: 'error',
-        signal: controller.signal,
-      });
-    } catch {
-      // TypeError de rede (Ollama desligado, porta errada) ou aborto externo.
-      // Com host_permissions (ADR-009) o 403 chega como status, não aqui.
-      return { ok: false, error: timedOut ? 'timeout' : 'network' };
-    }
-    if (!response.ok) return httpError(response.status);
-
-    let body: unknown;
-    try {
-      body = await response.json();
-    } catch {
-      return { ok: false, error: timedOut ? 'timeout' : 'invalid_response' };
-    }
-    const parsed = parseTags(body);
-    return parsed.ok ? parsed : { ok: false, error: 'invalid_response' };
-  };
-
   try {
-    // `request` nunca rejeita; a corrida só encerra a espera no timeout.
-    const result = await Promise.race([request(), timeout]);
-    return result === 'timeout' ? { ok: false, error: 'timeout' } : result;
+    return await Promise.race([task(controller.signal, () => timedOut), timeout]);
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Lista os modelos instalados via `GET /api/tags`. Nunca lança: falhas de
+ * rede, timeout, status HTTP e corpo inesperado viram `{ ok: false }`.
+ *
+ * Com `host_permissions` (ADR-009) o Chrome não envia `Origin` neste `GET`,
+ * então o sucesso aqui não prova que a origem está liberada; ver
+ * `testConnection`.
+ */
+export async function listModels(
+  endpoint: string,
+  options: OllamaRequestOptions,
+): Promise<ListModelsResult> {
+  const normalized = normalizeEndpoint(endpoint);
+  if (!normalized.ok) return { ok: false, error: 'invalid_endpoint' };
+  const url = new URL('/api/tags', normalized.value);
+
+  const result = await withTimeout(
+    options.timeoutMs ?? DEFAULT_LIST_MODELS_TIMEOUT_MS,
+    async (signal, timedOut): Promise<ListModelsResult> => {
+      let response: Response;
+      try {
+        response = await options.fetchFn(url, { ...BASE_INIT, method: 'GET', signal });
+      } catch {
+        // TypeError de rede (Ollama desligado, porta errada) ou aborto externo.
+        // Com host_permissions (ADR-009) o 403 chega como status, não aqui.
+        return { ok: false, error: timedOut() ? 'timeout' : 'network' };
+      }
+      if (!response.ok) return httpError(response.status);
+
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch {
+        return { ok: false, error: timedOut() ? 'timeout' : 'invalid_response' };
+      }
+      const parsed = parseTags(body);
+      return parsed.ok ? parsed : { ok: false, error: 'invalid_response' };
+    },
+  );
+  return result === TIMED_OUT ? { ok: false, error: 'timeout' } : result;
+}
+
+/**
+ * Consulta `POST /api/show` (somente leitura). Por ser `POST`, o Chrome envia
+ * `Origin` (ADR-009): um 403 indica origem não liberada em `OLLAMA_ORIGINS`;
+ * um 404, modelo inexistente. O corpo (modelfile, licença) nunca é lido.
+ */
+export async function showModel(
+  endpoint: string,
+  model: string,
+  options: OllamaRequestOptions,
+): Promise<ShowModelResult> {
+  const normalized = normalizeEndpoint(endpoint);
+  if (!normalized.ok) return { ok: false, error: 'invalid_endpoint' };
+  const validModel = validateModel(model);
+  if (!validModel.ok) return { ok: false, error: 'invalid_model' };
+  const url = new URL('/api/show', normalized.value);
+  const body = JSON.stringify({ model: validModel.value });
+
+  const result = await withTimeout(
+    options.timeoutMs ?? DEFAULT_LIST_MODELS_TIMEOUT_MS,
+    async (signal, timedOut): Promise<ShowModelResult> => {
+      let response: Response;
+      try {
+        response = await options.fetchFn(url, {
+          ...BASE_INIT,
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body,
+          signal,
+        });
+      } catch {
+        return { ok: false, error: timedOut() ? 'timeout' : 'network' };
+      }
+      if (response.ok) return { ok: true };
+      if (response.status === 404) return { ok: false, error: 'model_missing', status: 404 };
+      return httpError(response.status);
+    },
+  );
+  return result === TIMED_OUT ? { ok: false, error: 'timeout' } : result;
+}
+
+/**
+ * Teste de conexão (RF01): `/api/tags` prova o alcance e lista os modelos;
+ * `/api/show` prova a liberação da origem e verifica o modelo configurado.
+ * Cada etapa tem o próprio prazo de `timeoutMs`.
+ */
+export async function testConnection(
+  endpoint: string,
+  model: string,
+  options: OllamaRequestOptions,
+): Promise<TestConnectionResult> {
+  const normalized = normalizeEndpoint(endpoint);
+  if (!normalized.ok) return { ok: false, error: 'invalid_endpoint' };
+  const validModel = validateModel(model);
+  if (!validModel.ok) return { ok: false, error: 'invalid_model' };
+
+  const listed = await listModels(normalized.value, options);
+  if (!listed.ok) return listed;
+
+  const shown = await showModel(normalized.value, validModel.value, options);
+  if (shown.ok) return { ok: true, models: listed.models, modelInstalled: true };
+  if (shown.error === 'model_missing') {
+    return { ok: true, models: listed.models, modelInstalled: false };
+  }
+  return { ...shown, error: shown.error };
 }
 
 /** Acrescenta `:latest` a nomes sem tag; a tag vem após o último `/`. */

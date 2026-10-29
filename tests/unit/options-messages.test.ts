@@ -78,6 +78,7 @@ describe('mensagens de validação', () => {
 
 const OLLAMA_ERRORS: OllamaErrorKind[] = [
   'invalid_endpoint',
+  'invalid_model',
   'network',
   'timeout',
   'forbidden',
