@@ -354,9 +354,9 @@ usuário seguidos, formato que o modelo não viu no treino.
   "Brazilian Portuguese", `zh-CN` → "Simplified Chinese"), distintos dos
   rótulos PT-BR da interface.
 - **Parâmetros:** `stream: true`; `temperature: 0.2` (o modelfile não define;
-  tradução pede estabilidade, sem o greedy puro); `num_predict =
-  clamp(ceil(chars/2), 256, 4096)`, folga de ~1,5–2× sobre a entrada em
-  línguas latinas, contra geração sem fim. `num_ctx` e `keep_alive` não são
+  tradução pede estabilidade, sem o greedy puro);
+  `num_predict = clamp(ceil(chars/2), 256, 4096)`, folga de ~1,5–2× sobre a
+  entrada em línguas latinas, contra geração sem fim. `num_ctx` e `keep_alive` não são
   definidos.
 - **Validação:** texto não vazio após trim (mas enviado sem alteração),
   idiomas suportados, origem ≠ destino e modelo via `validateModel`; erros
