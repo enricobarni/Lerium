@@ -95,9 +95,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // Todo caminho (sucesso, erro, prazo, cancelamento) limpa os seus timers.
-  expect(vi.getTimerCount()).toBe(0);
-  vi.useRealTimers();
+  try {
+    // Todo caminho (sucesso, erro, prazo, cancelamento) limpa os seus timers.
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 describe('chatStream: requisição', () => {
@@ -113,11 +116,19 @@ describe('chatStream: requisição', () => {
     expect(init?.credentials).toBe('omit');
     expect(init?.cache).toBe('no-store');
     expect(init?.redirect).toBe('error');
-    expect(init?.mode).not.toBe('no-cors');
+    expect(init?.mode).toBeUndefined();
     expect(init?.headers).toEqual({ 'content-type': 'application/json' });
     expect(init?.signal).toBeInstanceOf(AbortSignal);
     expect(JSON.parse(String(init?.body))).toEqual(REQUEST);
     expect(JSON.parse(String(init?.body)).stream).toBe(true);
+  });
+
+  it('envia o modelo sem espaços nas bordas', async () => {
+    const fetchFn = fetchReturning(okResponse(bodyOf(token('Oi'), doneLine()).stream));
+
+    await chatStream(ENDPOINT, { ...REQUEST, model: '  translategemma:4b ' }, { fetchFn });
+
+    expect(JSON.parse(String(fetchFn.mock.calls[0]?.[1]?.body)).model).toBe('translategemma:4b');
   });
 
   it('normaliza o endpoint de forma defensiva', async () => {
@@ -276,8 +287,19 @@ describe('chatStream: tokens e NDJSON', () => {
 });
 
 describe('chatStream: fim do stream', () => {
-  it('done_reason length vira truncated, sem texto parcial', async () => {
-    const body = bodyOf(token('parcial'), doneLine({ done_reason: 'length' }));
+  it('done_reason length vira truncated, sem texto parcial, e libera o corpo', async () => {
+    const body = controlledBody();
+    body.push(token('parcial') + doneLine({ done_reason: 'length' }));
+
+    await expect(run(fetchReturning(okResponse(body.stream)))).resolves.toEqual({
+      ok: false,
+      error: 'truncated',
+    });
+    expect(body.cancel).toHaveBeenCalled();
+  });
+
+  it('done_reason length sem nenhum token vira truncated, não empty_response', async () => {
+    const body = bodyOf(doneLine({ done_reason: 'length' }));
 
     await expect(run(fetchReturning(okResponse(body.stream)))).resolves.toEqual({
       ok: false,
@@ -285,12 +307,26 @@ describe('chatStream: fim do stream', () => {
     });
   });
 
-  it('done com texto vazio vira empty_response', async () => {
-    const body = bodyOf(token(''), doneLine());
+  it('done com texto vazio vira empty_response e libera o corpo', async () => {
+    const body = controlledBody();
+    body.push(token('') + doneLine());
 
     await expect(run(fetchReturning(okResponse(body.stream)))).resolves.toEqual({
       ok: false,
       error: 'empty_response',
+    });
+    expect(body.cancel).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['"true"', '"true"'],
+    ['1', '1'],
+  ])('done: %s não encerra o stream', async (_label, raw) => {
+    const body = bodyOf(token('a'), `{"message":{"content":""},"done":${raw}}\n`);
+
+    await expect(run(fetchReturning(okResponse(body.stream)))).resolves.toEqual({
+      ok: false,
+      error: 'incomplete_stream',
     });
   });
 
@@ -325,13 +361,24 @@ describe('chatStream: fim do stream', () => {
     });
   });
 
-  it('linha { error } vira ollama_error sem copiar a mensagem', async () => {
-    const body = bodyOf(token('a'), '{"error":"segredo interno do servidor"}\n');
+  it('corpo sem getReader vira invalid_response, sem rejeitar', async () => {
+    const response = { ok: true, status: 200, body: {} } as unknown as Response;
+
+    await expect(run(fetchReturning(response))).resolves.toEqual({
+      ok: false,
+      error: 'invalid_response',
+    });
+  });
+
+  it('linha { error } vira ollama_error sem copiar a mensagem e libera o corpo', async () => {
+    const body = controlledBody();
+    body.push(token('a') + '{"error":"segredo interno do servidor"}\n');
 
     const result = await run(fetchReturning(okResponse(body.stream)));
 
     expect(result).toEqual({ ok: false, error: 'ollama_error' });
     expect(JSON.stringify(result)).not.toContain('segredo');
+    expect(body.cancel).toHaveBeenCalled();
   });
 
   it.each([
@@ -384,13 +431,16 @@ describe('chatStream: HTTP e rede', () => {
     [403, { ok: false, error: 'forbidden', status: 403 }],
     [404, { ok: false, error: 'model_missing', status: 404 }],
     [500, { ok: false, error: 'http_error', status: 500 }],
-  ])('status %i vira o erro esperado, sem a mensagem do corpo', async (status, expected) => {
-    const fetchFn = fetchReturning(new Response('{"error":"segredo interno"}', { status }));
+  ])('status %i vira o erro esperado, sem ler o corpo', async (status, expected) => {
+    const body = controlledBody();
+    body.push('{"error":"segredo interno"}');
+    const fetchFn = fetchReturning(new Response(body.stream, { status }));
 
     const result = await run(fetchFn);
 
     expect(result).toEqual(expected);
     expect(JSON.stringify(result)).not.toContain('segredo');
+    expect(body.cancel).toHaveBeenCalled();
   });
 
   it('fetch rejeitando vira network', async () => {
@@ -515,6 +565,28 @@ describe('chatStream: prazos', () => {
     await expect(pending).resolves.toEqual({ ok: false, error: 'timeout', timeout: 'first_token' });
   });
 
+  it('aplica o total personalizado antes de first_token', async () => {
+    const pending = run(hangingFetch(), { timeouts: { totalMs: 1000 } });
+    const state = track(pending);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(state.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pending).resolves.toEqual({ ok: false, error: 'timeout', timeout: 'total' });
+  });
+
+  it('aplica o first_token personalizado', async () => {
+    const pending = run(hangingFetch(), { timeouts: { firstTokenMs: 500 } });
+    const state = track(pending);
+
+    await vi.advanceTimersByTimeAsync(499);
+    expect(state.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pending).resolves.toEqual({ ok: false, error: 'timeout', timeout: 'first_token' });
+  });
+
   it('aplica o idle personalizado', async () => {
     const body = controlledBody();
     const pending = run(fetchReturning(okResponse(body.stream)), { timeouts: { idleMs: 1000 } });
@@ -558,15 +630,28 @@ describe('chatStream: cancelamento e consumidor', () => {
     expect(onToken).toHaveBeenCalledTimes(1);
   });
 
-  it('abort após o timeout mantém timeout', async () => {
-    const fetchFn = hangingFetch();
+  // Prazo e abort no mesmo instante e no mesmo tick (sem microtasks entre
+  // eles): `advanceTimersByTime` síncrono dispara os dois timers em sequência,
+  // na ordem de criação. Vence quem dispara primeiro.
+  it('abort no mesmo tick, logo após o prazo, mantém timeout', async () => {
     const controller = new AbortController();
-    const pending = run(fetchFn, { signal: controller.signal });
+    const pending = run(hangingFetch(), { signal: controller.signal });
+    setTimeout(() => controller.abort(), DEFAULT_CHAT_TIMEOUTS.firstTokenMs);
 
-    await vi.advanceTimersByTimeAsync(DEFAULT_CHAT_TIMEOUTS.firstTokenMs);
-    controller.abort();
+    vi.advanceTimersByTime(DEFAULT_CHAT_TIMEOUTS.firstTokenMs);
 
+    expect(controller.signal.aborted).toBe(true);
     await expect(pending).resolves.toEqual({ ok: false, error: 'timeout', timeout: 'first_token' });
+  });
+
+  it('abort no mesmo tick, logo antes do prazo, vira cancelled', async () => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), DEFAULT_CHAT_TIMEOUTS.firstTokenMs);
+    const pending = run(hangingFetch(), { signal: controller.signal });
+
+    vi.advanceTimersByTime(DEFAULT_CHAT_TIMEOUTS.firstTokenMs);
+
+    await expect(pending).resolves.toEqual({ ok: false, error: 'cancelled' });
   });
 
   it('abort externo disparado no mesmo instante do timeout não sobrescreve o motivo', async () => {
