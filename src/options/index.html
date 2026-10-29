@@ -106,11 +106,11 @@
 
       <p id="feedback" role="status"></p>
 
-      <section id="origin-help" class="instructions" aria-labelledby="origin-help-title">
+      <section id="origin-help" class="instructions" aria-labelledby="origin-help-title" hidden>
         <h2 id="origin-help-title" tabindex="-1">Liberar o Lerium no Ollama</h2>
         <p>
-          O Ollama só aceita pedidos de origens liberadas na variável de ambiente OLLAMA_ORIGINS.
-          Faça isto uma vez, antes de usar o Lerium.
+          O Ollama recusou o Lerium: ele só aceita pedidos de origens liberadas na variável de
+          ambiente OLLAMA_ORIGINS. Faça isto uma vez.
         </p>
 
         <p class="origin">Origem do Lerium: <code id="extension-origin"></code></p>
@@ -134,10 +134,14 @@
           </li>
           <li>Clique em OK para salvar.</li>
           <li>
-            Feche o Ollama pelo ícone na bandeja do sistema (ao lado do relógio, em "Quit Ollama") e
-            abra-o de novo, para que ele leia a variável.
+            Feche o Ollama pelo ícone na bandeja do sistema (ao lado do relógio, em Sair ou "Quit
+            Ollama") e abra-o de novo, para que ele leia a variável.
           </li>
           <li>Volte a esta página e clique em "Testar conexão".</li>
+          <li>
+            Se já configurou e o erro continua, confirme que fechou o Ollama totalmente (ícone da
+            bandeja → Sair) antes de abrir de novo — o Ollama só lê a variável ao iniciar.
+          </li>
         </ol>
 
         <p class="warning">

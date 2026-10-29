@@ -5,13 +5,16 @@ import {
   TEST_CONNECTION_MESSAGE_TYPE,
   parseTestConnectionResponse,
   type TestConnectionRequest,
-  type TestConnectionResponse,
 } from '../shared/runtime-messages';
 import { normalizeEndpoint, validateModel } from '../shared/validation';
 import { createSettingsRepository, type SettingsFieldErrors } from '../storage/settings-repository';
 import {
-  connectedMessage,
-  connectionErrorMessage,
+  describeConnectionResult,
+  type ConnectionResult,
+  type ConnectionTone,
+  type ConnectionView,
+} from './connection-view';
+import {
   endpointErrorMessage,
   extensionOrigin,
   languageErrorMessage,
@@ -41,8 +44,6 @@ const COPY_ERROR =
  */
 const WORKER_TIMEOUT_MS = DEFAULT_LIST_MODELS_TIMEOUT_MS * 2 + 2000;
 
-type ConnectionResult = TestConnectionResponse | { ok: false; error: 'extension_error' };
-
 const EXTENSION_ERROR: ConnectionResult = Object.freeze({ ok: false, error: 'extension_error' });
 
 type FieldName = keyof SettingsFieldErrors;
@@ -65,6 +66,7 @@ const connectionStatus = byId('connection-status', HTMLParagraphElement);
 const modelWarning = byId('model-warning', HTMLParagraphElement);
 const installedField = byId('installed-models-field', HTMLDivElement);
 const installedSelect = byId('installed-models', HTMLSelectElement);
+const originHelp = byId('origin-help', HTMLElement);
 const originHelpTitle = byId('origin-help-title', HTMLHeadingElement);
 const originCode = byId('extension-origin', HTMLElement);
 const copyButton = byId('copy-origin', HTMLButtonElement);
@@ -208,7 +210,50 @@ function resetConnection(): void {
   installedField.hidden = true;
   installedSelect.replaceChildren();
   modelWarning.textContent = '';
-  connectionStatus.textContent = '';
+  setConnectionStatus('');
+}
+
+/**
+ * Escreve no status da conexão (região `role="status"`). O tom vira
+ * `data-tone`, usado só para estilo; o texto já diz o resultado.
+ */
+function setConnectionStatus(message: string, tone?: ConnectionTone): void {
+  if (tone) connectionStatus.dataset.tone = tone;
+  else delete connectionStatus.dataset.tone;
+  if (message === '') connectionStatus.textContent = '';
+  else announceTo(connectionStatus, message);
+}
+
+/** Esconde a seção de liberação da origem (após um teste bem-sucedido). */
+function hideOriginHelp(): void {
+  originHelp.hidden = true;
+  originHelpTitle.removeAttribute('aria-describedby');
+}
+
+/**
+ * Mostra a seção de liberação da origem. O título passa a ser descrito pelo
+ * status, para que o leitor de tela leia o motivo ao receber o foco. Com
+ * `focus`, rola e foca no próximo quadro, depois de o status ser escrito.
+ */
+function revealOriginHelp(focus: boolean, run: number): void {
+  originHelp.hidden = false;
+  originHelpTitle.setAttribute('aria-describedby', 'connection-status');
+  if (!focus) return;
+  requestAnimationFrame(() => {
+    // Um teste mais novo (ou endereço editado) cancela o salto de foco.
+    if (run !== testRun) return;
+    const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    originHelp.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+    originHelpTitle.focus({ preventScroll: true });
+  });
+}
+
+function applyConnectionView(view: ConnectionView, run: number): void {
+  setConnectionStatus(view.message, view.tone);
+  if (view.revealOriginHelp) revealOriginHelp(view.focusOriginHelp, run);
+  else if (view.tone === 'success') hideOriginHelp();
+  // Demais erros mantêm a seção como está: quem segue os passos e fecha o
+  // Ollama recebe "network" no meio do caminho e não deve perder as instruções.
 }
 
 function setEndpointError(message: string | undefined): void {
@@ -253,7 +298,7 @@ async function testConnection(userInitiated: boolean): Promise<void> {
   resetConnection();
   if (!endpoint.ok) {
     setEndpointError(endpointErrorMessage(endpoint.reason));
-    announceTo(connectionStatus, TEST_INVALID_MESSAGE);
+    setConnectionStatus(TEST_INVALID_MESSAGE, 'error');
     if (userInitiated) endpointInput.focus();
     return;
   }
@@ -261,7 +306,7 @@ async function testConnection(userInitiated: boolean): Promise<void> {
   const model = validateModel(modelInput.value);
   if (!model.ok) {
     setModelError(modelErrorMessage(model.reason));
-    announceTo(connectionStatus, TEST_INVALID_MODEL_MESSAGE);
+    setConnectionStatus(TEST_INVALID_MODEL_MESSAGE, 'error');
     if (userInitiated) modelInput.focus();
     return;
   }
@@ -270,25 +315,20 @@ async function testConnection(userInitiated: boolean): Promise<void> {
   const run = testRun;
   testInFlight = true;
   setTesting(true);
-  announceTo(connectionStatus, TESTING_MESSAGE);
+  setConnectionStatus(TESTING_MESSAGE);
   try {
     const result = await requestConnectionTest(endpoint.value, model.value);
     if (run !== testRun) return;
+    const view = describeConnectionResult(result, { userInitiated, model: model.value });
     if (result.ok) {
       installedModels = result.models;
       testedModel = { name: model.value, installed: result.modelInstalled };
       renderInstalledModels(result.models);
       syncModelChoice();
-      announceTo(connectionStatus, connectedMessage(result.models.length));
-      return;
+      // Mesmo valor que syncModelChoice calcula para o modelo testado.
+      modelWarning.textContent = view.modelWarning ?? '';
     }
-    announceTo(
-      connectionStatus,
-      connectionErrorMessage(result.error, 'status' in result ? result.status : undefined),
-    );
-    // A seção de liberação da origem está sempre visível; no teste manual,
-    // levar o foco até ela encurta o caminho até a solução.
-    if (result.error === 'forbidden' && userInitiated) originHelpTitle.focus();
+    applyConnectionView(view, run);
   } finally {
     // Um teste obsoleto não mexe no botão de um teste mais novo.
     if (run === testRun) {
