@@ -32,7 +32,6 @@
 
 | Commit | Mensagem |
 |---|---|
-| `6b868a7` | `docs(progress): registra descoberta do ollama da fase 2` |
 | `ceae315` | `docs(decisions): propõe adr-009 para service worker e loopback` |
 | `8c945c1` | `fix(core): remove sondagem no-cors do cliente do ollama` |
 | `170aff2` | `feat(core): verifica autorização e modelo via api/show` |
@@ -47,7 +46,8 @@
 | `5cc2ddc` | `test(e2e): cobre cenários do teste de conexão nas opções` |
 | `914482d` | `ci: executa testes e2e no chromium` |
 | `48657e6` | `docs: aceita adr-009 e atualiza arquitetura e readme` |
-| (este commit) | `docs(progress): registra correção da conexão com o ollama` |
+| `5df2e65` | `docs(progress): registra correção da conexão com o ollama` |
+| (este commit) | `docs(progress): remove commit duplicado na tabela` |
 
 **Sintomas no Chrome:** `No 'Access-Control-Allow-Origin' header`; `Request mode is "no-cors" but the redirect mode is not "follow"`; falha em `/api/tags`; foco não ia para "Liberar o Lerium no Ollama".
 
