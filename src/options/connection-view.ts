@@ -56,3 +56,18 @@ export function describeConnectionResult(
     focusOriginHelp: forbidden && userInitiated,
   };
 }
+
+/** Origens da porta padrão, já cobertas por `host_permissions` (ADR-009). */
+export const DEFAULT_OLLAMA_ORIGINS: ReadonlySet<string> = new Set([
+  'http://localhost:11434',
+  'http://127.0.0.1:11434',
+]);
+
+/**
+ * Padrão de permissão opcional a pedir para `origin` (já normalizada por
+ * `normalizeEndpoint`), ou `undefined` na porta padrão. É exatamente o padrão
+ * que o service worker consulta em `chrome.permissions.contains`.
+ */
+export function hostPermissionPattern(origin: string): string | undefined {
+  return DEFAULT_OLLAMA_ORIGINS.has(origin) ? undefined : `${origin}/*`;
+}

@@ -10,6 +10,7 @@ import { normalizeEndpoint, validateModel } from '../shared/validation';
 import { createSettingsRepository, type SettingsFieldErrors } from '../storage/settings-repository';
 import {
   describeConnectionResult,
+  hostPermissionPattern,
   type ConnectionResult,
   type ConnectionTone,
   type ConnectionView,
@@ -20,6 +21,7 @@ import {
   languageErrorMessage,
   missingModelMessage,
   modelErrorMessage,
+  permissionDeniedMessage,
 } from './messages';
 
 const SAVED_MESSAGE = 'Configurações salvas.';
@@ -338,6 +340,44 @@ async function testConnection(userInitiated: boolean): Promise<void> {
   }
 }
 
+type PermissionOutcome = { granted: true } | { granted: false; message: string };
+
+/**
+ * Pede a permissão opcional de host para uma porta personalizada (ADR-009).
+ * Precisa ser a primeira operação assíncrona do clique: qualquer `await`
+ * antes dela consumiria o gesto do usuário e o Chrome recusaria o pedido.
+ * Endereço inválido ou porta padrão não pedem nada; a validação vem depois.
+ */
+async function requestHostPermission(): Promise<PermissionOutcome> {
+  const endpoint = normalizeEndpoint(endpointInput.value);
+  const pattern = endpoint.ok ? hostPermissionPattern(endpoint.value) : undefined;
+  if (!endpoint.ok || pattern === undefined) return { granted: true };
+  let granted: boolean;
+  try {
+    granted = await chrome.permissions.request({ origins: [pattern] });
+  } catch {
+    granted = false;
+  }
+  return granted
+    ? { granted: true }
+    : { granted: false, message: permissionDeniedMessage(endpoint.value) };
+}
+
+async function handleTestClick(): Promise<void> {
+  const permission = requestHostPermission();
+  // Bloqueia cliques repetidos enquanto o diálogo de permissão está aberto.
+  setTesting(true);
+  const outcome = await permission;
+  setTesting(false);
+  if (!outcome.granted) {
+    // Invalida um teste anterior e não revela a seção: o Ollama não foi consultado.
+    resetConnection();
+    setConnectionStatus(outcome.message, 'error');
+    return;
+  }
+  await testConnection(true);
+}
+
 function errorMessage(name: FieldName, errors: SettingsFieldErrors): string | undefined {
   switch (name) {
     case 'endpoint':
@@ -369,8 +409,15 @@ function showErrors(errors: SettingsFieldErrors): void {
 }
 
 async function handleSubmit(): Promise<void> {
+  const permission = requestHostPermission();
   setBusy(true);
   try {
+    const outcome = await permission;
+    if (!outcome.granted) {
+      // Sem a permissão a porta ficaria salva, mas inutilizável.
+      announce(outcome.message);
+      return;
+    }
     const result = await repository.save({
       endpoint: endpointInput.value,
       model: modelInput.value,
@@ -419,7 +466,7 @@ async function init(): Promise<void> {
     if (!busy) void handleSubmit();
   });
   testButton.addEventListener('click', () => {
-    if (!testing) void testConnection(true);
+    if (!testing) void handleTestClick();
   });
   endpointInput.addEventListener('input', resetConnection);
   modelInput.addEventListener('input', syncModelChoice);

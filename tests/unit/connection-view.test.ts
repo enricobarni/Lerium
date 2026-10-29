@@ -1,9 +1,17 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { describeConnectionResult, type ConnectionResult } from '../../src/options/connection-view';
+import {
+  DEFAULT_OLLAMA_ORIGINS,
+  describeConnectionResult,
+  hostPermissionPattern,
+  type ConnectionResult,
+} from '../../src/options/connection-view';
 import {
   connectedMessage,
   connectionErrorMessage,
   missingModelMessage,
+  permissionDeniedMessage,
   type ConnectionErrorKind,
 } from '../../src/options/messages';
 
@@ -106,5 +114,42 @@ describe('describeConnectionResult: sucesso', () => {
       focusOriginHelp: false,
     });
     expect(view.modelWarning).toBe(missingModelMessage('qwen3:8b'));
+  });
+});
+
+describe('hostPermissionPattern', () => {
+  const manifest = JSON.parse(
+    readFileSync(fileURLToPath(new URL('../../public/manifest.json', import.meta.url)), 'utf8'),
+  ) as { optional_host_permissions: string[] };
+
+  // Padrão de manifesto sem porta cobre todas as portas do host.
+  const coveredByOptional = (pattern: string): boolean => {
+    const host = new URL(pattern.replace('/*', '/')).hostname;
+    return manifest.optional_host_permissions.includes(`http://${host}/*`);
+  };
+
+  it.each(['http://localhost:11434', 'http://127.0.0.1:11434'])(
+    'porta padrão %s não pede permissão',
+    (origin) => {
+      expect(DEFAULT_OLLAMA_ORIGINS.has(origin)).toBe(true);
+      expect(hostPermissionPattern(origin)).toBeUndefined();
+    },
+  );
+
+  it.each(['http://localhost:8080', 'http://127.0.0.1:11435', 'http://localhost'])(
+    'porta personalizada %s pede só a origem exata',
+    (origin) => {
+      const pattern = hostPermissionPattern(origin);
+      expect(pattern).toBe(`${origin}/*`);
+      expect(coveredByOptional(pattern as string)).toBe(true);
+    },
+  );
+
+  it('negação cita a origem e não sugere curinga', () => {
+    const message = permissionDeniedMessage('http://localhost:8080');
+    expect(message).toBe(
+      'Sem permissão para acessar http://localhost:8080, o Lerium não consegue falar com o Ollama nessa porta.',
+    );
+    expect(message).not.toContain('*');
   });
 });

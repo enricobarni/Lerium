@@ -115,6 +115,14 @@ export function connectionErrorMessage(error: ConnectionErrorKind, status?: numb
 }
 
 /**
+ * Usuário negou a permissão opcional de host. `origin` vem de
+ * `normalizeEndpoint` (só loopback e porta numérica).
+ */
+export function permissionDeniedMessage(origin: string): string {
+  return `Sem permissão para acessar ${origin}, o Lerium não consegue falar com o Ollama nessa porta.`;
+}
+
+/**
  * Modelo configurado ausente no Ollama (`/api/show` respondeu 404). O nome
  * já passou pela allowlist de `validateModel`, então pode compor o comando
  * sugerido.
