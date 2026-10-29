@@ -75,6 +75,7 @@ descartado e nunca aplicado ao DOM. Uma aba não interfere em outra.
 ## Limites de confiança e privacidade
 
 - **Página é dado não confiável:** o texto coletado é apenas conteúdo a traduzir, nunca instrução para a extensão; o prompt separa instrução e texto com delimitação explícita.
+- **Rede só no service worker:** popup, opções e content scripts não fazem `fetch`; enviam mensagens tipadas e validadas ao service worker, que aceita apenas remetentes da própria extensão (ADR-009).
 - **Somente loopback:** o endpoint aceita apenas `http://localhost` ou `http://127.0.0.1` no MVP; endpoint remoto fica desabilitado.
 - **DOM seguro:** traduções são inseridas via `textContent`/`nodeValue`; nenhuma URL ou HTML é criado a partir da resposta do modelo.
 - **Sem logs de conteúdo:** logs registram só metadados (duração, quantidade de segmentos, códigos de erro).

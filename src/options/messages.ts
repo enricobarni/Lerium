@@ -1,3 +1,5 @@
+import type { OllamaErrorKind } from '../core/ollama-client';
+import type { TestConnectionErrorKind } from '../shared/runtime-messages';
 import type {
   EndpointErrorReason,
   LanguageErrorReason,
@@ -58,4 +60,83 @@ export function modelErrorMessage(reason: ModelErrorReason): string {
 
 export function languageErrorMessage(reason: LanguageFieldErrorReason): string {
   return LANGUAGE_ERROR_MESSAGES[reason];
+}
+
+/**
+ * Diagnóstico da conexão com o Ollama (RF01). Mensagens curtas; o passo a
+ * passo de `OLLAMA_ORIGINS` (ADR-007) fica na página de opções.
+ */
+export const OLLAMA_ERROR_MESSAGES: Readonly<Record<OllamaErrorKind, string>> = Object.freeze({
+  invalid_endpoint: 'Endereço do Ollama inválido. Corrija-o, por exemplo http://localhost:11434.',
+  invalid_model: 'Nome de modelo inválido. Use o nome exibido por "ollama list".',
+  network:
+    'Não foi possível conectar ao Ollama. Verifique se ele está aberto e se a porta está correta.',
+  timeout:
+    'O Ollama demorou demais para responder. Verifique se ele está em execução e tente novamente.',
+  forbidden:
+    'O Ollama recusou a conexão do Lerium (HTTP 403): a origem da extensão não está liberada em OLLAMA_ORIGINS, ou o Ollama não foi reiniciado depois de configurá-la.',
+  not_found:
+    'Algo respondeu nesse endereço, mas não parece ser o Ollama. Confira o host e a porta.',
+  http_error: 'O Ollama respondeu com erro. Tente novamente; se persistir, reinicie o Ollama.',
+  invalid_response:
+    'Algo respondeu nesse endereço, mas não parece ser o Ollama. Confira o host e a porta.',
+});
+
+/** Mensagem do erro de conexão; `status` HTTP é citado quando informado. */
+export function ollamaErrorMessage(error: OllamaErrorKind, status?: number): string {
+  if (error === 'http_error' && status !== undefined) {
+    return `O Ollama respondeu com erro HTTP ${status}. Tente novamente; se persistir, reinicie o Ollama.`;
+  }
+  return OLLAMA_ERROR_MESSAGES[error];
+}
+
+/**
+ * Códigos que a página de opções pode exibir após "Testar conexão": os do
+ * service worker mais `extension_error`, falha local ao falar com ele
+ * (worker inativo, extensão recarregada, resposta fora do contrato).
+ */
+export type ConnectionErrorKind = TestConnectionErrorKind | 'extension_error';
+
+export const CONNECTION_ERROR_MESSAGES: Readonly<Record<ConnectionErrorKind, string>> =
+  Object.freeze({
+    ...OLLAMA_ERROR_MESSAGES,
+    permission_required:
+      'O Lerium ainda não tem permissão para acessar esse endereço. Clique em "Testar conexão" para concedê-la.',
+    invalid_request:
+      'O serviço da extensão recusou o pedido. Confira o endereço e o modelo e tente de novo.',
+    extension_error:
+      'Não foi possível falar com o serviço da extensão. Recarregue o Lerium em chrome://extensions e tente de novo.',
+  });
+
+/** Mensagem de falha do teste de conexão; `status` HTTP é citado quando informado. */
+export function connectionErrorMessage(error: ConnectionErrorKind, status?: number): string {
+  if (error === 'http_error') return ollamaErrorMessage(error, status);
+  return CONNECTION_ERROR_MESSAGES[error];
+}
+
+/**
+ * Usuário negou a permissão opcional de host. `origin` vem de
+ * `normalizeEndpoint` (só loopback e porta numérica).
+ */
+export function permissionDeniedMessage(origin: string): string {
+  return `Sem permissão para acessar ${origin}, o Lerium não consegue falar com o Ollama nessa porta.`;
+}
+
+/**
+ * Modelo configurado ausente no Ollama (`/api/show` respondeu 404). O nome
+ * já passou pela allowlist de `validateModel`, então pode compor o comando
+ * sugerido.
+ */
+export function missingModelMessage(model: string): string {
+  return `O modelo "${model}" não está instalado no Ollama. Instale-o com: ollama pull ${model}`;
+}
+
+/** Resultado do botão "Testar conexão" quando o Ollama respondeu. */
+export function connectedMessage(count: number): string {
+  return `Conectado. ${count} modelo(s) encontrado(s).`;
+}
+
+/** Origem que o Ollama recebe no cabeçalho `Origin` das páginas da extensão. */
+export function extensionOrigin(extensionId: string): string {
+  return `chrome-extension://${extensionId}`;
 }

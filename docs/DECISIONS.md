@@ -55,6 +55,10 @@ persistente a sites.
 **Quando decidir.** Na Fase 1 (manifesto mínimo), com revisão na Fase 7
 (domínios excluídos e permissões opcionais).
 
+Nota: as permissões de loopback da ADR-009 (`localhost`/`127.0.0.1`) são
+de acesso à API local do Ollama, não de injeção em sites; não decidem esta
+ADR.
+
 ## ADR-003 — Estratégia de DOM para markup inline
 
 **Status:** Proposta
@@ -125,12 +129,87 @@ compatíveis (PLAN.md §8, item 9). O `package.json` da Fase 1 deve declarar
 `"license": "MIT"`. Esta decisão **não** altera a situação da licença da
 extensão de referência, que continua não confirmada (SCOPE.md).
 
+## ADR-007 — Origem da extensão no Ollama
+
+**Status:** Aceita (28/10/2026)
+
+Parcialmente substituída pela ADR-009 (host_permissions e diagnóstico; a sondagem no-cors foi removida).
+
+**Contexto.** RF01 e RF06 exigem que as páginas da extensão consultem o
+Ollama local (`GET /api/tags`, depois `POST /api/chat`). O Ollama valida o
+cabeçalho `Origin` contra uma lista de origens permitidas. Evidência medida na
+máquina do responsável (Ollama 0.40.12, `OLLAMA_ORIGINS` indefinido):
+
+- sem `Origin` → 200;
+- `Origin: chrome-extension://…` → 403;
+- `Origin` de um site → 403;
+- preflight (`OPTIONS`) → 403.
+
+Em instância temporária isolada, com `OLLAMA_ORIGINS=chrome-extension://<ID>`:
+
+- `Origin` com o ID liberado → 200;
+- outra extensão → 403;
+- site → 403;
+- preflight de `POST /api/chat` → 204, com `Access-Control-Allow-Origin`
+  restrito ao ID liberado.
+
+Ou seja, o padrão do Ollama recusa a extensão, e liberar apenas o ID do
+Lerium é suficiente e não abre acesso a sites nem a outras extensões.
+
+**Decisão.**
+
+- O usuário define `OLLAMA_ORIGINS=chrome-extension://<ID do Lerium>`. Se a
+  variável já tiver valores, o ID é **acrescentado** a eles, separado por
+  vírgula, sem remover origens existentes.
+- O ID é estável via campo `key` (chave pública) no manifesto. A chave
+  privada correspondente é descartada: não é necessária para carregar a
+  extensão sem empacotamento (unpacked). Empacotar como `.crx` ou publicar na
+  Chrome Web Store exigirá nova ADR; a CWS atribui ID próprio.
+- Sem `host_permissions` enquanto o teste no Chrome real não demonstrar
+  necessidade.
+
+**Alternativas rejeitadas.**
+
+- `OLLAMA_ORIGINS=chrome-extension://*`: qualquer extensão instalada poderia
+  ler prompts e chamar endpoints destrutivos (`/api/delete`, `/api/pull`).
+- Remover o `Origin` via `declarativeNetRequest`: desliga a proteção do
+  Ollama contra sites, o escopo da regra não foi comprovado e a permissão
+  pesa na revisão da CWS.
+- Native messaging ou proxy local: contraria a premissa "sem backend"
+  (PLAN.md §0 e RF07).
+
+**Consequências.** A configuração passa a ter um passo manual (definir a
+variável e reiniciar o Ollama), que a página de opções deve explicar quando a
+conexão for recusada. O ID muda se a `key` mudar; um teste fixa o ID
+esperado para detectar troca acidental. Validações pendentes no Chrome real:
+se o `Origin` é enviado em requisições `GET` das páginas da extensão e se o
+CORS funciona sem `host_permissions`.
+
+Riscos residuais e diagnóstico:
+
+- **A `key` é pública.** Qualquer extensão descompactada carregada com a
+  mesma `key` herda o ID do Lerium e teria acesso total ao Ollama liberado.
+  Mitigações: carregar o Lerium apenas a partir deste repositório; remover a
+  origem de `OLLAMA_ORIGINS` ao desinstalar; o ID mudará na publicação
+  (tratado em ADR futura).
+- **A liberação vale para a API inteira.** O Ollama não restringe origens por
+  rota; liberar a origem concede ao Lerium todos os endpoints, embora o
+  código só use `/api/tags` e `/api/chat`.
+- **O 403 é invisível ao `fetch`.** Sem `host_permissions`, a página está
+  sujeita a CORS: o 403 para origem não liberada vem sem
+  `Access-Control-Allow-Origin` e o `fetch` rejeita como erro de rede, igual
+  a um Ollama desligado. Para distinguir os casos, o cliente faz, após o erro
+  de rede, uma sondagem `GET` com `mode: 'no-cors'` dentro do mesmo prazo: se
+  ela resolver (resposta opaca, corpo não lido), o servidor está alcançável
+  e recusou a origem; se falhar, está inacessível. Não exige permissão
+  adicional.
+
 ## ADR-008 — Configurações locais por usuário
 
 **Status:** Aceita (28/10/2026)
 
-> Nota: o número 007 está reservado para a ADR sobre a origem das requisições
-> ao Ollama, que será registrada na branch `feat/ollama-discovery`.
+> Nota: o número 007 foi reservado para a ADR sobre a origem das requisições
+> ao Ollama, registrada acima como ADR-007.
 
 **Contexto.** RF01 exige persistir endpoint, modelo e idiomas, mantendo os
 valores após recarregar ou atualizar a extensão. A referência grava padrões
@@ -166,3 +245,77 @@ usuário fizer downgrade depois de uma versão futura ter gravado um schema
 maior, salvar aqui rebaixaria o número para 1 mantendo as chaves
 desconhecidas do schema novo. A migração entre versões (incluindo esse caso)
 será tratada quando existir o schema 2.
+
+## ADR-009 — Service worker como cliente HTTP e acesso ao Ollama em loopback
+
+**Status:** Aceita (29/10/2026)
+
+**Validação.** Chromium 156 (Playwright) com `dist/` carregado e Ollama 0.40.12 real na porta 11434, endpoint `http://localhost:11434`: sem `OLLAMA_ORIGINS` → mensagem de HTTP 403, seção de liberação revelada e foco no título; com o ID liberado → conectado e 4 modelos listados; modelo inexistente → aviso de `ollama pull`; Ollama desligado → mensagem de inacessível. Nenhum erro de console sobre `no-cors`, `Access-Control-Allow-Origin` ou modo de redirecionamento. O ID carregado é o fixo. Cenários também cobertos por E2E com mock (`tests/e2e`). Padrões de permissão usam porta explícita: `http://127.0.0.1:80/*` concede só a porta 80, enquanto `http://127.0.0.1/*` concederia todas (verificado com `chrome.permissions.contains`).
+
+**Contexto.** A sondagem `no-cors` da ADR-007 não funciona: no Chrome, um
+`fetch` com `mode: 'no-cors'` e `redirect: 'error'` é combinação proibida e
+rejeita na hora com `TypeError`. Todo erro virava `network`, a mensagem de
+origem recusada nunca aparecia e o foco nunca ia para a seção de instruções.
+Evidência medida no Chromium 156 (Playwright), com uma extensão de teste:
+
+- **Sem `host_permissions`**, um servidor que responde 403 sem CORS gera
+  `TypeError: Failed to fetch`, indistinguível de porta fechada, tanto no
+  service worker quanto na página da extensão.
+- **Com `host_permissions`**, o status 403 fica legível. O padrão
+  `http://127.0.0.1/*` (sem porta) cobre todas as portas.
+- Com `host_permissions`, o Chrome **não envia** `Origin` em `GET` (o servidor
+  viu o cabeçalho ausente) e **envia** `Origin: chrome-extension://<ID>` em
+  `POST`, no service worker e na página.
+- Sem `host_permissions`, o Chrome envia `Origin` em `GET` e faz preflight
+  `OPTIONS` antes de um `POST` JSON.
+
+No Ollama 0.40.12, em instância isolada:
+
+- sem `OLLAMA_ORIGINS`, `POST /api/show` com o `Origin` do Lerium → 403;
+- com o ID liberado → 200;
+- modelo inexistente → 404 `{"error":"model '...' not found"}`;
+- `qwen` sem tag → 200;
+- `GET /api/tags` sem `Origin` → 200, mesmo sem liberação.
+
+Conclusão: com `host_permissions`, `GET /api/tags` não prova que a origem
+está liberada. Só um `POST`, que leva o `Origin`, revela a recusa.
+
+**Decisão.**
+
+- O **service worker é o único cliente HTTP** do Ollama. Opções, popup e
+  content scripts enviam mensagens tipadas e validadas; o worker valida
+  remetente, endpoint e modelo antes de qualquer `fetch`.
+- `host_permissions`: exatamente `http://localhost:11434/*` e
+  `http://127.0.0.1:11434/*` (porta padrão).
+- `optional_host_permissions`: `http://localhost/*` e `http://127.0.0.1/*`.
+  A página de opções as solicita no gesto do usuário, apenas para a origem
+  exata de uma porta personalizada (ex.: `http://localhost:8080/*`).
+- Teste de conexão = `GET /api/tags` (alcance e lista de modelos) +
+  `POST /api/show` (somente leitura; envia `Origin`, prova a liberação e
+  verifica se o modelo configurado existe). O corpo de `/api/show` não é
+  lido nem repassado (modelfile, licença).
+- Sem `mode: 'no-cors'` em nenhum lugar.
+- O `Origin` continua sendo enviado no `POST`: as permissões de host **não**
+  contornam a proteção do Ollama. `OLLAMA_ORIGINS` com o ID do Lerium
+  continua obrigatório para `/api/show` e `/api/chat` (ADR-007).
+
+**Alternativas rejeitadas.**
+
+- Manter a sondagem `no-cors` sem `redirect: 'error'`: reabre o risco de
+  seguir redirecionamento para outro host e só distingue "alcançável", não
+  o motivo.
+- `host_permissions` amplas (`http://localhost/*` fixas, `<all_urls>`):
+  privilégio maior que o necessário para a porta padrão.
+- Diagnosticar só por `/api/tags`: com `host_permissions` ele responde 200
+  mesmo com a origem recusada, e o erro só apareceria na tradução.
+
+**Consequências.**
+
+- A instalação exibe aviso de permissão de acesso a `localhost` e
+  `127.0.0.1`; a revisão da Chrome Web Store avaliará essas permissões.
+- O manifesto ganha `background` (service worker) e as chaves de host;
+  o teste de manifesto fixa as listas exatas.
+- A ADR-007 fica parcialmente substituída: `host_permissions` e o
+  diagnóstico passam a seguir esta ADR; a sondagem `no-cors` foi removida.
+- Porta personalizada sem permissão concedida resulta em
+  `permission_required`, tratado pela página de opções.

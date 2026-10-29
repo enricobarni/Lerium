@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
+import type { OllamaErrorKind } from '../../src/core/ollama-client';
 import {
+  CONNECTION_ERROR_MESSAGES,
   ENDPOINT_ERROR_MESSAGES,
   LANGUAGE_ERROR_MESSAGES,
   MODEL_ERROR_MESSAGES,
+  OLLAMA_ERROR_MESSAGES,
+  connectedMessage,
+  connectionErrorMessage,
   endpointErrorMessage,
+  extensionOrigin,
   languageErrorMessage,
+  missingModelMessage,
   modelErrorMessage,
+  ollamaErrorMessage,
+  type ConnectionErrorKind,
 } from '../../src/options/messages';
 import type {
   EndpointErrorReason,
@@ -67,5 +76,100 @@ describe('mensagens de validação', () => {
     );
     expect(endpointErrorMessage('protocol')).toMatch(/http:\/\//);
     expect(endpointErrorMessage('protocol')).toMatch(/https/);
+  });
+});
+
+const OLLAMA_ERRORS: OllamaErrorKind[] = [
+  'invalid_endpoint',
+  'invalid_model',
+  'network',
+  'timeout',
+  'forbidden',
+  'not_found',
+  'http_error',
+  'invalid_response',
+];
+
+describe('mensagens de diagnóstico da conexão', () => {
+  it('cobre exatamente os erros do cliente do Ollama', () => {
+    expect(Object.keys(OLLAMA_ERROR_MESSAGES).sort()).toEqual([...OLLAMA_ERRORS].sort());
+  });
+
+  it.each(OLLAMA_ERRORS)('erro "%s" tem mensagem não vazia', (error) => {
+    expect(ollamaErrorMessage(error).trim()).not.toBe('');
+  });
+
+  it('forbidden cita o HTTP 403, OLLAMA_ORIGINS e o reinício, sem curinga', () => {
+    expect(ollamaErrorMessage('forbidden')).toBe(
+      'O Ollama recusou a conexão do Lerium (HTTP 403): a origem da extensão não está liberada em OLLAMA_ORIGINS, ou o Ollama não foi reiniciado depois de configurá-la.',
+    );
+    expect(ollamaErrorMessage('forbidden')).not.toContain('*');
+  });
+
+  it('network cobre Ollama desligado ou porta errada', () => {
+    expect(ollamaErrorMessage('network')).toBe(
+      'Não foi possível conectar ao Ollama. Verifique se ele está aberto e se a porta está correta.',
+    );
+  });
+
+  it('not_found e invalid_response indicam que não parece ser o Ollama', () => {
+    expect(ollamaErrorMessage('not_found')).toMatch(/não parece ser o Ollama/);
+    expect(ollamaErrorMessage('invalid_response')).toMatch(/não parece ser o Ollama/);
+  });
+
+  it('http_error inclui o status quando informado', () => {
+    expect(ollamaErrorMessage('http_error', 500)).toMatch(/500/);
+    expect(ollamaErrorMessage('http_error').trim()).not.toBe('');
+  });
+
+  it('modelo ausente cita o nome e o comando ollama pull', () => {
+    const message = missingModelMessage('translategemma:4b');
+    expect(message).toContain('"translategemma:4b"');
+    expect(message).toContain('ollama pull translategemma:4b');
+  });
+
+  it('conexão bem-sucedida informa a quantidade de modelos', () => {
+    expect(connectedMessage(3)).toBe('Conectado. 3 modelo(s) encontrado(s).');
+    expect(connectedMessage(0)).toBe('Conectado. 0 modelo(s) encontrado(s).');
+  });
+
+  it('monta a origem da extensão a partir do ID, sem curinga', () => {
+    const origin = extensionOrigin('mjkoppimccgajnabfeheglepjapkchlk');
+    expect(origin).toBe('chrome-extension://mjkoppimccgajnabfeheglepjapkchlk');
+    expect(origin).not.toContain('*');
+  });
+});
+
+const CONNECTION_ERRORS: ConnectionErrorKind[] = [
+  ...OLLAMA_ERRORS,
+  'permission_required',
+  'invalid_request',
+  'extension_error',
+];
+
+describe('mensagens do teste de conexão pelo service worker', () => {
+  it('cobre exatamente os códigos do worker e o erro local', () => {
+    expect(Object.keys(CONNECTION_ERROR_MESSAGES).sort()).toEqual([...CONNECTION_ERRORS].sort());
+  });
+
+  it.each(CONNECTION_ERRORS)('erro "%s" tem mensagem não vazia', (error) => {
+    expect(connectionErrorMessage(error).trim()).not.toBe('');
+  });
+
+  it('reaproveita as mensagens do cliente do Ollama', () => {
+    for (const error of OLLAMA_ERRORS) {
+      expect(connectionErrorMessage(error)).toBe(ollamaErrorMessage(error));
+    }
+    expect(connectionErrorMessage('http_error', 502)).toMatch(/502/);
+  });
+
+  it('extension_error orienta recarregar a extensão', () => {
+    expect(connectionErrorMessage('extension_error')).toBe(
+      'Não foi possível falar com o serviço da extensão. Recarregue o Lerium em chrome://extensions e tente de novo.',
+    );
+  });
+
+  it('permission_required pede o clique em "Testar conexão"', () => {
+    expect(connectionErrorMessage('permission_required')).toContain('"Testar conexão"');
   });
 });

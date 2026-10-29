@@ -33,13 +33,19 @@
             aria-describedby="endpoint-help endpoint-error"
           />
           <p id="endpoint-error" class="error"></p>
+          <div class="field-actions">
+            <button type="button" id="test-connection" class="secondary" aria-disabled="true">
+              Testar conexão
+            </button>
+          </div>
+          <p id="connection-status" role="status"></p>
         </div>
 
         <div class="field">
           <label for="model">Modelo</label>
           <p id="model-help" class="help">
-            Nome do modelo instalado no Ollama, como aparece em "ollama list". A lista de modelos
-            instalados virá em breve.
+            Nome do modelo instalado no Ollama, como aparece em "ollama list". Depois de testar a
+            conexão, você também pode escolhê-lo na lista de modelos instalados.
           </p>
           <input
             id="model"
@@ -47,9 +53,17 @@
             type="text"
             autocomplete="off"
             spellcheck="false"
-            aria-describedby="model-help model-error"
+            aria-describedby="model-help model-error model-warning"
           />
           <p id="model-error" class="error"></p>
+          <p id="model-warning" class="warning"></p>
+          <div id="installed-models-field" class="subfield" hidden>
+            <label for="installed-models">Modelos instalados</label>
+            <p id="installed-models-help" class="help">
+              Escolher um modelo da lista preenche o campo Modelo; ele continua editável.
+            </p>
+            <select id="installed-models" aria-describedby="installed-models-help"></select>
+          </div>
         </div>
 
         <div class="field">
@@ -91,6 +105,50 @@
       </form>
 
       <p id="feedback" role="status"></p>
+
+      <section id="origin-help" class="instructions" aria-labelledby="origin-help-title" hidden>
+        <h2 id="origin-help-title" tabindex="-1">Liberar o Lerium no Ollama</h2>
+        <p>
+          O Ollama recusou o Lerium: ele só aceita pedidos de origens liberadas na variável de
+          ambiente OLLAMA_ORIGINS. Faça isto uma vez.
+        </p>
+
+        <p class="origin">Origem do Lerium: <code id="extension-origin"></code></p>
+        <div class="field-actions">
+          <button type="button" id="copy-origin" class="secondary">Copiar origem</button>
+        </div>
+        <p id="copy-status" role="status"></p>
+
+        <h3>No Windows</h3>
+        <ol class="steps">
+          <li>
+            No menu Iniciar, pesquise e abra "Editar as variáveis de ambiente para sua conta".
+          </li>
+          <li>
+            Em "Variáveis de usuário", crie a variável OLLAMA_ORIGINS com a origem copiada como
+            valor, ou edite-a se ela já existir.
+          </li>
+          <li>
+            Se OLLAMA_ORIGINS já tiver um valor, não o apague: acrescente uma vírgula ao final e
+            cole a origem depois dela.
+          </li>
+          <li>Clique em OK para salvar.</li>
+          <li>
+            Feche o Ollama pelo ícone na bandeja do sistema (ao lado do relógio, em Sair ou "Quit
+            Ollama") e abra-o de novo, para que ele leia a variável.
+          </li>
+          <li>Volte a esta página e clique em "Testar conexão".</li>
+          <li>
+            Se já configurou e o erro continua, confirme que fechou o Ollama totalmente (ícone da
+            bandeja → Sair) antes de abrir de novo — o Ollama só lê a variável ao iniciar.
+          </li>
+        </ol>
+
+        <p class="warning">
+          Não use * nem chrome-extension://* como valor: com eles, qualquer site ou extensão
+          instalada poderia usar o seu Ollama.
+        </p>
+      </section>
     </main>
     <script type="module" src="./index.ts"></script>
   </body>

@@ -50,10 +50,9 @@ Publicação na Chrome Web Store; sincronização em nuvem; contas; backend; pag
 | Identificador de documento/job e reidratação | O service worker MV3 é suspenso e perde estado global; é preciso um ID comprovado e fonte de verdade fora do worker. | Fase 3/4, antes do scheduler. |
 | UX do resultado de seleção (RF02) | Balão na página independe do popup aberto; resultado no popup é mais simples, mas some ao fechar. | Fase 6. |
 | Detecção de idioma de origem | Heurísticas da referência são insuficientes; detectar vs fonte explícita (padrão `en`) muda UI e prompt. | Fase 2 (configuração) / Fase 6. |
-| Necessidade e restrição de CORS (`OLLAMA_ORIGINS`) | Não se sabe se o Ollama aceita a origem da extensão sem ajuste; se necessário, restringir à origem específica, nunca `*`. | Fase 2, testando a conexão real. |
 | Estratégia de merge de PRs | Squash simplifica o histórico, mas apaga commits atômicos; merge/rebase os preserva. Ver PLAN.md §5.1. | Fase 1, ao configurar o repositório remoto e a CI. |
 
-**Resolvida:** licença do próprio Lerium — MIT ([DECISIONS.md, ADR-006](DECISIONS.md)).
+**Resolvidas:** licença do próprio Lerium — MIT ([DECISIONS.md, ADR-006](DECISIONS.md)); CORS/origem no Ollama — `OLLAMA_ORIGINS` restrito ao ID da extensão ([DECISIONS.md, ADR-007](DECISIONS.md)).
 
 ## Referência observada e licença
 

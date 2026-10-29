@@ -1,7 +1,28 @@
 import { DEFAULT_SETTINGS, LANGUAGES } from '../core/constants';
+import { DEFAULT_LIST_MODELS_TIMEOUT_MS, hasModel } from '../core/ollama-client';
 import type { TranslationSettings } from '../core/types';
+import {
+  TEST_CONNECTION_MESSAGE_TYPE,
+  parseTestConnectionResponse,
+  type TestConnectionRequest,
+} from '../shared/runtime-messages';
+import { normalizeEndpoint, validateModel } from '../shared/validation';
 import { createSettingsRepository, type SettingsFieldErrors } from '../storage/settings-repository';
-import { endpointErrorMessage, languageErrorMessage, modelErrorMessage } from './messages';
+import {
+  describeConnectionResult,
+  hostPermissionPattern,
+  type ConnectionResult,
+  type ConnectionTone,
+  type ConnectionView,
+} from './connection-view';
+import {
+  endpointErrorMessage,
+  extensionOrigin,
+  languageErrorMessage,
+  missingModelMessage,
+  modelErrorMessage,
+  permissionDeniedMessage,
+} from './messages';
 
 const SAVED_MESSAGE = 'Configurações salvas.';
 const INVALID_MESSAGE = 'Não foi possível salvar. Corrija os campos indicados.';
@@ -10,6 +31,22 @@ const LOAD_ERROR =
   'Não foi possível ler as configurações salvas. O formulário mostra os valores padrão; ' +
   'salvar agora substituirá o que estiver gravado.';
 const RESTORED_MESSAGE = 'Valores padrão preenchidos. Clique em Salvar para gravá-los.';
+const TESTING_MESSAGE = 'Testando conexão…';
+const TEST_INVALID_MESSAGE = 'Corrija o endereço do Ollama para testar a conexão.';
+const TEST_INVALID_MODEL_MESSAGE = 'Corrija o nome do modelo para testar a conexão.';
+const INSTALLED_PLACEHOLDER = 'Escolha um modelo instalado';
+const COPIED_MESSAGE = 'Origem copiada. Cole-a no valor de OLLAMA_ORIGINS.';
+const COPY_ERROR =
+  'Não foi possível copiar automaticamente. Selecione a origem acima e copie com Ctrl+C.';
+
+/**
+ * Prazo da resposta do service worker: as duas requisições do teste
+ * (`/api/tags` e `/api/show`) têm prazo próprio no worker; a folga cobre o
+ * acordar do worker. Estourado, o worker não respondeu.
+ */
+const WORKER_TIMEOUT_MS = DEFAULT_LIST_MODELS_TIMEOUT_MS * 2 + 2000;
+
+const EXTENSION_ERROR: ConnectionResult = Object.freeze({ ok: false, error: 'extension_error' });
 
 type FieldName = keyof SettingsFieldErrors;
 
@@ -26,6 +63,16 @@ const form = byId('settings-form', HTMLFormElement);
 const saveButton = byId('save', HTMLButtonElement);
 const restoreButton = byId('restore', HTMLButtonElement);
 const feedback = byId('feedback', HTMLParagraphElement);
+const testButton = byId('test-connection', HTMLButtonElement);
+const connectionStatus = byId('connection-status', HTMLParagraphElement);
+const modelWarning = byId('model-warning', HTMLParagraphElement);
+const installedField = byId('installed-models-field', HTMLDivElement);
+const installedSelect = byId('installed-models', HTMLSelectElement);
+const originHelp = byId('origin-help', HTMLElement);
+const originHelpTitle = byId('origin-help-title', HTMLHeadingElement);
+const originCode = byId('extension-origin', HTMLElement);
+const copyButton = byId('copy-origin', HTMLButtonElement);
+const copyStatus = byId('copy-status', HTMLParagraphElement);
 
 const endpointInput = byId('endpoint', HTMLInputElement);
 const modelInput = byId('model', HTMLInputElement);
@@ -63,6 +110,30 @@ function setBusy(value: boolean): void {
   }
 }
 
+/**
+ * Bloqueia "Testar conexão" durante a leitura inicial e enquanto um teste
+ * roda; mesmo padrão de aria-disabled de `setBusy`. Salvar continua livre.
+ */
+let testing = true;
+
+function setTesting(value: boolean): void {
+  testing = value;
+  if (value) testButton.setAttribute('aria-disabled', 'true');
+  else testButton.removeAttribute('aria-disabled');
+}
+
+/** Modelos do último teste bem-sucedido; `undefined` se não houver lista válida. */
+let installedModels: readonly string[] | undefined;
+
+/** Modelo verificado por `/api/show` no último teste bem-sucedido. */
+let testedModel: { name: string; installed: boolean } | undefined;
+
+/** Identifica o teste mais recente; respostas de testes anteriores são ignoradas. */
+let testRun = 0;
+
+/** Há um teste de conexão vigente (não obsoleto) aguardando resposta. */
+let testInFlight = false;
+
 function populateLanguages(select: HTMLSelectElement): void {
   for (const language of LANGUAGES) {
     const option = document.createElement('option');
@@ -73,18 +144,238 @@ function populateLanguages(select: HTMLSelectElement): void {
 }
 
 function fillForm(settings: Readonly<TranslationSettings>): void {
+  const endpointChanged = endpointInput.value !== settings.endpoint;
   endpointInput.value = settings.endpoint;
   modelInput.value = settings.model;
   sourceSelect.value = settings.sourceLanguage;
   targetSelect.value = settings.targetLanguage;
+  if (endpointChanged) resetConnection();
+  else syncModelChoice();
+}
+
+function announceTo(region: HTMLElement, message: string): void {
+  // Limpa antes de escrever para que leitores de tela anunciem mensagens repetidas.
+  region.textContent = '';
+  requestAnimationFrame(() => {
+    region.textContent = message;
+  });
 }
 
 function announce(message: string): void {
-  // Limpa antes de escrever para que leitores de tela anunciem mensagens repetidas.
-  feedback.textContent = '';
-  requestAnimationFrame(() => {
-    feedback.textContent = message;
+  announceTo(feedback, message);
+}
+
+/**
+ * Sincroniza a lista de instalados e o aviso com o texto do campo Modelo,
+ * que é a fonte de verdade do que é salvo. O aviso não bloqueia o salvamento.
+ */
+function syncModelChoice(): void {
+  const models = installedModels;
+  const model = validateModel(modelInput.value);
+  if (!models || !model.ok) {
+    modelWarning.textContent = '';
+    installedSelect.value = '';
+    return;
+  }
+  installedSelect.value = models.find((name) => hasModel([name], model.value)) ?? '';
+  // `/api/show` é a fonte mais fiel para o modelo testado; os demais usam a lista.
+  const installed =
+    testedModel?.name === model.value ? testedModel.installed : hasModel(models, model.value);
+  modelWarning.textContent = installed ? '' : missingModelMessage(model.value);
+}
+
+function renderInstalledModels(models: readonly string[]): void {
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = INSTALLED_PLACEHOLDER;
+  const options = models.map((name) => {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = name;
+    return option;
   });
+  installedSelect.replaceChildren(placeholder, ...options);
+  // Sem modelos, uma lista só com o texto de escolha não ajuda; o aviso orienta.
+  installedField.hidden = models.length === 0;
+}
+
+/** Descarta o resultado de um teste anterior (ex.: o endereço mudou). */
+function resetConnection(): void {
+  testRun += 1;
+  // O teste em andamento ficou obsoleto: libera o botão já, sem esperar a resposta.
+  if (testInFlight) {
+    testInFlight = false;
+    setTesting(false);
+  }
+  installedModels = undefined;
+  testedModel = undefined;
+  installedField.hidden = true;
+  installedSelect.replaceChildren();
+  modelWarning.textContent = '';
+  setConnectionStatus('');
+}
+
+/**
+ * Escreve no status da conexão (região `role="status"`). O tom vira
+ * `data-tone`, usado só para estilo; o texto já diz o resultado.
+ */
+function setConnectionStatus(message: string, tone?: ConnectionTone): void {
+  if (tone) connectionStatus.dataset.tone = tone;
+  else delete connectionStatus.dataset.tone;
+  if (message === '') connectionStatus.textContent = '';
+  else announceTo(connectionStatus, message);
+}
+
+/** Esconde a seção de liberação da origem (após um teste bem-sucedido). */
+function hideOriginHelp(): void {
+  originHelp.hidden = true;
+  originHelpTitle.removeAttribute('aria-describedby');
+}
+
+/**
+ * Mostra a seção de liberação da origem. O título passa a ser descrito pelo
+ * status, para que o leitor de tela leia o motivo ao receber o foco. Com
+ * `focus`, rola e foca no próximo quadro, depois de o status ser escrito.
+ */
+function revealOriginHelp(focus: boolean, run: number): void {
+  originHelp.hidden = false;
+  originHelpTitle.setAttribute('aria-describedby', 'connection-status');
+  if (!focus) return;
+  requestAnimationFrame(() => {
+    // Um teste mais novo (ou endereço editado) cancela o salto de foco.
+    if (run !== testRun) return;
+    const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    originHelp.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+    originHelpTitle.focus({ preventScroll: true });
+  });
+}
+
+function applyConnectionView(view: ConnectionView, run: number): void {
+  setConnectionStatus(view.message, view.tone);
+  if (view.revealOriginHelp) revealOriginHelp(view.focusOriginHelp, run);
+  else if (view.tone === 'success') hideOriginHelp();
+  // Demais erros mantêm a seção como está: quem segue os passos e fecha o
+  // Ollama recebe "network" no meio do caminho e não deve perder as instruções.
+}
+
+function setEndpointError(message: string | undefined): void {
+  errorElements.endpoint.textContent = message ?? '';
+  if (message) endpointInput.setAttribute('aria-invalid', 'true');
+  else endpointInput.removeAttribute('aria-invalid');
+}
+
+function setModelError(message: string | undefined): void {
+  errorElements.model.textContent = message ?? '';
+  if (message) modelInput.setAttribute('aria-invalid', 'true');
+  else modelInput.removeAttribute('aria-invalid');
+}
+
+/**
+ * Pede o teste ao service worker, único cliente HTTP do Ollama (ADR-009).
+ * Nunca lança: worker ausente ("Receiving end does not exist"), prazo
+ * estourado ou resposta fora do contrato viram `extension_error`.
+ */
+async function requestConnectionTest(endpoint: string, model: string): Promise<ConnectionResult> {
+  const request: TestConnectionRequest = { type: TEST_CONNECTION_MESSAGE_TYPE, endpoint, model };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), WORKER_TIMEOUT_MS);
+  });
+  try {
+    const raw: unknown = await Promise.race([chrome.runtime.sendMessage(request), deadline]);
+    return parseTestConnectionResponse(raw) ?? EXTENSION_ERROR;
+  } catch {
+    return EXTENSION_ERROR;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Testa o endereço e o modelo digitados (não os salvos). `userInitiated` controla o foco:
+ * o teste automático ao abrir a página não deve mover o foco do usuário.
+ */
+async function testConnection(userInitiated: boolean): Promise<void> {
+  const endpoint = normalizeEndpoint(endpointInput.value);
+  resetConnection();
+  if (!endpoint.ok) {
+    setEndpointError(endpointErrorMessage(endpoint.reason));
+    setConnectionStatus(TEST_INVALID_MESSAGE, 'error');
+    if (userInitiated) endpointInput.focus();
+    return;
+  }
+  setEndpointError(undefined);
+  const model = validateModel(modelInput.value);
+  if (!model.ok) {
+    setModelError(modelErrorMessage(model.reason));
+    setConnectionStatus(TEST_INVALID_MODEL_MESSAGE, 'error');
+    if (userInitiated) modelInput.focus();
+    return;
+  }
+  setModelError(undefined);
+
+  const run = testRun;
+  testInFlight = true;
+  setTesting(true);
+  setConnectionStatus(TESTING_MESSAGE);
+  try {
+    const result = await requestConnectionTest(endpoint.value, model.value);
+    if (run !== testRun) return;
+    const view = describeConnectionResult(result, { userInitiated, model: model.value });
+    if (result.ok) {
+      installedModels = result.models;
+      testedModel = { name: model.value, installed: result.modelInstalled };
+      renderInstalledModels(result.models);
+      syncModelChoice();
+      // Mesmo valor que syncModelChoice calcula para o modelo testado.
+      modelWarning.textContent = view.modelWarning ?? '';
+    }
+    applyConnectionView(view, run);
+  } finally {
+    // Um teste obsoleto não mexe no botão de um teste mais novo.
+    if (run === testRun) {
+      testInFlight = false;
+      setTesting(false);
+    }
+  }
+}
+
+type PermissionOutcome = { granted: true } | { granted: false; message: string };
+
+/**
+ * Pede a permissão opcional de host para uma porta personalizada (ADR-009).
+ * Precisa ser a primeira operação assíncrona do clique: qualquer `await`
+ * antes dela consumiria o gesto do usuário e o Chrome recusaria o pedido.
+ * Endereço inválido ou porta padrão não pedem nada; a validação vem depois.
+ */
+async function requestHostPermission(): Promise<PermissionOutcome> {
+  const endpoint = normalizeEndpoint(endpointInput.value);
+  const pattern = endpoint.ok ? hostPermissionPattern(endpoint.value) : undefined;
+  if (!endpoint.ok || pattern === undefined) return { granted: true };
+  let granted: boolean;
+  try {
+    granted = await chrome.permissions.request({ origins: [pattern] });
+  } catch {
+    granted = false;
+  }
+  return granted
+    ? { granted: true }
+    : { granted: false, message: permissionDeniedMessage(endpoint.value) };
+}
+
+async function handleTestClick(): Promise<void> {
+  const permission = requestHostPermission();
+  // Bloqueia cliques repetidos enquanto o diálogo de permissão está aberto.
+  setTesting(true);
+  const outcome = await permission;
+  setTesting(false);
+  if (!outcome.granted) {
+    // Invalida um teste anterior e não revela a seção: o Ollama não foi consultado.
+    resetConnection();
+    setConnectionStatus(outcome.message, 'error');
+    return;
+  }
+  await testConnection(true);
 }
 
 function errorMessage(name: FieldName, errors: SettingsFieldErrors): string | undefined {
@@ -118,8 +409,15 @@ function showErrors(errors: SettingsFieldErrors): void {
 }
 
 async function handleSubmit(): Promise<void> {
+  const permission = requestHostPermission();
   setBusy(true);
   try {
+    const outcome = await permission;
+    if (!outcome.granted) {
+      // Sem a permissão a porta ficaria salva, mas inutilizável.
+      announce(outcome.message);
+      return;
+    }
     const result = await repository.save({
       endpoint: endpointInput.value,
       model: modelInput.value,
@@ -143,7 +441,21 @@ async function handleSubmit(): Promise<void> {
   }
 }
 
+async function copyOrigin(origin: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(origin);
+    announceTo(copyStatus, COPIED_MESSAGE);
+  } catch {
+    announceTo(copyStatus, COPY_ERROR);
+  }
+}
+
 async function init(): Promise<void> {
+  // Calculada em runtime: o ID vem da `key` do manifesto (ADR-007).
+  const origin = extensionOrigin(chrome.runtime.id);
+  originCode.textContent = origin;
+  copyButton.addEventListener('click', () => void copyOrigin(origin));
+
   populateLanguages(sourceSelect);
   populateLanguages(targetSelect);
   fillForm(DEFAULT_SETTINGS);
@@ -152,6 +464,17 @@ async function init(): Promise<void> {
     event.preventDefault();
     // Ignora submissões repetidas (Enter ou clique) enquanto houver leitura/gravação.
     if (!busy) void handleSubmit();
+  });
+  testButton.addEventListener('click', () => {
+    if (!testing) void handleTestClick();
+  });
+  endpointInput.addEventListener('input', resetConnection);
+  modelInput.addEventListener('input', syncModelChoice);
+  installedSelect.addEventListener('change', () => {
+    if (installedSelect.value === '') return;
+    modelInput.value = installedSelect.value;
+    setModelError(undefined);
+    syncModelChoice();
   });
   restoreButton.addEventListener('click', () => {
     // Sem isso, o load() inicial sobrescreveria os padrões restaurados.
@@ -173,6 +496,11 @@ async function init(): Promise<void> {
   } finally {
     setBusy(false);
   }
+
+  // Teste automático com o endereço carregado: só vai ao loopback, sem dados
+  // da página, e mostra de imediato a lista de modelos ou o motivo da falha.
+  setTesting(false);
+  await testConnection(false);
 }
 
 void init();

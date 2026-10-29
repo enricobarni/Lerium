@@ -16,9 +16,9 @@ concurrency:
 
 jobs:
   quality:
-    name: Lint, typecheck, test e build
+    name: Lint, typecheck, test, build e e2e
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -43,3 +43,11 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # E2E no Chromium do Playwright (headless), com a extensão de dist/ e o
+      # mock do Ollama em 127.0.0.1:11434; depende do build acima.
+      - name: Instalar Chromium do Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Testes E2E
+        run: npm run test:e2e
