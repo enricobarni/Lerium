@@ -32,3 +32,6 @@ npm-debug.log*
 # Arquivos do sistema operacional
 .DS_Store
 Thumbs.db
+
+# Worktrees temporárias criadas por agentes (git worktree), nunca versionadas
+.claude/worktrees/
