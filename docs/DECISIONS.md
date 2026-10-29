@@ -319,3 +319,73 @@ está liberada. Só um `POST`, que leva o `Origin`, revela a recusa.
   diagnóstico passam a seguir esta ADR; a sondagem `no-cors` foi removida.
 - Porta personalizada sem permissão concedida resulta em
   `permission_required`, tratado pela página de opções.
+
+## ADR-011 — Prompt de tradução para o TranslateGemma
+
+**Status:** Proposta (29/10/2026)
+
+> A ADR-010 está reservada para o protocolo entre service worker e páginas.
+
+**Contexto.** O RF05 exige um `PromptBuilder` versionado e independente de
+obra; o PLAN.md §9 pede um baseline curto, comparado por A/B manual com uma
+versão literária mais longa. O modelo padrão é `translategemma:4b`. Evidência
+medida no Ollama 0.40.12 (`ollama show translategemma:4b`):
+
+- arquitetura `gemma3`, 4,3B parâmetros, quantização Q4_K_M, contexto 131072;
+- parâmetros do modelfile: `stop "<end_of_turn>"`, `top_k 64`, `top_p 0.95`;
+  sem temperatura e **sem system prompt**; licença Gemma Terms of Use;
+- o template itera as mensagens: `user` **e** `system` viram ambos
+  `<start_of_turn>user\n{{content}}<end_of_turn>`; `assistant` vira
+  `<start_of_turn>model`; após a última mensagem abre `<start_of_turn>model`.
+
+Ou seja, não existe papel `system`: enviar system+user gera dois turnos de
+usuário seguidos, formato que o modelo não viu no treino.
+
+**Decisão.** Implementada em `src/core/prompt-builder.ts`.
+
+- **Mensagem única `user`**, com a instrução fixa primeiro e o texto da
+  página ao final; nenhuma mensagem `system`.
+- **Formato recomendado para o TranslateGemma** no model card do Google
+  (a confirmar no model card oficial): "You are a professional {Source}
+  ({src}) to {Target} ({tgt}) translator. … Please translate the following
+  {Source} text into {Target}:" seguido de três quebras de linha e do texto.
+  Sem frase literária adicional: o baseline fica fiel ao formato.
+- **Nomes de idioma em inglês** (`PROMPT_LANGUAGE_NAMES`, ex.: `pt-BR` →
+  "Brazilian Portuguese", `zh-CN` → "Simplified Chinese"), distintos dos
+  rótulos PT-BR da interface.
+- **Parâmetros:** `stream: true`; `temperature: 0.2` (o modelfile não define;
+  tradução pede estabilidade, sem o greedy puro);
+  `num_predict = clamp(ceil(chars/2), 256, 4096)`, folga de ~1,5–2× sobre a
+  entrada em línguas latinas, contra geração sem fim. `num_ctx` e `keep_alive` não são
+  definidos.
+- **Validação:** texto não vazio após trim (mas enviado sem alteração),
+  idiomas suportados, origem ≠ destino e modelo via `validateModel`; erros
+  como códigos.
+- **Versionamento:** `PROMPT_VERSION = 'v1-translategemma-baseline'`. Toda
+  mudança de texto ou de parâmetros cria nova versão; o teste fixa o
+  conteúdo por snapshot.
+- **Injeção de prompt:** o texto é dado. Defesa: instrução fixa antes, texto
+  uma única vez ao final e saída tratada como texto puro (`textContent`).
+
+**Alternativas rejeitadas.**
+
+- **system + user:** rejeitado pelo template; viraria dois turnos de usuário.
+- **Prompt literário longo:** adiado para A/B futuro (PLAN.md §9), como nova
+  versão; prompt mais longo não melhora necessariamente modelo especializado.
+- **Delimitadores XML** (`<text>…</text>`): nem o template nem o formato
+  recomendado os preveem; o modelo pode traduzi-los ou ecoá-los. O teste com
+  o modelo real decidirá se alguma delimitação extra é necessária.
+
+**Consequências.**
+
+- O pedido é específico do TranslateGemma; outros modelos podem exigir outro
+  formato (nova versão ou builder por família).
+- A instrução e o texto ficam no mesmo turno; a proteção depende da saída
+  ser sempre inserida como texto.
+
+**Validação pendente (antes de Aceitar).**
+
+- Confirmar o formato do prompt no model card oficial do TranslateGemma.
+- Rodar as fixtures literárias (PLAN.md §9) com o modelo real na branch do
+  serviço de tradução, incluindo texto com tentativa de injeção, e calibrar
+  `temperature` e `num_predict`.
