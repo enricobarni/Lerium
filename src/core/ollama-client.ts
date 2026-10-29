@@ -1,4 +1,5 @@
 import { normalizeEndpoint, validateModel } from '../shared/validation';
+import { createDeadlineScope, type DeadlineReason } from './deadline-scope';
 import { createNdjsonParser, type ParsedLine } from './ndjson-parser';
 import type { ChatRequest } from './prompt-builder';
 
@@ -76,82 +77,6 @@ function httpError(status: number): { ok: false; error: OllamaErrorKind; status:
   if (status === 403) return { ok: false, error: 'forbidden', status };
   if (status === 404) return { ok: false, error: 'not_found', status };
   return { ok: false, error: 'http_error', status };
-}
-
-/** Motivo que encerrou um escopo de prazo. O primeiro registrado vence. */
-type DeadlineReason<P extends string> =
-  { kind: 'timeout'; phase: P } | { kind: 'cancelled' } | { kind: 'consumer_error' };
-
-interface DeadlineScope<P extends string> {
-  /** Sinal a repassar ao `fetch`; aborta no primeiro motivo registrado. */
-  readonly signal: AbortSignal;
-  /** Arma (ou rearma, do zero) o prazo de `phase`. Ignorado após o abort. */
-  arm(phase: P, ms: number): void;
-  disarm(phase: P): void;
-  /** Registra o motivo (só o primeiro vale) e aborta o controller interno. */
-  fail(reason: DeadlineReason<P>): void;
-  reason(): DeadlineReason<P> | undefined;
-  /** Resolve quando o escopo aborta; para usar em `Promise.race`. */
-  readonly aborted: Promise<void>;
-  /** Limpa todos os timers e o listener do sinal externo. Idempotente. */
-  dispose(): void;
-}
-
-/**
- * Escopo de prazos com fases independentes (ex.: total, primeiro token,
- * ociosidade) sobre um único `AbortController`. Um sinal externo abortado,
- * antes ou durante o escopo, vira o motivo `cancelled`.
- */
-function createDeadlineScope<P extends string>(external?: AbortSignal): DeadlineScope<P> {
-  const controller = new AbortController();
-  const timers = new Map<P, ReturnType<typeof setTimeout>>();
-  let current: DeadlineReason<P> | undefined;
-  let resolveAborted: () => void = () => {};
-  const aborted = new Promise<void>((resolve) => {
-    resolveAborted = resolve;
-  });
-
-  const clearTimers = (): void => {
-    for (const timer of timers.values()) clearTimeout(timer);
-    timers.clear();
-  };
-  const fail = (reason: DeadlineReason<P>): void => {
-    if (current !== undefined) return;
-    current = reason;
-    clearTimers();
-    controller.abort();
-    resolveAborted();
-  };
-  const onExternalAbort = (): void => fail({ kind: 'cancelled' });
-
-  if (external?.aborted) fail({ kind: 'cancelled' });
-  else external?.addEventListener('abort', onExternalAbort, { once: true });
-
-  return {
-    signal: controller.signal,
-    arm(phase, ms) {
-      if (current !== undefined) return;
-      const previous = timers.get(phase);
-      if (previous !== undefined) clearTimeout(previous);
-      timers.set(
-        phase,
-        setTimeout(() => fail({ kind: 'timeout', phase }), ms),
-      );
-    },
-    disarm(phase) {
-      const timer = timers.get(phase);
-      if (timer === undefined) return;
-      clearTimeout(timer);
-      timers.delete(phase);
-    },
-    fail,
-    reason: () => current,
-    aborted,
-    dispose() {
-      clearTimers();
-      external?.removeEventListener('abort', onExternalAbort);
-    },
-  };
 }
 
 const TIMED_OUT: unique symbol = Symbol('timeout');
