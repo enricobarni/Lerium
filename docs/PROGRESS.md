@@ -5,12 +5,22 @@
 
 ## Estado atual
 
-- **Fase:** 2 — Configurações e conexão local
-- **Tarefa:** `feat/ollama-discovery` em revisão (última branch da Fase 2)
-- **Mesclado na Fase 2:** #9 (`feat/settings-storage`), com aceite manual do responsável (persistência após recarregar, erros de campo)
-- **Versão:** `0.0.1` (`0.1.0` ao concluir a conexão com o Ollama, PLAN.md §5.4)
+- **Fase:** 3 — Motor de tradução e streaming (planejamento)
+- **Tarefa:** `chore/release-0.1.0` em revisão
+- **Versão:** `0.1.0` (esqueleto + conexão com o Ollama, PLAN.md §5.4; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.1.0` pendente de autorização do responsável.
+- **Fase 2:** concluída — PRs #9 e #10 mesclados; aceite manual do responsável no Chrome estável (conexão, modelos listados, Ollama fechado)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
+
+## Fase 2 — `chore/release-0.1.0`
+
+| Commit | Mensagem |
+|---|---|
+| `65bf52b` | `chore(release): versiona 0.1.0` |
+| `6cda38d` | `docs(changelog): registra a versão 0.1.0` |
+| (este commit) | `docs(progress): encerra a fase 2 na versão 0.1.0` |
+
+**Validações:** lint, typecheck, test (398/398) e build com código 0; `package.json`, lockfile e manifesto em `0.1.0` (teste de manifesto exige igualdade).
 
 ## Fase 2 — `feat/ollama-discovery`
 
@@ -72,7 +82,7 @@
 - Sem `host_permissions`, o 403 do Ollama chega ao `fetch` como erro de rede (CORS). O cliente faz uma sondagem `no-cors`: servidor alcançável → `forbidden`; inalcançável → `network`.
 - Página de opções testa o endereço salvo ao abrir (só loopback, sem dados da página) e o digitado ao clicar; o campo de texto do modelo segue como valor salvo, com `<select>` auxiliar.
 
-**Pendente (gate da Fase 2):** `OLLAMA_ORIGINS` já definido pelo responsável (verificado: contém o ID, sem curinga). Falta: fechar o Ollama pela bandeja (Quit), abrir de novo e confirmar no Chrome estável os cenários abaixo. Roteiro original: responsável define `OLLAMA_ORIGINS=chrome-extension://mjkoppimccgajnabfeheglepjapkchlk`, reinicia o Ollama e confirma no Chrome: (1) antes de liberar, "Testar conexão" mostra a mensagem de origem recusada; (2) depois, `translategemma:4b` é listado; (3) com o Ollama fechado, mensagem de Ollama inacessível. Também: copiar origem e navegação por teclado. Interface de opções sem teste automatizado de DOM (previsto para a Fase 4).
+**Gate da Fase 2:** aprovado pelo responsável no Chrome estável após reiniciar o Ollama: conexão estabelecida, `translategemma:4b` listado, Ollama fechado com mensagem de inacessível.
 
 ## Fase 2 — `feat/settings-storage`
 
@@ -226,4 +236,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Após o gate da Fase 2: registrar a versão `0.1.0` (PLAN.md §5.4) e iniciar a Fase 3 — `feat/ollama-chat` (`TranslationProvider` e cliente `/api/chat` sem DOM).
+Fase 3 — motor de tradução: planejamento pelo architect em andamento; primeira branch prevista `feat/ollama-chat` (`TranslationProvider` e cliente `/api/chat` com streaming, sem DOM).
