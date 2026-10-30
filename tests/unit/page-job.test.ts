@@ -28,10 +28,20 @@ const SETTINGS: TranslationSettings = {
   targetLanguage: 'pt-BR',
 };
 
+/** Documento em que o worker injetou o content script, por aba. */
+const INJECTED_DOCUMENTS = new Map([
+  [7, 'DOC-7'],
+  [8, 'DOC-8'],
+]);
+const isInjectedDocument = (tabId: number, documentId: string): boolean =>
+  INJECTED_DOCUMENTS.get(tabId) === documentId;
+
 const VALID_SENDER: PortSenderLike = {
   id: RUNTIME_ID,
   url: 'https://example.com/novel/chapter-1',
   frameId: 0,
+  documentId: 'DOC-7',
+  documentLifecycle: 'active',
   tab: { id: 7 },
 };
 
@@ -106,6 +116,7 @@ function setup(overrides: Partial<PageJobDeps> = {}) {
   const loadSettings = vi.fn(async () => SETTINGS);
   const handler = createPageJobHandler({
     runtimeId: RUNTIME_ID,
+    isInjectedDocument,
     loadSettings,
     createProvider,
     ...overrides,
@@ -143,12 +154,18 @@ describe('createPageJobHandler — remetente', () => {
     ['documento em prerender', { ...VALID_SENDER, documentLifecycle: 'prerender' }],
     ['documento no bfcache', { ...VALID_SENDER, documentLifecycle: 'cached' }],
     ['documento pendente de exclusão', { ...VALID_SENDER, documentLifecycle: 'pending_deletion' }],
+    ['documentLifecycle ausente', { ...VALID_SENDER, documentLifecycle: undefined }],
+    ['documentId ausente', { ...VALID_SENDER, documentId: undefined }],
+    ['documentId não registrado', { ...VALID_SENDER, documentId: 'DOC-OUTRO' }],
+    ['documentId de outra aba', { ...VALID_SENDER, documentId: 'DOC-8' }],
+    ['aba sem injeção registrada', { ...VALID_SENDER, tab: { id: 9 }, documentId: 'DOC-7' }],
   ];
 
   it.each(cases)('recusa %s sem responder', async (_label, sender, name) => {
     const loadSettings = vi.fn(async () => SETTINGS);
     const handler = createPageJobHandler({
       runtimeId: RUNTIME_ID,
+      isInjectedDocument,
       loadSettings,
       createProvider: () => createFakeProvider().provider,
     });
@@ -165,6 +182,7 @@ describe('createPageJobHandler — remetente', () => {
   it('aceita frame principal http', () => {
     const handler = createPageJobHandler({
       runtimeId: RUNTIME_ID,
+      isInjectedDocument,
       loadSettings: async () => SETTINGS,
       createProvider: () => createFakeProvider().provider,
     });
@@ -177,6 +195,7 @@ describe('createPageJobHandler — remetente', () => {
   it('aceita documento ativo', () => {
     const handler = createPageJobHandler({
       runtimeId: RUNTIME_ID,
+      isInjectedDocument,
       loadSettings: async () => SETTINGS,
       createProvider: () => createFakeProvider().provider,
     });
@@ -281,6 +300,7 @@ describe('createPageJobHandler — tradução', () => {
   it('provedor que rejeita vira internal_error', async () => {
     const handler = createPageJobHandler({
       runtimeId: RUNTIME_ID,
+      isInjectedDocument,
       loadSettings: async () => SETTINGS,
       createProvider: () => ({ translate: () => Promise.reject(new Error('boom')) }),
     });
@@ -513,7 +533,7 @@ describe('createPageJobHandler — progresso', () => {
 });
 
 describe('createPageJobHandler — uma port por aba', () => {
-  const otherTab: PortSenderLike = { ...VALID_SENDER, tab: { id: 8 } };
+  const otherTab: PortSenderLike = { ...VALID_SENDER, tab: { id: 8 }, documentId: 'DOC-8' };
 
   it('nova port da mesma aba derruba a anterior e aborta a unidade em voo', async () => {
     const { handler, port: first, calls } = setup();

@@ -55,6 +55,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
 chrome.runtime.onConnect.addListener(
   createPageJobHandler({
     runtimeId: chrome.runtime.id,
+    isInjectedDocument: (tabId, documentId) => injectionRegistry.isInjected(tabId, documentId),
     loadSettings: () => settingsRepository.load().catch(() => null),
     createProvider: (settings) =>
       createOllamaTranslationProvider({
