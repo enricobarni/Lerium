@@ -132,9 +132,10 @@ sem nenhuma saída boa recusada por elas.
 - A aplicação no DOM e a restauração exata ficam em `feat/page-translation`.
 - O caminho de texto puro tem o mesmo risco de omissão; uma checagem de
   tamanho plausível equivalente entra junto com a aplicação.
-- O limite inferior de 0,25 pode recusar uma tradução CJK muito concisa
-  (uma frase de teste em chinês ficou em 0,28); nesse caso o bloco vai nó a
-  nó, o que é seguro.
+- O limite inferior de 0,25 pode recusar uma tradução CJK concisa e legítima
+  (uma frase em zh-CN ficou em 0,17 na revisão); nesse caso o bloco vai nó a
+  nó, o que é seguro. Ajustar o piso por idioma fica para quando houver
+  medição com destino CJK.
 
 ## ADR-004 — Identidade de job/documento e estado de sessão
 

@@ -46,8 +46,9 @@
  *   run marcado cuja fração das letras da saída passa de
  *   `GROWTH_FACTOR × fração na entrada + GROWTH_SLACK`.
  * Os limites são conservadores: um destino CJK (ja, ko, zh-CN) usa bem menos
- * letras por significado que um latino (um ideograma ≈ uma palavra), e a
- * razão inferior de 0,25 foi escolhida para não recusar essas traduções; a
+ * letras por significado que um latino (um ideograma ≈ uma palavra); a razão
+ * inferior de 0,25 reduz, mas não elimina, recusas de traduções CJK concisas
+ * (uma frase em zh-CN chegou a 0,17), que então vão nó a nó com segurança; a
  * folga absoluta de `run_growth` deixa passar adjetivo deslocado e nome
  * próprio que cresce na tradução. Texto curto fica fora das heurísticas.
  *
