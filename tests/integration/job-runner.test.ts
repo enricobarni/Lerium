@@ -1,12 +1,46 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import {
   createJobRunner,
+  isSendableUnit,
   PING_INTERVAL_MS,
   type JobRunner,
   type JobState,
 } from '../../src/content/job-runner';
-import { PAGE_JOB_PORT_NAME, type JobUnitMessage } from '../../src/shared/page-messages';
+import type { SegmentPlan } from '../../src/content/page-applier';
+import {
+  MAX_UNIT_CHARS,
+  MAX_UNIT_ID_CHARS,
+  PAGE_JOB_PORT_NAME,
+  type JobUnitMessage,
+} from '../../src/shared/page-messages';
 import type { PortLike } from '../../src/shared/port-like';
+
+/**
+ * Gancho para alterar o plano real do applier num teste: o planejamento não
+ * gera unidades fora do contrato, então a única forma de exercitar a recusa
+ * antes do envio é adulterar o plano. `null` = applier sem alteração.
+ */
+const planHook = vi.hoisted(() => ({
+  transform: null as ((plan: SegmentPlan) => SegmentPlan) | null,
+}));
+
+vi.mock('../../src/content/page-applier', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/content/page-applier')>();
+  return {
+    ...actual,
+    createPageApplier: () => {
+      const applier = actual.createPageApplier();
+      return {
+        ...applier,
+        plan: (segment: Parameters<typeof applier.plan>[0]) => {
+          const plan = applier.plan(segment);
+          const transform = planHook.transform;
+          return transform === null || 'skipped' in plan ? plan : transform(plan);
+        },
+      };
+    },
+  };
+});
 
 const JOB_IDS = [
   '00000000-0000-4000-8000-000000000001',
@@ -194,6 +228,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  planHook.transform = null;
   for (const spy of consoleSpies) {
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
@@ -430,6 +465,68 @@ describe('createJobRunner — falhas de unidade e fallback', () => {
       skipped: 0,
     });
     expect(unitsOf(fake)).toHaveLength(4);
+  });
+
+  it('isSendableUnit segue o contrato aceito pelo service worker', () => {
+    expect(isSendableUnit({ unitId: 'seg-0#text@0', text: 'a'.repeat(MAX_UNIT_CHARS) })).toBe(true);
+    expect(isSendableUnit({ unitId: 'seg-0#text@0', text: 'a'.repeat(MAX_UNIT_CHARS + 1) })).toBe(
+      false,
+    );
+    expect(isSendableUnit({ unitId: 'seg 0', text: 'a' })).toBe(false);
+    expect(isSendableUnit({ unitId: 'a'.repeat(MAX_UNIT_ID_CHARS + 1), text: 'a' })).toBe(false);
+  });
+
+  it('unidade fora do contrato não é enviada: segmento falha e o job segue', () => {
+    planHook.transform = (plan) =>
+      plan.segmentId !== 'seg-0'
+        ? plan
+        : {
+            ...plan,
+            units: plan.units.map((unit) => ({ ...unit, text: 'a'.repeat(MAX_UNIT_CHARS + 1) })),
+          };
+    const document = parse('<p>First line.</p><p>Second line.</p>');
+    const { runner, port } = setup(document);
+    runner.start();
+    const fake = port();
+
+    expect(unitsOf(fake)).toHaveLength(1);
+    expect(unitsOf(fake)[0]?.unitId).toMatch(/^seg-1#text@/);
+    expect(runner.getState()).toMatchObject({ status: 'translating', failed: 1 });
+    fake.runToEnd(upperCase);
+
+    expect(unitsOf(fake).every((unit) => unit.text.length <= MAX_UNIT_CHARS)).toBe(true);
+    expect(bodyHtml(document)).toBe('<p>First line.</p><p>SECOND LINE.</p>');
+    expect(runner.getState()).toEqual({
+      status: 'translated',
+      total: 2,
+      done: 1,
+      failed: 1,
+      skipped: 0,
+    });
+  });
+
+  it('unitId inválido não é enviado e um job só com ele termina sem esperar', () => {
+    planHook.transform = (plan) => ({
+      ...plan,
+      units: plan.units.map((unit) => ({ ...unit, unitId: `${unit.unitId} inválido` })),
+    });
+    const document = parse('<p>Only line.</p>');
+    const before = serialize(document);
+    const { runner, port } = setup(document);
+    runner.start();
+    const fake = port();
+
+    expect(unitsOf(fake)).toHaveLength(0);
+    expect(serialize(document)).toBe(before);
+    expect(runner.getState()).toEqual({
+      status: 'translated',
+      total: 1,
+      done: 0,
+      failed: 1,
+      skipped: 0,
+    });
+    expect(fake.disconnected()).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('conta segment_too_long em skipped sem enviar o texto', () => {

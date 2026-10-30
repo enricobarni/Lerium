@@ -13,10 +13,13 @@
  * Regras:
  * - Toda mensagem recebida passa por `parseWorkerToContent`; é descartada se
  *   o `jobId` não é o do job atual ou se o `unitId` não é o da unidade em voo.
+ * - Unidade que o service worker recusaria (texto acima de `MAX_UNIT_CHARS`
+ *   ou `unitId` inválido) não é enviada: vira resultado `null` na hora.
  * - `ok: false` vira resultado `null` para a unidade; o applier decide
  *   (`translation_failed`, o segmento fica no original). `busy` segue a
- *   mesma regra: com concorrência 1 por design, um `busy` indica outro job
- *   no service worker, e reenviar só esconderia o conflito.
+ *   mesma regra: a concorrência no service worker é por porta, e `busy` só
+ *   ocorre se a mesma porta enviar duas unidades ao mesmo tempo — o que este
+ *   runner não faz; se acontecer, é falha, e reenviar só esconderia o erro.
  * - `job:fatal` → `error` com o código; desconecta; segmentos ainda não
  *   aplicados ficam no original.
  * - Desconexão não pedida com trabalho pendente → `error` `interrupted`; o
@@ -30,10 +33,10 @@
  * vez só, pelo resultado final.
  */
 
-import { parseWorkerToContent } from '../shared/page-messages';
+import { isUnitId, MAX_UNIT_CHARS, parseWorkerToContent } from '../shared/page-messages';
 import type { PortLike } from '../shared/port-like';
 import { collectTextNodes } from './dom-collector';
-import { createPageApplier, type SegmentPlan } from './page-applier';
+import { createPageApplier, type SegmentPlan, type TranslationUnit } from './page-applier';
 import { segmentTextNodes } from './segmenter';
 
 export type JobStatus = 'idle' | 'translating' | 'translated' | 'cancelled' | 'error';
@@ -89,6 +92,16 @@ interface ActiveJob {
   readonly onDisconnect: () => void;
 }
 
+/**
+ * A unidade passa no `parseContentToWorker` do service worker? Uma que não
+ * passa vira resultado `null` sem ser enviada (o segmento cai em
+ * `translation_failed`), em vez de deixar o job esperando uma resposta que
+ * nunca vem.
+ */
+export function isSendableUnit(unit: TranslationUnit): boolean {
+  return unit.text.length <= MAX_UNIT_CHARS && isUnitId(unit.unitId);
+}
+
 const IDLE: JobState = { status: 'idle', total: 0, done: 0, failed: 0, skipped: 0 };
 
 export function createJobRunner(deps: JobRunnerDeps): JobRunner {
@@ -136,6 +149,12 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       const current = job.current;
       const unit = current.plan.units[current.index];
       if (unit !== undefined) {
+        if (!isSendableUnit(unit)) {
+          // O service worker descartaria em silêncio e não haveria resposta.
+          current.results.set(unit.unitId, null);
+          current.index += 1;
+          continue;
+        }
         job.pendingUnitId = unit.unitId;
         try {
           job.port.postMessage({
