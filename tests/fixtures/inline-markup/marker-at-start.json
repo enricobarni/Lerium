@@ -1,0 +1,18 @@
+{
+  "id": "marker-at-start",
+  "source": "en",
+  "target": "pt-BR",
+  "layout": {
+    "runs": [
+      {
+        "text": "Impossible.",
+        "path": [1]
+      },
+      {
+        "text": " The old man's sword had stopped an inch from her throat.",
+        "path": []
+      }
+    ]
+  },
+  "notes": "Texto autoral. O parágrafo começa com <em>: não há run externo antes do primeiro marcador, então texto que o modelo antepuser vira orphan_text."
+}

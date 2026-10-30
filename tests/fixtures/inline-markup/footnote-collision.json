@@ -1,0 +1,22 @@
+{
+  "id": "footnote-collision",
+  "source": "en",
+  "target": "pt-BR",
+  "layout": {
+    "runs": [
+      {
+        "text": "The ancient script spoke of the ",
+        "path": []
+      },
+      {
+        "text": "Ninth Gate",
+        "path": [1]
+      },
+      {
+        "text": "[1], though no scholar had ever found it.",
+        "path": []
+      }
+    ]
+  },
+  "notes": "Texto autoral. Contém \"[1]\" de nota de rodapé: colide com o formato square (encode_null esperado) e não com os demais, onde avalia se o modelo preserva a nota como texto."
+}

@@ -1,0 +1,38 @@
+{
+  "id": "long-paragraph",
+  "source": "en",
+  "target": "pt-BR",
+  "layout": {
+    "runs": [
+      {
+        "text": "The rain had not stopped for three days, and the village of Hollow Reed had begun to smell of wet straw and old smoke. Aren walked the market road twice before he found the stall the letter had described: a crooked awning, a lantern with a green shade, and an old woman who did not look up when he approached. ",
+        "path": []
+      },
+      {
+        "text": "You are late",
+        "path": [1]
+      },
+      {
+        "text": ", she said, sliding a wooden box across the counter. Inside, wrapped in faded silk, lay the ",
+        "path": []
+      },
+      {
+        "text": "Moonwell Compass",
+        "path": [2]
+      },
+      {
+        "text": " his master had spoken of on the night he died. Aren reached for it, then hesitated. The needle was not pointing north. It was pointing at him, and beneath the glass someone had scratched a single word: ",
+        "path": []
+      },
+      {
+        "text": "remember",
+        "path": [3]
+      },
+      {
+        "text": ". He did not know what it meant.",
+        "path": []
+      }
+    ]
+  },
+  "notes": "Texto autoral. Parágrafo longo de narração com três wrappers espaçados (fala em <em>, nome de artefato em <strong>, palavra final em <em>); avalia se o modelo mantém marcadores em contexto longo."
+}
