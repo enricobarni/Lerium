@@ -35,7 +35,7 @@ usuário; não há backend próprio.
 |---|---|---|
 | `content` | Acessa o DOM, coleta e segmenta texto, aplica traduções, guarda e restaura o original, observa visibilidade/mutações, exibe overlay de progresso e mantém a máquina de estados por documento. | Chamar a API do Ollama diretamente; inserir saída do modelo via `innerHTML`; executar scripts ou instruções vindas da página. |
 | `background` (service worker) | Roteia mensagens, valida jobs e configuração, chama o cliente Ollama, propaga cancelamentos (`AbortController`) e registra menus de contexto. | Usar variáveis globais como fonte de verdade de estado (o worker MV3 pode ser suspenso a qualquer momento); acessar o DOM das páginas; sobrescrever configurações em `onInstalled`. |
-| `core` | Tipos/contratos, `PromptBuilder` versionado, `TranslationService`, adaptador `TranslationProvider` + `OllamaClient`, scheduler e parser NDJSON. | Depender de DOM ou de APIs do Chrome; manter estado de UI. Deve ser testável em isolamento. |
+| `core` | Tipos/contratos, `PromptBuilder` versionado, contrato `TranslationProvider` e seu adaptador sobre o `OllamaClient` (`createOllamaTranslationProvider`), escopo de prazos, parser NDJSON e, na Fase 5, o scheduler. | Depender de DOM ou de APIs do Chrome; manter estado de UI. Deve ser testável em isolamento. |
 | `popup` / `options` | Apresentação, comandos do usuário e validação de entrada em PT-BR. | Conter lógica de tradução, prompt ou `fetch` próprios (todas as entradas usam o mesmo motor); precisar permanecer aberto para a tradução concluir. |
 | `storage` | Preferências em `chrome.storage.local` com defaults e migrações não destrutivas; estado mínimo de sessão em `chrome.storage.session`. | Persistir conteúdo traduzido ou original das páginas por padrão; apagar preferências existentes em atualizações. |
 
@@ -55,6 +55,43 @@ Tipos compartilhados previstos (definidos em código a partir das Fases 2 e 3):
 
 Tipos de compilação não bastam: toda mensagem recebida (e toda resposta do
 Ollama) passa por validação em runtime antes de ser usada.
+
+## Motor de tradução (Fase 3)
+
+Implementado em `src/core`, sem DOM e sem `chrome` (testável no Node):
+
+```text
+TranslationProvider.translate(input, { signal, onToken })
+  -> buildChatRequest (PromptBuilder, ADR-011)
+  -> chatStream (POST /api/chat, parser NDJSON, prazos)
+  -> TranslationResult { ok, text | error, retryable }
+```
+
+- **Contrato** (`translation-provider.ts`): `translate` nunca lança; em erro não há texto parcial, e o consumidor descarta o que recebeu por `onToken` (RF06: o original é preservado). Cada provider nasce com um snapshot de endpoint e modelo.
+- **Prazos** (`deadline-scope.ts`): `total` 300 s (nunca reinicia), `first_token` 120 s (cobre a carga do modelo) e `idle` 30 s entre trechos (só após o primeiro). O primeiro motivo de parada vence: prazo, cancelamento ou erro do consumidor.
+- **Cliente único:** só `ollama-translation-provider.ts` usa `chatStream`, e `fetch` só é chamado em `background/index.ts`; um teste varre `src/` para garantir isso (Gate da Fase 3).
+
+**Erros do provider** (`retryable` = a fila ou o usuário podem repetir a mesma chamada):
+
+| Origem | `TranslationErrorKind` | `retryable` |
+|---|---|---|
+| endpoint, modelo ou idiomas inválidos | `invalid_config` | não |
+| texto vazio ou entrada/opções inválidas | `invalid_input` | não |
+| Ollama inacessível, stream interrompido | `network` | sim |
+| prazo estourado (qualquer fase) | `timeout` | sim |
+| HTTP 429 ou 5xx | `http_error` | sim |
+| outro HTTP 4xx | `http_error` | não |
+| HTTP 403 (origem recusada) | `forbidden` | não |
+| HTTP 404 (modelo ausente) | `model_missing` | não |
+| `{ error }` no stream | `provider_error` | não |
+| resposta malformada | `invalid_response` | não |
+| `done_reason: length` | `truncated` | não |
+| resposta vazia | `empty_response` | não |
+| cancelado | `cancelled` | não |
+| `onToken` lançou | `consumer_error` | não |
+| falha inesperada do Lerium | `internal_error` | não |
+
+**Nova tentativa automática:** no máximo uma, após 500 ms canceláveis, só para `network`, stream interrompido e HTTP 429/5xx, e só se nenhum trecho foi entregue a `onToken` e o sinal não foi abortado. `timeout` não tem nova tentativa interna (dobraria uma espera de até 120 s); fica para a fila (Fase 5) ou o usuário.
 
 ## Estados de tradução
 

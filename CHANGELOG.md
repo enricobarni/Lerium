@@ -6,6 +6,11 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e o 
 
 ## [Não lançado]
 
+### Adicionado
+
+- Motor de tradução local sobre o Ollama, ainda sem interface: chat em streaming com prazos e cancelamento, prompt versionado para o TranslateGemma ([ADR-011](docs/DECISIONS.md)), nova tentativa conservadora para falhas passageiras e erros classificados.
+- Fixtures literárias próprias e teste manual opt-in com o modelo real (`npm run test:manual`).
+
 ## [0.1.0] - 2026-10-29
 
 Esqueleto funcional e conexão com o Ollama local. A extensão ainda **não traduz**.

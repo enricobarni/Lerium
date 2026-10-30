@@ -9,6 +9,13 @@ import type { LanguageCode } from './types';
 /**
  * Códigos de erro de uma tradução. Nunca carregam texto da página, do modelo
  * nem mensagens do Ollama: a interface traduz o código em PT-BR.
+ *
+ * - `invalid_input`: o segmento não é utilizável (não é objeto, texto
+ *   ausente ou vazio, pedido não serializável) ou as opções são inválidas
+ *   (`signal` que não é `AbortSignal`, `onToken` que não é função);
+ * - `consumer_error`: o `onToken` do consumidor lançou;
+ * - `internal_error`: falha inesperada do próprio Lerium; não é culpa do
+ *   texto nem das opções. Não repetível (`retryable: false`).
  */
 export type TranslationErrorKind =
   | 'invalid_config'
@@ -21,7 +28,10 @@ export type TranslationErrorKind =
   | 'invalid_response'
   | 'truncated'
   | 'empty_response'
-  | 'cancelled';
+  | 'cancelled'
+  | 'invalid_input'
+  | 'consumer_error'
+  | 'internal_error';
 
 /** Um segmento a traduzir. `text` é dado não confiável da página. */
 export interface TranslationInput {
@@ -43,9 +53,13 @@ export interface TranslateOptions {
 }
 
 /**
- * Resultado de `translate`. Em erro não há texto parcial; `retryable` indica
- * se uma nova tentativa idêntica pode ter sucesso (rede, prazo), e `status`
- * traz o código HTTP quando houver.
+ * Resultado de `translate`. Em erro não há texto parcial e `status` traz o
+ * código HTTP quando houver.
+ *
+ * `retryable`: o consumidor (fila/usuário) pode repetir a mesma chamada com
+ * chance de sucesso (rede, prazo, sobrecarga). É distinto da nova tentativa
+ * interna automática que o provedor pode já ter feito antes de devolver o
+ * resultado.
  */
 export type TranslationResult =
   | { ok: true; text: string; durationMs: number; outputTokens?: number }

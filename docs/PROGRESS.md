@@ -5,12 +5,54 @@
 
 ## Estado atual
 
-- **Fase:** 3 — Motor de tradução e streaming (em andamento)
-- **Tarefa:** `feat/ollama-chat` (contrato do provider e chat em streaming no cliente, sem DOM)
+- **Fase:** 3 — Motor de tradução e streaming (gate cumprido; aguardando merge do PR de `test/translation-service`)
+- **Tarefa:** `test/translation-service` (provider de tradução, nova tentativa conservadora, fixtures literárias e validação com o modelo real)
 - **Versão:** `0.1.0` (esqueleto + conexão com o Ollama, PLAN.md §5.4; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.1.0` autorizada pelo responsável, em `ab06507` (validado: lint, typecheck, 398 testes, build, 8 E2E); criação manual pendente.
 - **Fase 2:** concluída — PRs #9 e #10 mesclados; aceite manual do responsável no Chrome estável (conexão, modelos listados, Ollama fechado)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
+
+## Fase 3 — `test/translation-service`
+
+| Commit | Mensagem |
+|---|---|
+| `c3d3d8b` | `feat(core): adiciona invalid_input e consumer_error ao contrato` |
+| `80183d4` | `feat(core): implementa provider de tradução sobre o ollama` |
+| `ee5de28` | `feat(core): adiciona nova tentativa conservadora ao provider` |
+| `1584f86` | `test(core): adiciona fixtures literárias próprias` |
+| `8c8f35e` | `test(core): garante cliente único do ollama em src` |
+| `250e2dd` | `test(core): adiciona teste manual opt-in com modelo real` |
+| `49f384a` | `fix(core): distingue falha interna de entrada inválida no provider` |
+| `488ca48` | `test(core): endurece critérios das fixtures literárias` |
+| `d9add34` | `test(core): amplia varredura de cliente único em src` |
+| `3ec237c` | `docs: documenta motor de tradução e plano de testes da fase 3` |
+| `c00ebc3` | `docs(decisions): registra validação real da adr-011` |
+| (este commit) | `docs(progress): registra gate da fase 3` |
+
+**O que foi feito:**
+
+- `src/core/ollama-translation-provider.ts`: `createOllamaTranslationProvider` sobre `buildChatRequest` + `chatStream`, com mapeamento exaustivo de erros (`switch` + `never`), `retryable`, `durationMs` e `outputTokens`. Tabela em [ARCHITECTURE.md](ARCHITECTURE.md#motor-de-tradução-fase-3).
+- Nova tentativa automática: no máximo uma, após 500 ms canceláveis, só para `network`, stream interrompido e HTTP 429/5xx, e só se nenhum trecho foi entregue. `timeout` sem nova tentativa interna.
+- Contrato ganhou `invalid_input`, `consumer_error` e `internal_error` (falha inesperada do Lerium não culpa o texto).
+- 6 fixtures literárias autorais em `tests/fixtures/literary/` e teste manual opt-in (`npm run test:manual`, fora do CI).
+- Teste de cliente único: só o provider usa `chatStream`, `fetch` só em `background/index.ts` e nenhuma outra API de rede em `src/`.
+
+**Revisão:** reviewer aprovou com ressalvas; aplicadas: catch-all com código próprio, cancelamento logo após falha, piso de tamanho 0,85 no parágrafo longo, canário normalizado, um teste por execução no manual, varredura de rede ampliada e nomes das fixtures sem associação a obras conhecidas.
+
+**Validações executadas:**
+
+- `npm run lint`, `typecheck`, `test` (751/751, 18 arquivos; eram 563) e `build` com código 0.
+- `npm run test:manual` sem a variável: 6 testes *skipped*.
+- Modelo real (instância Ollama 0.40.12 isolada na porta 11998, `translategemma:4b`, i5-13420H, `LERIUM_MANUAL_RUNS=3`): **18/18 aprovados**, 201,5 s no total. Avaliação qualitativa e limites (concordância de gênero, pronome oblíquo) na [ADR-011](DECISIONS.md).
+- 1ª rodada: `technical-term` falhou porque a fixture exigia preservar "Ascension Array"; o modelo traduziu de forma consistente ("Matriz de Ascensão"), e a fixture passou a exigir consistência.
+
+**Gate da Fase 3 (PLAN.md):**
+
+- [x] `translate(text, options)` produz texto válido: 18/18 execuções reais.
+- [x] Nenhum conteúdo perdido por chunk arbitrário: parser (todos os cortes + 200 aleatórios) e provider (64 fatiamentos aleatórios, inclusive no meio de UTF-8).
+- [x] Todos os fluxos usam o mesmo cliente: teste de varredura de `src/`.
+
+**Pendências:** ADR-011 só passa a Aceita após confirmar o formato no model card oficial (exige navegação web autorizada); A/B com prompt literário (PLAN.md §9) fica como versão futura; ADR-010 (protocolo SW↔página) na Fase 4; `incomplete_stream` aparece como `network` ("inacessível") na interface, aceitável no MVP.
 
 ## Fase 3 — `feat/ollama-chat`
 
@@ -309,4 +351,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 3 — implementar o `TranslationProvider` do Ollama sobre `chatStream` (mapeamento de erros, `retryable`, `durationMs`), sem DOM.
+Fase 4 — `feat/dom-collection`: coleta de texto com `TreeWalker` e regras de exclusão, com a fixture própria `tests/fixtures/novel-chapter.html`.

@@ -18,7 +18,8 @@ literária de [PLAN.md §9](PLAN.md). Arquitetura em
 |---|---|---|---|
 | Unitário | Vitest | Configuração das ferramentas e primeiros testes de shell | Fase 1 |
 | Unitário | Vitest | Validação de endpoint (loopback permitido, remoto negado, URL inválida), modelo ausente, idioma desconhecido; storage (defaults, migração não destrutiva, persistência após atualização) | Fase 2 |
-| Unitário | Vitest | Parser NDJSON (linha em 2–N chunks, dois objetos por chunk, UTF-8 dividido, CRLF, linha final sem newline, JSON inválido, erro do Ollama, `done`, abort); `PromptBuilder` (idioma, versão estável, nenhuma referência fixa a obra); retry e timeout | Fase 3 |
+| Unitário | Vitest | Parser NDJSON (linha em 2–N chunks, dois objetos por chunk, UTF-8 dividido, CRLF, linha final sem newline, JSON inválido, erro do Ollama, `done`, abort); `PromptBuilder` (idioma, versão estável, nenhuma referência fixa a obra); `chatStream` (prazos, cancelamento, corridas, erros HTTP e do stream); provider (mapeamento de erros, nova tentativa, resposta fatiada em pontos aleatórios); schema das fixtures literárias; cliente único em `src/` | Fase 3 |
+| Manual (opt-in) | Vitest (`vitest.manual.config.ts`) + Ollama real | 6 fixtures literárias próprias em `tests/fixtures/literary/` (narrativa, diálogo, termo técnico, nomes próprios, parágrafo longo, injeção de instrução): sem preâmbulo, nomes e termos consistentes, canário de injeção ausente, razão de tamanho, idioma plausível. Fora do CI | Fase 3 |
 | Integração/DOM | Vitest + ambiente DOM | Parágrafos, títulos, listas, `<em>`/`<strong>`/`<a>`, espaços e quebras; exclusões (`code`/`pre`, campos editáveis, scripts, UI da extensão); restauração exata; resultado fora de ordem no bloco correto; nó removido/substituído | Fase 4 |
 | Unitário + integração | Vitest | Scheduler: prioridade, limite de concorrência (inclusive no scroll), cancelamento, sem duplicação | Fase 5 |
 | E2E | Playwright + Chromium | Extensão MV3 carregada; iniciar/parar; seleção; menu de contexto; opções; alternar original; Ollama mock indisponível, HTTP 404 de modelo e resposta lenta | Fases 4–6 |
@@ -97,6 +98,8 @@ PT-BR e avaliar ([PLAN.md §9](PLAN.md)):
 | Integridade | Não omite, adiciona nem resume conteúdo |
 | Desempenho percebido | Leitor continua sem esperar pelos parágrafos seguintes |
 
+As fixtures literárias da Fase 3 ficam em `tests/fixtures/literary/`; a primeira avaliação com o modelo real está registrada na ADR-011 e no PROGRESS.
+
 **Política de prompt:** um prompt universal **curto** é o baseline; uma
 versão literária mais detalhada é comparada com ele por testes A/B manuais
 sobre as mesmas fixtures. Prompt mais longo não é assumido como melhor.
@@ -127,7 +130,13 @@ resultados (sem SLA fixo):
 
 ## Comandos de validação
 
-Os comandos `npm run lint`, `npm run typecheck`, `npm run test` e
-`npm run build` **ainda não existem**: não há `package.json` nem ferramentas
-instaladas. Serão criados na **Fase 1** ([PLAN.md §6](PLAN.md)), junto com a
-pipeline de CI, e este documento será atualizado com o uso de cada um.
+| Comando | O que faz | No CI |
+|---|---|---|
+| `npm run lint` | ESLint e verificação do Prettier | sim |
+| `npm run typecheck` | `tsc` nos três tsconfigs (extensão, Node, E2E) | sim |
+| `npm test` | testes unitários (`tests/unit`) | sim |
+| `npm run build` | build Vite em `dist/` | sim |
+| `npm run test:e2e` | E2E no Chromium com Ollama simulado | sim |
+| `npm run test:manual` | fixtures literárias com o modelo real; fica *skipped* sem `LERIUM_MANUAL_OLLAMA=1` | não |
+
+Variáveis do teste manual: `LERIUM_OLLAMA_ENDPOINT` (padrão `http://127.0.0.1:11434`), `LERIUM_OLLAMA_MODEL` (padrão `translategemma:4b`), `LERIUM_MANUAL_RUNS` (padrão 1) e `LERIUM_MANUAL_SHOW_OUTPUT=1` para imprimir as traduções. Sem esta última, só metadados são impressos.

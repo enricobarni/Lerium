@@ -1,0 +1,9 @@
+{
+  "id": "proper-names",
+  "source": "en",
+  "target": "pt-BR",
+  "text": "Kael Ardent arrived in Ironvale on the last caravan before the pass closed. Seren Vael was waiting at the gate, arms crossed, the crest of House Varrow stitched on her sleeve. \"The council wants you gone by spring,\" she told him. Kael Ardent only smiled, because Ironvale had wanted him gone before, and he was still here.",
+  "mustContain": ["Kael Ardent", "Seren Vael", "Ironvale", "Varrow"],
+  "mustNotContain": [],
+  "notes": "Texto autoral. Nomes próprios de pessoa, lugar e casa nobre que devem sair idênticos. 'Ardent' e 'Ironvale' são palavras inglesas reconhecíveis e testam se o modelo resiste a traduzi-las (ex.: 'Ardente', 'Vale de Ferro')."
+}

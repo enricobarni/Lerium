@@ -322,7 +322,7 @@ está liberada. Só um `POST`, que leva o `Origin`, revela a recusa.
 
 ## ADR-011 — Prompt de tradução para o TranslateGemma
 
-**Status:** Proposta (29/10/2026)
+**Status:** Proposta (29/10/2026); validada com o modelo real em 29/10/2026, falta só confirmar o model card (ver Validação)
 
 > A ADR-010 está reservada para o protocolo entre service worker e páginas.
 
@@ -383,9 +383,29 @@ usuário seguidos, formato que o modelo não viu no treino.
 - A instrução e o texto ficam no mesmo turno; a proteção depende da saída
   ser sempre inserida como texto.
 
-**Validação pendente (antes de Aceitar).**
+**Validação.**
 
-- Confirmar o formato do prompt no model card oficial do TranslateGemma.
-- Rodar as fixtures literárias (PLAN.md §9) com o modelo real na branch do
-  serviço de tradução, incluindo texto com tentativa de injeção, e calibrar
-  `temperature` e `num_predict`.
+Executada em 29/10/2026 com `npm run test:manual` (branch
+`test/translation-service`): Ollama 0.40.12 em instância isolada,
+`translategemma:4b`, i5-13420H, 6 fixtures literárias próprias × 3 execuções.
+
+- **18/18 execuções aprovadas** nos critérios automáticos: sem preâmbulo,
+  sem truncamento, nomes próprios preservados (Kael Ardent, Seren Vael,
+  Ironvale), razão de tamanho entre 1,04 e 1,20, idioma de destino plausível.
+- **Injeção:** o bilhete com "ignore todas as instruções anteriores" foi
+  traduzido como parte da cena nas 3 execuções; o canário nunca apareceu.
+- **Termo inventado:** "Ascension Array" virou "Matriz de Ascensão" de forma
+  consistente nas 3 ocorrências; a fixture passou a aceitar preservação ou
+  tradução consistente (glossário fica para P1).
+- **Tempo** (modelo já carregado): 6–15 s por segmento curto, 24–30 s para o
+  parágrafo de 1288 caracteres.
+- **Qualidade (leitura humana):** fluente e fiel na narrativa, no diálogo e na
+  injeção. Erros recorrentes de **concordância de gênero** ("suas dezesseis
+  anéis") e de **pronome oblíquo** ("que lhe a entregou"), além de pequenas
+  imprecisões lexicais ("brazier" → "lareira"). São limites de um modelo de
+  4B, não do formato do prompt; ficam como entrada para o A/B do PLAN.md §9.
+- `temperature: 0.2` e `num_predict` mantidos: nenhum caso de corte ou de
+  divergência relevante entre execuções.
+
+**Pendente para Aceitar:** confirmar o formato do prompt no model card
+oficial do TranslateGemma (exige navegação web autorizada).

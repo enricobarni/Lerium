@@ -1,0 +1,9 @@
+{
+  "id": "dialogue",
+  "source": "en",
+  "target": "pt-BR",
+  "text": "\"You promised you would come back,\" Mira said, her voice barely louder than the rain.\n\n\"I did come back.\" Oren set his sword on the table — carefully, as though it might wake. \"It just took longer than either of us wanted.\"\n\n\"Three winters, Oren. Three.\"\n\n\"I know.\" He looked away. \"Do you want me to leave?\"\n\nMira laughed, but there was no joy in it. \"I want you to stop asking questions you already know the answer to.\"",
+  "mustContain": ["Mira", "Oren"],
+  "mustNotContain": [],
+  "notes": "Texto autoral. Diálogo entre dois personagens com aspas, travessão no meio da narração e quebras de parágrafo. Avalia registro coloquial, alternância de falas e manutenção das quebras de linha. Em pt-BR as aspas podem virar travessão de diálogo; o critério não exige uma forma específica."
+}
