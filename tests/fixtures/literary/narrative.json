@@ -1,0 +1,9 @@
+{
+  "id": "narrative",
+  "source": "en",
+  "target": "pt-BR",
+  "text": "The bells of Duskmere had not rung in nine years, so when they began to toll at midnight, Seraphine knew something had gone terribly wrong. She pulled her cloak tight against the wind and climbed the broken tower stairs, counting each step as her mother had taught her. Below, the river glowed a faint and sickly blue, as if the water itself remembered the war.",
+  "mustContain": ["Duskmere", "Seraphine"],
+  "mustNotContain": [],
+  "notes": "Texto autoral. Narração em terceira pessoa, passado, tom sombrio de fantasia. Avalia fluidez e preservação de nomes próprios (cidade e personagem)."
+}

@@ -1,0 +1,9 @@
+{
+  "id": "technical-term",
+  "source": "en",
+  "target": "pt-BR",
+  "text": "The Ascension Array hummed beneath Kael's palms, its sixteen rings turning in perfect silence. Every apprentice in the academy knew the rule: never feed the Ascension Array more mana than your own core could hold. Kael's mana core was cracked, a hairline fracture he had hidden for months, and still he poured himself into the rings until the Ascension Array blazed white.",
+  "mustContain": ["Ascension Array", "Kael"],
+  "mustNotContain": [],
+  "notes": "Texto autoral. O termo do sistema de magia 'Ascension Array' aparece três vezes. Política escolhida: preservar o nome próprio do artefato sem tradução, por ser a única consistência verificável automaticamente sem glossário (MVP). 'mana core' pode ser traduzido (ex.: 'núcleo de mana'), mas deve ser igual nas duas ocorrências; isso é conferido manualmente, não por critério automático. Se o modelo traduzir 'Ascension Array', o teste manual falha e sinaliza a necessidade de glossário."
+}
