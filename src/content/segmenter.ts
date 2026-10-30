@@ -9,11 +9,8 @@
 
 import { isExcludedElement } from './dom-collector';
 
-/**
- * Referência de tamanho para quem aplica a tradução (`segment_too_long`). O
- * segmentador não corta nem descarta segmentos maiores que isto.
- */
-export const MAX_SEGMENT_CHARS = 6000;
+/** Reexportado de `core/text-limits` para manter os imports existentes. */
+export { MAX_SEGMENT_CHARS } from '../core/text-limits';
 
 export interface TranslationSegment {
   /** `seg-0`, `seg-1`…: ordinal dos segmentos devolvidos, por chamada. */
