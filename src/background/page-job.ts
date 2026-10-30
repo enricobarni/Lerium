@@ -59,8 +59,10 @@ function isHttpUrl(url: unknown): boolean {
 /**
  * Só o frame principal de uma aba web, vindo do próprio content script do
  * Lerium, abre um job: o `id` barra outras extensões; `tab`/`frameId`/`url`
- * barram páginas da extensão, iframes e esquemas não web. Devolve o id da
- * aba, ou `null` se a port não é confiável.
+ * barram páginas da extensão, iframes e esquemas não web. Documento em
+ * prerender ou no bfcache (`documentLifecycle` diferente de `'active'`) também
+ * é recusado; campo ausente (Chrome antigo) é aceito. Devolve o id da aba, ou
+ * `null` se a port não é confiável.
  */
 function trustedTabId(port: PortLike, runtimeId: string): number | null {
   if (port.name !== PAGE_JOB_PORT_NAME) return null;
@@ -69,6 +71,7 @@ function trustedTabId(port: PortLike, runtimeId: string): number | null {
   const tabId = sender.tab?.id;
   if (typeof tabId !== 'number') return null;
   if (sender.frameId !== 0) return null;
+  if (sender.documentLifecycle !== undefined && sender.documentLifecycle !== 'active') return null;
   return isHttpUrl(sender.url) ? tabId : null;
 }
 

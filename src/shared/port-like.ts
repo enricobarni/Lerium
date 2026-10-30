@@ -8,6 +8,8 @@ export interface PortSenderLike {
   readonly url?: string;
   readonly frameId?: number;
   readonly documentId?: string;
+  /** `'active'`, `'prerender'`, `'cached'`... Ausente em Chrome antigo. */
+  readonly documentLifecycle?: string;
   readonly tab?: { readonly id?: number };
 }
 

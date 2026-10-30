@@ -140,6 +140,9 @@ describe('createPageJobHandler — remetente', () => {
     ['url file:', { ...VALID_SENDER, url: 'file:///C:/novel.html' }],
     ['url ausente', { ...VALID_SENDER, url: undefined }],
     ['url inválida', { ...VALID_SENDER, url: 'não é url' }],
+    ['documento em prerender', { ...VALID_SENDER, documentLifecycle: 'prerender' }],
+    ['documento no bfcache', { ...VALID_SENDER, documentLifecycle: 'cached' }],
+    ['documento pendente de exclusão', { ...VALID_SENDER, documentLifecycle: 'pending_deletion' }],
   ];
 
   it.each(cases)('recusa %s sem responder', async (_label, sender, name) => {
@@ -166,6 +169,18 @@ describe('createPageJobHandler — remetente', () => {
       createProvider: () => createFakeProvider().provider,
     });
     const port = createFakePort({ ...VALID_SENDER, url: 'http://127.0.0.1:8080/a' });
+    handler(port);
+    expect(port.disconnect).not.toHaveBeenCalled();
+    expect(port.listenerCount()).toBe(2);
+  });
+
+  it('aceita documento ativo', () => {
+    const handler = createPageJobHandler({
+      runtimeId: RUNTIME_ID,
+      loadSettings: async () => SETTINGS,
+      createProvider: () => createFakeProvider().provider,
+    });
+    const port = createFakePort({ ...VALID_SENDER, documentLifecycle: 'active' });
     handler(port);
     expect(port.disconnect).not.toHaveBeenCalled();
     expect(port.listenerCount()).toBe(2);
