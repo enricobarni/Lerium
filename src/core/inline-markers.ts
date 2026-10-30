@@ -34,6 +34,23 @@
  * letra volta vazio ou só com espaço, o elemento inline ficaria vazio na
  * página. Um run externo pode ficar vazio, porque a tradução desloca palavras.
  *
+ * Deslocar uma palavra é aceito; omitir ou mover frases inteiras, não. Como o
+ * texto de cada intervalo vai para o nó que o ocupava, uma saída que joga tudo
+ * para dentro do marcador (ou apaga o texto de fora) trocaria o conteúdo da
+ * página de lugar. As heurísticas contam letras (`\p{L}`), não caracteres:
+ * - `lost_text`: os runs externos tinham pelo menos `LOST_TEXT_MIN_OUTER`
+ *   letras e voltaram sem nenhuma; ou, com pelo menos `RATIO_MIN_LETTERS`
+ *   letras na entrada, a saída tem menos de `MIN_LETTER_RATIO` ou mais de
+ *   `MAX_LETTER_RATIO` vezes as letras da entrada;
+ * - `run_growth`: com pelo menos `GROWTH_MIN_LETTERS` letras na entrada, um
+ *   run marcado cuja fração das letras da saída passa de
+ *   `GROWTH_FACTOR × fração na entrada + GROWTH_SLACK`.
+ * Os limites são conservadores: um destino CJK (ja, ko, zh-CN) usa bem menos
+ * letras por significado que um latino (um ideograma ≈ uma palavra), e a
+ * razão inferior de 0,25 foi escolhida para não recusar essas traduções; a
+ * folga absoluta de `run_growth` deixa passar adjetivo deslocado e nome
+ * próprio que cresce na tradução. Texto curto fica fora das heurísticas.
+ *
  * Intervalos sem run (entre dois marcadores colados, ou antes do primeiro
  * marcador quando o primeiro run já é marcado) não têm nó de destino: espaço
  * neles é descartado; qualquer outro texto falha com `orphan_text`.
@@ -85,10 +102,13 @@ export type InlineLayoutError =
  * Prioridade quando há mais de um problema: `invalid_layout` → `collision` →
  * `unknown` → `duplicate` → `missing` → `nesting` (marcadores cruzados) →
  * `order` → `nesting` (estrutura diferente da original) → `orphan_text` →
- * `empty_run`.
+ * `empty_run` → `lost_text` (runs externos esvaziados, depois razão global)
+ * → `run_growth`.
  *
  * `invalid_layout`: o layout não é codificável (`encodeMarkers` daria `null`).
  * `orphan_text`: texto não branco num intervalo sem run de destino.
+ * `lost_text` e `run_growth`: texto omitido ou deslocado entre runs (ver o
+ * cabeçalho do módulo).
  */
 export type DecodeError =
   | 'missing'
@@ -99,7 +119,22 @@ export type DecodeError =
   | 'empty_run'
   | 'collision'
   | 'orphan_text'
+  | 'lost_text'
+  | 'run_growth'
   | 'invalid_layout';
+
+/** Letras mínimas nos runs externos para exigir que alguma volte (`lost_text`). */
+export const LOST_TEXT_MIN_OUTER = 12;
+/** Letras mínimas na entrada para aplicar a razão global (`lost_text`). */
+export const RATIO_MIN_LETTERS = 40;
+/** Razão mínima letras da saída / letras da entrada (cabe CJK: ver o cabeçalho). */
+export const MIN_LETTER_RATIO = 0.25;
+/** Razão máxima letras da saída / letras da entrada. */
+export const MAX_LETTER_RATIO = 4;
+/** Letras mínimas na entrada para aplicar `run_growth`. */
+export const GROWTH_MIN_LETTERS = 20;
+export const GROWTH_FACTOR = 3;
+export const GROWTH_SLACK = 0.15;
 
 export type DecodeResult = { ok: true; texts: string[] } | { ok: false; error: DecodeError };
 
@@ -140,6 +175,10 @@ const isPositiveInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value >= 1;
 
 const HAS_LETTER = /\p{L}/u;
+const LETTERS = /\p{L}/gu;
+
+/** Nº de letras (`\p{L}`); linear, uma classe sem quantificador. */
+const countLetters = (text: string): number => text.match(LETTERS)?.length ?? 0;
 
 /** Lê o layout uma vez, validando forma e estrutura. Nunca lança. */
 function planLayout(layout: unknown): PlanResult {
@@ -344,5 +383,31 @@ export function decodeMarkers(output: string, layout: InlineLayout): DecodeResul
       run.path.length > 0 && HAS_LETTER.test(run.text) && (texts[index] as string).trim() === '',
   );
   if (lostLetters) return fail('empty_run');
+
+  const lettersIn = layout.runs.map((run) => countLetters(run.text));
+  const lettersOut = texts.map(countLetters);
+  const sum = (values: readonly number[]): number => values.reduce((a, b) => a + b, 0);
+  const isOuter = (index: number): boolean => layout.runs[index]?.path.length === 0;
+  const outerIn = sum(lettersIn.filter((_, index) => isOuter(index)));
+  const outerOut = sum(lettersOut.filter((_, index) => isOuter(index)));
+  if (outerIn >= LOST_TEXT_MIN_OUTER && outerOut === 0) return fail('lost_text');
+  const inL = sum(lettersIn);
+  const outL = sum(lettersOut);
+  if (
+    inL >= RATIO_MIN_LETTERS &&
+    (outL < MIN_LETTER_RATIO * inL || outL > MAX_LETTER_RATIO * inL)
+  ) {
+    return fail('lost_text');
+  }
+
+  if (inL >= GROWTH_MIN_LETTERS && outL > 0) {
+    const grew = lettersIn.some((letters, index) => {
+      if (isOuter(index)) return false;
+      const fractionIn = letters / inL;
+      const fractionOut = (lettersOut[index] as number) / outL;
+      return fractionOut > GROWTH_FACTOR * fractionIn + GROWTH_SLACK;
+    });
+    if (grew) return fail('run_growth');
+  }
   return { ok: true, texts };
 }

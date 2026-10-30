@@ -208,9 +208,118 @@ describe('decodeMarkers', () => {
     expect(decodeMarkers(output, layout)).toEqual({ ok: false, error });
   });
 
-  it('permite que um run externo com letra fique vazio', () => {
+  it('aceita palavra deslocada para fora do marcador em texto longo', () => {
+    const layout = layoutOf(
+      ['She placed the ', []],
+      ['red', [1]],
+      [' stone on the altar and stepped back.', []],
+    );
+    const output = 'Ela colocou a pedra <g1>vermelha</g1> sobre o altar e recuou.';
+    expect(decodeMarkers(output, layout)).toEqual({
+      ok: true,
+      texts: ['Ela colocou a pedra ', 'vermelha', ' sobre o altar e recuou.'],
+    });
+  });
+
+  it('aceita nome de artefato que cresce na tradução (experimento ADR-003)', () => {
+    const layout = layoutOf(
+      ['Inside, wrapped in faded silk, lay the ', []],
+      ['Moonwell Compass', [1]],
+      [' his master had spoken of.', []],
+    );
+    const output =
+      'Dentro, envolta em seda desbotada, estava a <g1>Bússola do Poço da Lua</g1> ' +
+      'de que seu mestre falara.';
+    expect(decodeMarkers(output, layout).ok).toBe(true);
+  });
+
+  it('aceita nome próprio marcado', () => {
+    const layout = layoutOf(
+      ['Kael bowed deeply to ', []],
+      ['Elder Mo', [1]],
+      [' and left the hall.', []],
+    );
+    const output = 'Kael fez uma profunda reverência ao <g1>Ancião Mo</g1> e saiu do salão.';
+    expect(decodeMarkers(output, layout).ok).toBe(true);
+    const short = layoutOf(['Bow to ', []], ['Grandmaster Yun Feixue', [1]], ['.', []]);
+    expect(decodeMarkers('Curve-se ao <g1>Grão-Mestre Yun Feixue</g1>.', short).ok).toBe(true);
+  });
+
+  it.each([
+    ['zh-CN', '黎明时分，老人提着一篮面包，慢慢地走向<g1>集市</g1>。'],
+    ['zh-CN conciso', '老人黎明时提着一篮面包，慢慢走向<g1>市场</g1>。'],
+    ['ja', '老人は夜明けに、パンの入った籠を持って、ゆっくりと<g1>市場</g1>へ歩いていった。'],
+    ['ko', '노인은 새벽에 빵 바구니를 들고 천천히 <g1>시장</g1>으로 걸어갔다.'],
+  ])('não recusa destino CJK com menos letras por significado: %s', (_, output) => {
+    const layout = layoutOf(
+      ['The old man walked slowly to the ', []],
+      ['market', [1]],
+      [' at dawn, carrying a basket of bread.', []],
+    );
+    expect(decodeMarkers(output, layout).ok).toBe(true);
+  });
+
+  it('não aplica as heurísticas de letras a texto curto', () => {
     const result = decodeMarkers('<g1>Vermelha</g1>, a pedra', RED_STONE);
     expect(result).toEqual({ ok: true, texts: ['', 'Vermelha', ', a pedra'] });
+  });
+
+  it('devolve lost_text quando a saída omite as frases de fora do marcador', () => {
+    const layout = layoutOf(
+      ['He opened the door slowly. ', []],
+      ['Nothing', [1]],
+      [' was inside. Then he left.', []],
+    );
+    expect(decodeMarkers('<g1>Nada</g1>', layout)).toEqual({ ok: false, error: 'lost_text' });
+    const click = layoutOf(['Clique ', []], ['aqui', [1]], [' para continuar.', []]);
+    expect(decodeMarkers('<g1>Sua conta foi suspensa, entre em contato agora</g1>', click)).toEqual(
+      { ok: false, error: 'lost_text' },
+    );
+  });
+
+  it('devolve lost_text quando a saída perde a maior parte das letras', () => {
+    const layout = layoutOf(
+      [
+        'The rain had not stopped for three days, and the village had begun to smell ' +
+          'of smoke. Aren walked the market road twice before he found the stall. ',
+        [],
+      ],
+      ['You are late', [1]],
+      [', she said.', []],
+    );
+    expect(decodeMarkers('<g1>Você está atrasado</g1>, disse ela.', layout)).toEqual({
+      ok: false,
+      error: 'lost_text',
+    });
+  });
+
+  it('devolve lost_text quando a saída cresce demais', () => {
+    const layout = layoutOf(
+      ['She placed the ', []],
+      ['red', [1]],
+      [' stone on the altar and stepped back.', []],
+    );
+    const output =
+      'Ela colocou a pedra <g1>vermelha</g1> sobre o altar. ' +
+      'E então ela recitou um longo poema. '.repeat(10);
+    expect(decodeMarkers(output, layout)).toEqual({ ok: false, error: 'lost_text' });
+  });
+
+  it('devolve run_growth quando o texto de fora é puxado para dentro do marcador', () => {
+    const layout = layoutOf(
+      ['Click ', []],
+      ['here', [1]],
+      [' to continue reading the chapter.', []],
+    );
+    const output =
+      'Clique <g1>aqui: sua conta foi suspensa, entre em contato agora pelo telefone</g1> ' +
+      'para continuar.';
+    expect(decodeMarkers(output, layout)).toEqual({ ok: false, error: 'run_growth' });
+  });
+
+  it('prioriza empty_run sobre lost_text', () => {
+    const layout = layoutOf(['He opened the door slowly. ', []], ['Nothing', [1]], [' left.', []]);
+    expect(decodeMarkers('<g1></g1>', layout)).toEqual({ ok: false, error: 'empty_run' });
   });
 
   it('não exige letra em run que não tinha letra', () => {
