@@ -71,13 +71,22 @@ describe('inlineLayoutOf', () => {
     expectAligned(segment, result);
   });
 
-  it('wrapper que não cobre os nós só de espaço de fora conta como wrapper', () => {
-    // Comportamento atual: o critério é conter todos os nós, inclusive os só
-    // de espaço; aqui o span fica com id 1 e o layout passa de um nível.
+  it('ignora nós só de espaço ao decidir se o wrapper cobre o segmento', () => {
+    // HTML formatado: as quebras de linha ficam fora do span, que mesmo assim
+    // envolve todo o conteúdo; só o em vira marcador e o layout tem um nível.
     const result = layoutOf('<p>\n<span>a <em>b</em></span>\n</p>');
-    expect(runTexts(result)).toEqual(['\n', 'a ', 'b', '\n']);
-    expect(runPaths(result)).toEqual([[], [1], [1, 2], []]);
-    expect(encodeMarkers(result.layout)).toBeNull();
+    expect(runTexts(result)).toEqual(['\na ', 'b', '\n']);
+    expect(runPaths(result)).toEqual([[], [1], []]);
+    expect(encodeMarkers(result.layout)).not.toBeNull();
+  });
+
+  it('devolve null quando o único wrapper cobre todo o conteúdo entre quebras', () => {
+    expect(inlineLayoutOf(onlySegment('<p>\n  <span>tudo aqui</span>\n</p>'))).toBeNull();
+  });
+
+  it('trata NBSP como conteúdo na cobertura', () => {
+    const result = layoutOf('<p>\u00a0<span>a <em>b</em></span></p>');
+    expect(runPaths(result)).toEqual([[], [1], [1, 2]]);
   });
 
   it('aninhamento gera path de profundidade 2 e encodeMarkers recusa', () => {

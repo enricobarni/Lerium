@@ -18,6 +18,9 @@ export interface SegmentInlineLayout {
   readonly runNodes: readonly (readonly Text[])[];
 }
 
+/** Espaço ASCII, o mesmo que o segmentador colapsa; U+00A0 conta como conteúdo. */
+const HAS_CONTENT = /[^ \t\n\r\f]/;
+
 function samePath(left: readonly number[], right: readonly number[]): boolean {
   return left.length === right.length && left.every((id, index) => id === right[index]);
 }
@@ -29,9 +32,11 @@ function samePath(left: readonly number[], right: readonly number[]): boolean {
  * `segment.block` (exclusive), do mais externo ao mais interno. Todo elemento
  * nesse trecho é inline, porque `block` é o bloco ancestral mais próximo. Um
  * wrapper que contém todos os nós do segmento é ignorado: envolve o bloco
- * inteiro, não marca fronteira e continua intacto quando os nós mudam. Como
- * os nós são contíguos em ordem de documento, basta testar o primeiro e o
- * último. Cada elemento restante recebe um id 1..N na ordem de primeira
+ * inteiro, não marca fronteira e continua intacto quando os nós mudam. Nós só
+ * de espaço não contam nessa cobertura: em HTML formatado, as quebras de
+ * linha ao redor de `<span>…</span>` ficam fora dele e o transformariam em
+ * marcador à toa. Como os nós são contíguos em ordem de documento, basta
+ * testar o primeiro e o último nó com conteúdo. Cada elemento restante recebe um id 1..N na ordem de primeira
  * aparição (ids canônicos de `validateInlineLayout`). Nós consecutivos com o
  * mesmo `path` formam um run (ex.: dois nós do mesmo `<em>` separados por um
  * comentário).
@@ -48,8 +53,9 @@ function samePath(left: readonly number[], right: readonly number[]): boolean {
  */
 export function inlineLayoutOf(segment: TranslationSegment): SegmentInlineLayout | null {
   const { block, nodes } = segment;
-  const first = nodes[0];
-  const last = nodes[nodes.length - 1];
+  const content = nodes.filter((node) => HAS_CONTENT.test(node.data));
+  const first = content[0];
+  const last = content[content.length - 1];
   if (first === undefined || last === undefined) return null;
 
   const ids = new Map<Element, number>();
