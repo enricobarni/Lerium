@@ -65,8 +65,19 @@
  * malformada, sem diferenciar maiúsculas: `<g>`, `</G2>`, `< g1 >`),
  * `encodeMarkers` devolve `null` e o chamador usa outra estratégia (nó a nó).
  * Na saída, qualquer sintaxe de marcador que não seja exata (ex.: `< g1>`,
- * `<G1>`, `<g1/>`) é `collision`; por isso nenhum marcador vaza para `texts`.
+ * `<G1>`, `<g1/>`) é `collision`; por isso nenhum marcador no formato `<gN>`
+ * (ou variação de espaço, `/` e maiúscula) vaza para `texts`. Formas fora
+ * desse alcance, como a fullwidth `＜g1＞` ou `<g1 class="x">` com atributo,
+ * não são reconhecidas como marcador: viram texto literal (aplicado via
+ * `nodeValue`, inofensivo) ou falham fechado com `missing` quando ocupam o
+ * lugar de um marcador exato. Também é `collision` a saída com mais tags
+ * HTML (`<b>`, `</span>`, fora as de nome `g`/`gN`) que o texto codificado:
+ * o modelo inventou markup que apareceria como texto na página.
  * Colchetes como a nota de rodapé "[1]" não são sintaxe deste formato.
+ *
+ * Run externo só de espaço ASCII que volta vazio (ex.: o " " entre
+ * `<em>a</em> <strong>b</strong>` quando o modelo cola os marcadores) recebe
+ * o texto de origem, para as palavras vizinhas não ficarem coladas.
  */
 
 export interface InlineRun {
@@ -162,6 +173,9 @@ interface LayoutPlan {
   readonly events: readonly MarkerEvent[];
   /** Para cada run, o índice do intervalo (entre eventos) que ele ocupa. */
   readonly runSlots: readonly number[];
+  /** Cópias de `text` e `path` de cada run, lidas uma única vez do layout. */
+  readonly texts: readonly string[];
+  readonly paths: readonly (readonly number[])[];
   readonly wrappers: number;
   readonly depth: number;
 }
@@ -184,21 +198,25 @@ const countLetters = (text: string): number => text.match(LETTERS)?.length ?? 0;
 function planLayout(layout: unknown): PlanResult {
   const fail = (error: InlineLayoutError): PlanResult => ({ ok: false, error });
   try {
-    if (!isRecord(layout) || !Array.isArray(layout.runs) || layout.runs.length === 0) {
-      return fail('invalid_layout');
-    }
-    const runs: unknown[] = layout.runs;
+    if (!isRecord(layout)) return fail('invalid_layout');
+    const rawRuns = layout.runs;
+    if (!Array.isArray(rawRuns) || rawRuns.length === 0) return fail('invalid_layout');
+    const runs: unknown[] = [...(rawRuns as unknown[])];
     const events: MarkerEvent[] = [];
     const runSlots: number[] = [];
+    const texts: string[] = [];
+    const paths: number[][] = [];
     let previous: readonly number[] = [];
     let nextId = 1;
     let depth = 0;
 
     for (const [index, run] of runs.entries()) {
-      if (!isRecord(run) || typeof run.text !== 'string' || !Array.isArray(run.path)) {
-        return fail('invalid_layout');
-      }
-      const path: unknown[] = run.path;
+      if (!isRecord(run)) return fail('invalid_layout');
+      // Cada propriedade é lida uma vez: getters não mudam o valor entre usos.
+      const text = run.text;
+      const rawPath = run.path;
+      if (typeof text !== 'string' || !Array.isArray(rawPath)) return fail('invalid_layout');
+      const path: unknown[] = [...(rawPath as unknown[])];
       if (!path.every(isPositiveInteger)) return fail('invalid_layout');
       if (new Set(path).size !== path.length) return fail('invalid_layout');
       if (path.length > MAX_INLINE_DEPTH) return fail('too_deep');
@@ -225,6 +243,8 @@ function planLayout(layout: unknown): PlanResult {
         nextId += 1;
       }
       runSlots.push(events.length);
+      texts.push(text);
+      paths.push(current);
       depth = Math.max(depth, current.length);
       previous = current;
     }
@@ -235,7 +255,7 @@ function planLayout(layout: unknown): PlanResult {
     const wrappers = nextId - 1;
     if (wrappers === 0) return fail('no_wrappers');
     if (wrappers > MAX_INLINE_WRAPPERS) return fail('too_many_wrappers');
-    return { ok: true, plan: { events, runSlots, wrappers, depth } };
+    return { ok: true, plan: { events, runSlots, texts, paths, wrappers, depth } };
   } catch {
     // Getters anômalos num layout vindo de outro contexto.
     return fail('invalid_layout');
@@ -262,12 +282,9 @@ function renderEvent(event: MarkerEvent): string {
   return event.close ? closeMarker(event.id) : openMarker(event.id);
 }
 
-/** Texto codificado; `null` se o layout for inválido ou algum run colidir. */
-function encodeWithPlan(layout: InlineLayout): string | null {
-  const planned = planLayout(layout);
-  if (!planned.ok) return null;
-  const { events, runSlots } = planned.plan;
-  const texts = layout.runs.map((run) => run.text);
+/** Texto codificado a partir do plano; `null` se algum run colidir. */
+function encodeWithPlan(plan: LayoutPlan): string | null {
+  const { events, runSlots, texts } = plan;
   if (texts.some((text) => countMarkerSyntax(text) > 0)) return null;
 
   const intervals = Array.from({ length: events.length + 1 }, () => '');
@@ -287,8 +304,31 @@ function encodeWithPlan(layout: InlineLayout): string | null {
  * algum run já contiver sintaxe de marcador (colisão; não há escape).
  */
 export function encodeMarkers(layout: InlineLayout): string | null {
-  return encodeWithPlan(layout);
+  const planned = planLayout(layout);
+  return planned.ok ? encodeWithPlan(planned.plan) : null;
 }
+
+/**
+ * Tag HTML qualquer (`<b>`, `</span>`, `<a href="…">`, `<br/>`). Linear: o
+ * nome `[a-z0-9-]*` para em espaço, `/` ou `>`; `[^<>]*` não contém o `>` que
+ * o segue (o `\/?` opcional devolve no máximo um caractere); as varreduras a
+ * partir de `<` distintos não se sobrepõem.
+ */
+const HTML_TAG = /<\/?([a-z][a-z0-9-]*)(?:\s[^<>]*)?\/?>/giu;
+/** Nomes que são sintaxe de marcador (`g`, `g1`, `G12`): contados por `LOOSE_MARKER`. */
+const MARKER_TAG_NAME = /^g\d*$/iu;
+
+/** Nº de tags HTML em `text`, sem contar as de nome `g`/`gN` (marcadores). */
+function countHtmlTags(text: string): number {
+  let count = 0;
+  for (const match of text.matchAll(HTML_TAG)) {
+    if (!MARKER_TAG_NAME.test(match[1] as string)) count += 1;
+  }
+  return count;
+}
+
+/** Algum caractere fora do espaço ASCII (`' '`, `\t`, `\n`, `\r`, `\f`). */
+const NON_ASCII_SPACE = /[^ \t\n\r\f]/u;
 
 // Sem regex: `/\s*$/u` testa cada posição inicial e é quadrática numa
 // sequência longa de espaços seguida de não-espaço. `trimStart`/`trimEnd`
@@ -310,10 +350,11 @@ interface Token {
  */
 export function decodeMarkers(output: string, layout: InlineLayout): DecodeResult {
   const fail = (error: DecodeError): DecodeResult => ({ ok: false, error });
-  const encoded = encodeWithPlan(layout);
   const planned = planLayout(layout);
-  if (encoded === null || !planned.ok) return fail('invalid_layout');
-  const { events, runSlots, wrappers } = planned.plan;
+  if (!planned.ok) return fail('invalid_layout');
+  const { events, runSlots, texts: sourceTexts, paths, wrappers } = planned.plan;
+  const encoded = encodeWithPlan(planned.plan);
+  if (encoded === null) return fail('invalid_layout');
   if (typeof output !== 'string') return fail('missing');
 
   // Bordas externas: trocadas pelas do texto codificado.
@@ -333,6 +374,8 @@ export function decodeMarkers(output: string, layout: InlineLayout): DecodeResul
       id: Number(exact[2]),
     });
   }
+  // Tag HTML que o modelo inventou viraria texto literal na página.
+  if (countHtmlTags(text) > countHtmlTags(encoded)) return fail('collision');
 
   if (tokens.some((token) => token.id > wrappers)) return fail('unknown');
 
@@ -377,17 +420,24 @@ export function decodeMarkers(output: string, layout: InlineLayout): DecodeResul
     return fail('orphan_text');
   }
 
-  const texts = runSlots.map((slot) => intervals[slot] as string);
-  const lostLetters = layout.runs.some(
-    (run, index) =>
-      run.path.length > 0 && HAS_LETTER.test(run.text) && (texts[index] as string).trim() === '',
+  const isOuter = (index: number): boolean => paths[index]?.length === 0;
+  const texts = runSlots.map((slot, index) => {
+    const translated = intervals[slot] as string;
+    const source = sourceTexts[index] as string;
+    // Run externo só de espaço ASCII (ex.: o " " entre `<em>a</em> <strong>b</strong>`)
+    // que voltou vazio: mantém o espaço de origem para as palavras não colarem.
+    if (translated === '' && isOuter(index) && !NON_ASCII_SPACE.test(source)) return source;
+    return translated;
+  });
+  const lostLetters = sourceTexts.some(
+    (source, index) =>
+      !isOuter(index) && HAS_LETTER.test(source) && (texts[index] as string).trim() === '',
   );
   if (lostLetters) return fail('empty_run');
 
-  const lettersIn = layout.runs.map((run) => countLetters(run.text));
+  const lettersIn = sourceTexts.map(countLetters);
   const lettersOut = texts.map(countLetters);
   const sum = (values: readonly number[]): number => values.reduce((a, b) => a + b, 0);
-  const isOuter = (index: number): boolean => layout.runs[index]?.path.length === 0;
   const outerIn = sum(lettersIn.filter((_, index) => isOuter(index)));
   const outerOut = sum(lettersOut.filter((_, index) => isOuter(index)));
   if (outerIn >= LOST_TEXT_MIN_OUTER && outerOut === 0) return fail('lost_text');

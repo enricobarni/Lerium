@@ -202,10 +202,69 @@ describe('decodeMarkers', () => {
     ['collision', 'a pedra <g1>vermelha<g1/>', RED_STONE],
     ['collision', 'a pedra <G1>vermelha</g1>', RED_STONE],
     ['collision', 'a pedra <g1>vermelha</g01>', RED_STONE],
+    ['collision', 'a pedra <g1><b>vermelha</b></g1>', RED_STONE],
+    ['collision', 'a <span class="x">pedra</span> <g1>vermelha</g1>', RED_STONE],
+    ['collision', 'a pedra <g1>vermelha</g1><br/>', RED_STONE],
     ['orphan_text', 'O <g1>Vermelho</g1><g2>Azul</g2> céu', ADJACENT_AT_START],
     ['orphan_text', '<g1>Vermelho</g1> e <g2>Azul</g2> céu', ADJACENT_AT_START],
   ])('devolve %s para %j', (error, output, layout) => {
     expect(decodeMarkers(output, layout)).toEqual({ ok: false, error });
+  });
+
+  it('lê text e path de cada run uma única vez', () => {
+    let reads = 0;
+    const tricky = {
+      get text(): string {
+        reads += 1;
+        return reads === 1 ? 'red' : '<g1>';
+      },
+      path: [1],
+    };
+    const layout = { runs: [{ text: 'the ', path: [] }, tricky, { text: ' stone', path: [] }] };
+    expect(decodeMarkers('a pedra <g1>vermelha</g1>', layout)).toEqual({
+      ok: true,
+      texts: ['a pedra ', 'vermelha', ''],
+    });
+    expect(reads).toBe(1);
+  });
+
+  it('aceita tags HTML que já estavam no texto codificado', () => {
+    const layout = layoutOf(['use <b> and ', []], ['bold', [1]], [' text', []]);
+    expect(decodeMarkers('use <b> e <g1>negrito</g1> texto', layout).ok).toBe(true);
+    expect(decodeMarkers('use <b> e <g1>negrito</g1> <i>texto</i>', layout)).toEqual({
+      ok: false,
+      error: 'collision',
+    });
+  });
+
+  it('trata marcador fullwidth ou com atributo como texto, sem vazar `<gN>`', () => {
+    expect(decodeMarkers('a pedra <g1>vermelha</g1> ＜g1＞', RED_STONE)).toEqual({
+      ok: true,
+      texts: ['a pedra ', 'vermelha', ' ＜g1＞'],
+    });
+    expect(decodeMarkers('a pedra <g1 class="x">vermelha</g1>', RED_STONE)).toEqual({
+      ok: false,
+      error: 'missing',
+    });
+  });
+
+  it('mantém o espaço de origem de run externo só de espaço que voltou vazio', () => {
+    const layout = layoutOf(['a', [1]], [' ', []], ['b', [2]]);
+    expect(decodeMarkers('<g1>x</g1><g2>y</g2>', layout)).toEqual({
+      ok: true,
+      texts: ['x', ' ', 'y'],
+    });
+    // Espaço não ASCII (NBSP) conta como conteúdo: o intervalo vazio é respeitado.
+    const nbsp = layoutOf(['a', [1]], [' ', []], ['b', [2]]);
+    expect(decodeMarkers('<g1>x</g1><g2>y</g2>', nbsp)).toEqual({
+      ok: true,
+      texts: ['x', '', 'y'],
+    });
+    // Run externo com conteúdo pode voltar vazio (palavra deslocada).
+    expect(decodeMarkers('<g1>Vermelha</g1>, a pedra', RED_STONE)).toEqual({
+      ok: true,
+      texts: ['', 'Vermelha', ', a pedra'],
+    });
   });
 
   it('aceita palavra deslocada para fora do marcador em texto longo', () => {
@@ -453,6 +512,9 @@ describe('custo linear das regex', () => {
     ['marcador aberto sem fim', '<' + ' '.repeat(10000) + 'g' + ' '.repeat(10000) + 'x'],
     ['<g seguido de espaços', '<g' + ' '.repeat(20000)],
     ['espaço longo entre letras', 'a' + ' '.repeat(50000) + 'b'],
+    ['tag HTML com atributos sem fim', '<a' + ' x'.repeat(25000)],
+    ['nome de tag longo', '<' + 'a'.repeat(50000)],
+    ['muitos < seguidos', '<a '.repeat(20000)],
   ];
 
   const elapsed = (fn: () => unknown): number => {
