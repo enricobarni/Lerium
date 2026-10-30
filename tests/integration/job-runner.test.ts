@@ -90,6 +90,11 @@ interface FakePort {
   readonly disconnected: () => boolean;
   readonly listenerCount: () => number;
   emit(message: unknown): void;
+  /**
+   * Entrega a todo ouvinte já registrado, mesmo os removidos: simula uma
+   * mensagem que já estava na fila de eventos quando o ouvinte saiu.
+   */
+  emitQueued(message: unknown): void;
   /** Responde a unidade em voo mais antiga com `ok: true`. */
   reply(translate: (text: string) => string): JobUnitMessage;
   /** Responde a unidade em voo mais antiga com `ok: false`. */
@@ -103,6 +108,7 @@ interface FakePort {
 function createFakePort(): FakePort {
   const messageListeners = new Set<(message: unknown) => void>();
   const disconnectListeners = new Set<() => void>();
+  const everMessageListeners: ((message: unknown) => void)[] = [];
   const sent: unknown[] = [];
   const inFlight: JobUnitMessage[] = [];
   let maxInFlight = 0;
@@ -123,7 +129,10 @@ function createFakePort(): FakePort {
       disconnected = true;
     },
     onMessage: {
-      addListener: (listener) => messageListeners.add(listener),
+      addListener: (listener) => {
+        everMessageListeners.push(listener);
+        messageListeners.add(listener);
+      },
       removeListener: (listener) => messageListeners.delete(listener),
     },
     onDisconnect: {
@@ -150,6 +159,9 @@ function createFakePort(): FakePort {
     disconnected: () => disconnected,
     listenerCount: () => messageListeners.size + disconnectListeners.size,
     emit,
+    emitQueued(message) {
+      for (const listener of [...everMessageListeners]) listener(message);
+    },
     reply(translate) {
       const unit = take();
       emit({
@@ -191,7 +203,8 @@ interface Harness {
   readonly port: () => FakePort;
 }
 
-function setup(document: Document): Harness {
+/** `hook` roda dentro do `onState`, depois de registrar o estado (reentrância). */
+function setup(document: Document, hook?: (state: JobState, runner: JobRunner) => void): Harness {
   const ports: FakePort[] = [];
   const states: JobState[] = [];
   let nextId = 0;
@@ -205,7 +218,10 @@ function setup(document: Document): Harness {
     randomUUID: () => JOB_IDS[nextId++] as string,
     setInterval: (fn, ms) => setInterval(fn, ms),
     clearInterval: (id) => clearInterval(id as Parameters<typeof clearInterval>[0]),
-    onState: (state) => states.push(state),
+    onState: (state) => {
+      states.push(state);
+      hook?.(state, runner);
+    },
   });
   return {
     runner,
@@ -716,5 +732,216 @@ describe('createJobRunner — ping', () => {
     expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(PING_INTERVAL_MS * 3);
     expect(pings()).toHaveLength(2);
+  });
+});
+
+describe('createJobRunner — sequências reais do service worker', () => {
+  it('ok:false, depois job:fatal e desconexão: error coerente, nada aplicado depois', () => {
+    const document = parse(MIXED_PAGE);
+    const { runner, port, states } = setup(document);
+    runner.start();
+    const fake = port();
+    fake.reply(upperCase);
+    // Ordem real do service worker: result (ok:false), fatal, disconnect.
+    fake.replyError('model_missing');
+    const pending = fake.inFlight[0] as JobUnitMessage;
+    fake.emit({ type: 'job:fatal', jobId: JOB_IDS[0], error: 'model_missing' });
+    const afterFatal = serialize(document);
+    const count = states.length;
+    fake.drop();
+    fake.emitQueued({
+      type: 'job:result',
+      jobId: pending.jobId,
+      unitId: pending.unitId,
+      ok: true,
+      text: 'X',
+    });
+
+    expect(runner.getState()).toEqual({
+      status: 'error',
+      error: 'model_missing',
+      total: 3,
+      done: 1,
+      failed: 1,
+      skipped: 0,
+    });
+    expect(states).toHaveLength(count);
+    expect(unitsOf(fake)).toHaveLength(3);
+    expect(serialize(document)).toBe(afterFatal);
+    expect(bodyHtml(document)).toBe(
+      '<p>PLAIN SENTENCE HERE.</p><p>Hello <b>bold</b> world.</p><p>Hello<!--x--> world</p>',
+    );
+    expect(fake.listenerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('job:fatal settings_unavailable depois do primeiro ping', () => {
+    const document = parse(MIXED_PAGE);
+    const before = serialize(document);
+    const { runner, port } = setup(document);
+    runner.start();
+    const fake = port();
+    vi.advanceTimersByTime(PING_INTERVAL_MS);
+    expect(fake.sent).toContainEqual({ type: 'job:ping', jobId: JOB_IDS[0] });
+    expect(unitsOf(fake)).toHaveLength(1);
+
+    fake.emit({ type: 'job:fatal', jobId: JOB_IDS[0], error: 'settings_unavailable' });
+    expect(runner.getState()).toEqual({
+      status: 'error',
+      error: 'settings_unavailable',
+      total: 3,
+      done: 0,
+      failed: 0,
+      skipped: 0,
+    });
+    expect(serialize(document)).toBe(before);
+    expect(fake.disconnected()).toBe(true);
+    expect(fake.listenerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    const sent = fake.sent.length;
+    vi.advanceTimersByTime(PING_INTERVAL_MS * 2);
+    expect(fake.sent).toHaveLength(sent);
+  });
+
+  it('reinício: resultado assíncrono da porta antiga depois do restart é ignorado', async () => {
+    const document = parse(MIXED_PAGE);
+    const before = serialize(document);
+    const { runner, ports } = setup(document);
+    runner.start();
+    const old = ports[0] as FakePort;
+    const stale = old.inFlight[0] as JobUnitMessage;
+    const lateResult = {
+      type: 'job:result',
+      jobId: stale.jobId,
+      unitId: stale.unitId,
+      ok: true,
+      text: 'TARDIO',
+    };
+    // Entregas agendadas antes do restart e executadas depois dele.
+    queueMicrotask(() => old.emitQueued(lateResult));
+    setTimeout(() => old.emitQueued(lateResult), 10);
+
+    runner.start();
+    const current = ports[1] as FakePort;
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(serialize(document)).toBe(before);
+    expect(unitsOf(old)).toHaveLength(1);
+    expect(unitsOf(current)).toHaveLength(1);
+    expect(runner.getState()).toEqual({
+      status: 'translating',
+      total: 3,
+      done: 0,
+      failed: 0,
+      skipped: 0,
+    });
+    current.runToEnd(upperCase);
+    expect(bodyHtml(document)).not.toContain('TARDIO');
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 3 });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('onState que chama cancel() dentro do emit: para sem exceção', () => {
+    const document = parse(MIXED_PAGE);
+    const { runner, port, states } = setup(document, (state, self) => {
+      if (state.status === 'translating' && state.done === 1) self.cancel();
+    });
+    runner.start();
+    const fake = port();
+    expect(() => fake.reply(upperCase)).not.toThrow();
+
+    expect(runner.getState()).toEqual({
+      status: 'cancelled',
+      total: 3,
+      done: 1,
+      failed: 0,
+      skipped: 0,
+    });
+    expect(states[states.length - 1]?.status).toBe('cancelled');
+    expect(unitsOf(fake)).toHaveLength(1);
+    expect(fake.disconnected()).toBe(true);
+    expect(fake.listenerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('onState que chama cancel() no translating inicial: nada é enviado', () => {
+    const document = parse(MIXED_PAGE);
+    const before = serialize(document);
+    const { runner, ports } = setup(document, (state, self) => {
+      if (state.status === 'translating') self.cancel();
+    });
+    expect(() => runner.start()).not.toThrow();
+    const fake = ports[0] as FakePort;
+    expect(unitsOf(fake)).toHaveLength(0);
+    expect(runner.getState().status).toBe('cancelled');
+    expect(serialize(document)).toBe(before);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('onState que chama start() dentro do emit: um job só, sem unidades duplicadas', () => {
+    const document = parse(MIXED_PAGE);
+    let restarted = false;
+    const { runner, ports } = setup(document, (state, self) => {
+      if (!restarted && state.done === 1) {
+        restarted = true;
+        self.start();
+      }
+    });
+    runner.start();
+    const old = ports[0] as FakePort;
+    expect(() => old.reply(upperCase)).not.toThrow();
+
+    expect(ports).toHaveLength(2);
+    expect(old.disconnected()).toBe(true);
+    expect(old.listenerCount()).toBe(0);
+    expect(unitsOf(old)).toHaveLength(1);
+    const current = ports[1] as FakePort;
+    expect(current.inFlight).toHaveLength(1);
+    expect(runner.getState()).toEqual({
+      status: 'translating',
+      total: 3,
+      done: 0,
+      failed: 0,
+      skipped: 0,
+    });
+
+    current.runToEnd(upperCase);
+    const ids = unitsOf(current).map((unit) => unit.unitId);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toHaveLength(4);
+    expect(unitsOf(current).every((unit) => unit.jobId === JOB_IDS[1])).toBe(true);
+    expect(current.maxInFlight()).toBe(1);
+    expect(bodyHtml(document)).toBe(
+      '<p>PLAIN SENTENCE HERE.</p><p>HELLO <b>BOLD</b> WORLD.</p><p>HELLO<!--x--> WORLD</p>',
+    );
+    expect(runner.getState()).toEqual({
+      status: 'translated',
+      total: 3,
+      done: 3,
+      failed: 0,
+      skipped: 0,
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('onState que chama start() ao terminar: novo job limpo', () => {
+    const document = parse('<p>Only line.</p>');
+    let restarted = false;
+    const { runner, ports } = setup(document, (state, self) => {
+      if (!restarted && state.status === 'translated') {
+        restarted = true;
+        self.start();
+      }
+    });
+    runner.start();
+    expect(() => (ports[0] as FakePort).reply(upperCase)).not.toThrow();
+    expect(ports).toHaveLength(2);
+    expect(runner.getState()).toMatchObject({ status: 'translating', done: 0 });
+    // O restart restaurou o original antes de replanejar.
+    expect(bodyHtml(document)).toBe('<p>Only line.</p>');
+    (ports[1] as FakePort).runToEnd(upperCase);
+    expect(bodyHtml(document)).toBe('<p>ONLY LINE.</p>');
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 1 });
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
