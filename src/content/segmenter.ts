@@ -67,6 +67,21 @@ const BLOCK_ELEMENTS: ReadonlySet<string> = new Set([
   'body',
   'html',
   'hr',
+  // Blocos menos comuns (inclusive obsoletos, ainda renderizados como bloco).
+  // `optgroup`/`option` ficam de fora: o coletor já exclui a subárvore.
+  'center',
+  'form',
+  'dialog',
+  'menu',
+  'dir',
+  'hgroup',
+  'search',
+  'thead',
+  'tbody',
+  'tfoot',
+  'colgroup',
+  'frameset',
+  'noframes',
 ]);
 
 /** Espaço ASCII do HTML; U+00A0 (NBSP) fica de fora de propósito. */

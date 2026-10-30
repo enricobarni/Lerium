@@ -161,6 +161,19 @@ describe('segmentTextNodes: blocos e fronteiras', () => {
     'body',
     'html',
     'hr',
+    'center',
+    'form',
+    'dialog',
+    'menu',
+    'dir',
+    'hgroup',
+    'search',
+    'thead',
+    'tbody',
+    'tfoot',
+    'colgroup',
+    'frameset',
+    'noframes',
   ])('<%s> é bloco: separa o texto e também separa quando vazio', (tag) => {
     // Montado por API do DOM: o parser reposicionaria texto solto em
     // table/tr/ul e não aceita html/body aninhados.
@@ -194,6 +207,25 @@ describe('segmentTextNodes: blocos e fronteiras', () => {
       expect(segments[0]?.nodes).toHaveLength(3);
     },
   );
+
+  it('<center> irmãos geram segmentos separados', () => {
+    const document = parse(
+      '<body><center>Chapter one</center><center>It was dark.</center></body>',
+    );
+    expect(segment(document).map((item) => [item.block.localName, item.text])).toEqual([
+      ['center', 'Chapter one'],
+      ['center', 'It was dark.'],
+    ]);
+  });
+
+  it('<form> separa do texto ao redor', () => {
+    const document = parse('<body><p>Before</p><form>Sign in to comment</form>After</body>');
+    expect(segment(document).map((item) => [item.block.localName, item.text])).toEqual([
+      ['p', 'Before'],
+      ['form', 'Sign in to comment'],
+      ['body', 'After'],
+    ]);
+  });
 
   it('compara localName sem diferenciar maiúsculas (createElementNS)', () => {
     const document = parse('<body><span id="host"></span></body>');
