@@ -15,8 +15,14 @@
  *   esse nó entre o espaço inicial e final originais; nós só de espaço ficam
  *   intocados.
  * - `markers`: markup inline de um nível; uma unidade com o texto codificado
- *   (`encodeMarkers`). O texto de cada run decodificado vai literalmente ao
- *   único nó com conteúdo do run (ou ao primeiro nó, se o run é só espaço).
+ *   (`encodeMarkers`). O texto de cada run decodificado vai ao único nó com
+ *   conteúdo do run (ou ao primeiro nó, se o run é só espaço). Run de um nó:
+ *   escrita literal. Run de vários nós (ex.: `bold<!--c--> `): o alvo recebe
+ *   o texto sem bordas entre as bordas originais dele, e os outros nós (só de
+ *   espaço) ficam como estão; escrever o texto do run inteiro no alvo
+ *   duplicaria o espaço dos vizinhos. Um run de vários nós só de espaço cujo
+ *   texto volta só de espaço não é escrito; se a tradução pôs palavras nele,
+ *   elas vão para o primeiro nó, também entre as bordas originais.
  *   Marcadores inválidos na saída → `markers_invalid` com um plano `per_node`
  *   de fallback para o mesmo segmento.
  * - `per_node`: uma unidade por nó com letra, com o texto do nó colapsado. É
@@ -162,10 +168,18 @@ type Strategy =
       readonly kind: 'markers';
       readonly unitId: string;
       readonly layout: InlineLayout;
-      /** Nó de destino de cada run, na ordem de `layout.runs`. */
-      readonly targets: readonly Text[];
+      /** Destino de cada run, na ordem de `layout.runs`. */
+      readonly targets: readonly RunTarget[];
     }
   | { readonly kind: 'per_node'; readonly units: readonly NodeUnit[] };
+
+interface RunTarget {
+  readonly node: Text;
+  /** `data` do nó no `plan`. */
+  readonly original: string;
+  /** Run de um nó só: o texto decodificado vai literalmente. */
+  readonly literal: boolean;
+}
 
 interface PendingPlan {
   readonly nodes: readonly Text[];
@@ -252,13 +266,14 @@ function planSegment(
   const encoded = encodeMarkers(layout.layout);
   if (encoded === null) return perNodePlan(id, nodes, snapshot, token);
 
-  const targets: Text[] = [];
+  // `node.data` é o snapshot: tudo aqui roda no mesmo `plan`, sem `await`.
+  const targets: RunTarget[] = [];
   for (const run of layout.runNodes) {
     const content = run.filter((node) => HAS_CONTENT.test(node.data));
     if (content.length > 1) return perNodePlan(id, nodes, snapshot, token);
     const target = content[0] ?? run[0];
     if (target === undefined) return perNodePlan(id, nodes, snapshot, token);
-    targets.push(target);
+    targets.push({ node: target, original: target.data, literal: run.length === 1 });
   }
   const unitId = unitIdOf(id, 'markers', token);
   return {
@@ -299,10 +314,17 @@ function buildWrites(strategy: Strategy, results: ReadonlyMap<string, string | n
       if (output === null) return { ok: false, reason: 'translation_failed' };
       const decoded = decodeMarkers(output, strategy.layout);
       if (!decoded.ok) return { ok: false, reason: 'markers_invalid' };
-      const writes = strategy.targets.map((node, index) => ({
-        node,
-        value: decoded.texts[index] as string,
-      }));
+      const writes: Write[] = [];
+      strategy.targets.forEach(({ node, original, literal }, index) => {
+        const text = decoded.texts[index] as string;
+        if (literal) {
+          writes.push({ node, value: text });
+          return;
+        }
+        const translation = trimAscii(text);
+        if (translation === '' && !HAS_CONTENT.test(original)) return;
+        writes.push({ node, value: withOriginalEdges(original, translation) });
+      });
       return { ok: true, writes };
     }
     case 'per_node': {

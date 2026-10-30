@@ -251,6 +251,39 @@ describe('caminho com marcadores', () => {
     });
   });
 
+  it('run de vários nós: espaço só de um nó não é duplicado no alvo', () => {
+    const document = parse('<p>Hello <em>bold<!--c--> </em>end</p>');
+    const before = htmlOf(document);
+    const applier = createPageApplier();
+    const plan = planOf(applier, onlySegment(document));
+    expect(plan.kind).toBe('markers');
+    expect(applier.apply('seg-0', resultsFor(plan, upperCase))).toEqual({ ok: true });
+    expect(htmlOf(document)).toBe('<p>HELLO <em>BOLD<!--c--> </em>END</p>');
+    applier.restore();
+    expect(htmlOf(document)).toBe(before);
+  });
+
+  it('run só de espaço com vários nós não é escrito', () => {
+    const document = parse('<p><em>a word</em> <!--c--> <strong>b word</strong></p>');
+    const before = htmlOf(document);
+    const applier = createPageApplier();
+    const plan = planOf(applier, onlySegment(document));
+    expect(plan.kind).toBe('markers');
+    expect(applier.apply('seg-0', resultsFor(plan, upperCase))).toEqual({ ok: true });
+    expect(htmlOf(document)).toBe('<p><em>A WORD</em> <!--c--> <strong>B WORD</strong></p>');
+    applier.restore();
+    expect(htmlOf(document)).toBe(before);
+  });
+
+  it('run só de espaço com vários nós recebe palavra que a tradução pôs ali', () => {
+    const document = parse('<p><em>a word</em> <!--c--> <strong>b word</strong></p>');
+    const applier = createPageApplier();
+    const plan = planOf(applier, onlySegment(document));
+    const results = resultsFor(plan, () => '<g1>uma palavra</g1> e <g2>outra</g2>');
+    expect(applier.apply('seg-0', results)).toEqual({ ok: true });
+    expect(htmlOf(document)).toBe('<p><em>uma palavra</em> e<!--c--> <strong>outra</strong></p>');
+  });
+
   it('run com mais de um nó com conteúdo vai nó a nó desde o plano', () => {
     const document = parse('<p>The <em>red<!--x-->dish</em> stone.</p>');
     const applier = createPageApplier();
