@@ -33,7 +33,9 @@
  *
  * Atomicidade por segmento: ou todos os nós do segmento recebem a tradução,
  * ou nenhum. Antes de escrever, todos os nós do segmento precisam continuar
- * conectados e com o mesmo `data` capturado no `plan` (`node_changed`). No
+ * conectados, com o mesmo `data` e o mesmo `parentNode` capturados no `plan`,
+ * e fora de área excluída (`isExcludedElement` do pai até o bloco) ou
+ * editável (`isInEditableContext`); senão, `node_changed`. No
  * `per_node`, uma unidade sem resultado (`translation_failed`) ou implausível
  * (`implausible_output`) deixa o segmento inteiro no original: aplicar só
  * parte dos nós misturaria idiomas dentro de uma frase. As escritas são
@@ -45,14 +47,18 @@
  *
  * Restauração: o registro guarda, por nó, o `original` e o último `applied`.
  * O `original` é gravado na primeira escrita e regravado quando uma nova
- * escrita encontra no nó um texto diferente do aplicado (o site o trocou). `restore` só escreve o original em
- * nós conectados cujo `data` ainda é o aplicado; `reapply` só escreve o
- * aplicado em nós conectados cujo `data` ainda é o original. Um nó que o site
- * alterou depois da escrita não é tocado.
+ * escrita encontra no nó um texto diferente do aplicado (o site o trocou).
+ * `restore` só escreve o original em nós cujo `data` ainda é o aplicado;
+ * `reapply` só escreve o aplicado em nós cujo `data` ainda é o original. Um
+ * nó que o site alterou depois da escrita, ou que está num contexto editável
+ * no momento, não é tocado e conta como pulado. Nós desconectados contam como
+ * pulados e saem do registro. Um segundo `restore` seguido conta tudo como
+ * pulado (os nós já têm o original, não o aplicado); idem para `reapply`.
  */
 
 import { decodeMarkers, encodeMarkers, type InlineLayout } from '../core/inline-markers';
 import { checkLetterRatio } from '../core/letter-ratio';
+import { isExcludedElement, isInEditableContext } from './dom-collector';
 import { INLINE_LIMITS_EXCEEDED, inlineLayoutOf } from './inline-layout';
 import { MAX_SEGMENT_CHARS, type TranslationSegment } from './segmenter';
 
@@ -182,9 +188,12 @@ interface RunTarget {
 }
 
 interface PendingPlan {
+  readonly block: Element;
   readonly nodes: readonly Text[];
   /** `data` de cada nó de `nodes` no momento do `plan`. */
   readonly snapshot: readonly string[];
+  /** `parentNode` de cada nó de `nodes` no momento do `plan`. */
+  readonly parents: readonly (ParentNode | null)[];
   readonly plan: SegmentPlan;
   readonly strategy: Strategy;
 }
@@ -282,6 +291,19 @@ function planSegment(
   };
 }
 
+/**
+ * O pai do nó está agora numa área que a coleta excluiria (subindo até o
+ * bloco do segmento, inclusive) ou num contexto editável: escrever ali
+ * mexeria em código, campo de formulário ou texto que o usuário edita.
+ */
+function isRefusedContext(node: Text, block: Element): boolean {
+  for (let element = node.parentElement; element !== null; element = element.parentElement) {
+    if (isExcludedElement(element)) return true;
+    if (element === block) break;
+  }
+  return isInEditableContext(node);
+}
+
 function resultOf(results: ReadonlyMap<string, string | null>, unitId: string): string | null {
   const value: unknown = results.get(unitId);
   return typeof value === 'string' ? value : null;
@@ -365,8 +387,41 @@ export function createPageApplier(): PageApplier {
     node.data = value;
   };
 
-  const unchanged = ({ nodes, snapshot }: PendingPlan): boolean =>
-    nodes.every((node, index) => node.isConnected && node.data === snapshot[index]);
+  const unchanged = ({ block, nodes, snapshot, parents }: PendingPlan): boolean => {
+    const checked = new Set<ParentNode>();
+    return nodes.every((node, index) => {
+      const parent = node.parentNode;
+      if (!node.isConnected || node.data !== snapshot[index] || parent !== parents[index]) {
+        return false;
+      }
+      if (parent === null || checked.has(parent)) return true;
+      checked.add(parent);
+      return !isRefusedContext(node, block);
+    });
+  };
+
+  /**
+   * Passa por todo o registro escrevendo `to` onde o nó ainda tem `from`.
+   * Entradas de nós desconectados contam como puladas e saem do registro
+   * (libera memória; o nó não volta a ser tocado mesmo se for reinserido).
+   */
+  const sweep = (from: 'applied' | 'original'): { written: number; skipped: number } => {
+    const to = from === 'applied' ? 'original' : 'applied';
+    let written = 0;
+    let skipped = 0;
+    for (const [node, entry] of registry) {
+      if (!node.isConnected) {
+        registry.delete(node);
+        skipped += 1;
+      } else if (node.data === entry[from] && !isInEditableContext(node)) {
+        node.data = entry[to];
+        written += 1;
+      } else {
+        skipped += 1;
+      }
+    }
+    return { written, skipped };
+  };
 
   return {
     plan(segment) {
@@ -376,8 +431,9 @@ export function createPageApplier(): PageApplier {
       }
       const nodes = [...segment.nodes];
       const snapshot = nodes.map((node) => node.data);
+      const parents = nodes.map((node) => node.parentNode);
       const { plan, strategy } = planSegment(segment, snapshot, nextToken++);
-      pending.set(segment.id, { nodes, snapshot, plan, strategy });
+      pending.set(segment.id, { block: segment.block, nodes, snapshot, parents, plan, strategy });
       return plan;
     },
 
@@ -400,31 +456,13 @@ export function createPageApplier(): PageApplier {
     },
 
     restore() {
-      let restored = 0;
-      let skipped = 0;
-      for (const [node, entry] of registry) {
-        if (node.isConnected && node.data === entry.applied) {
-          node.data = entry.original;
-          restored += 1;
-        } else {
-          skipped += 1;
-        }
-      }
-      return { restored, skipped };
+      const { written, skipped } = sweep('applied');
+      return { restored: written, skipped };
     },
 
     reapply() {
-      let reapplied = 0;
-      let skipped = 0;
-      for (const [node, entry] of registry) {
-        if (node.isConnected && node.data === entry.original) {
-          node.data = entry.applied;
-          reapplied += 1;
-        } else {
-          skipped += 1;
-        }
-      }
-      return { reapplied, skipped };
+      const { written, skipped } = sweep('original');
+      return { reapplied: written, skipped };
     },
 
     clear() {

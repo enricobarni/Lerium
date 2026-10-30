@@ -131,6 +131,19 @@ function isHiddenByInlineStyle(style: string): boolean {
 }
 
 /**
+ * O próprio elemento é editável: atributo `contenteditable` com valor
+ * editável ou, onde a propriedade existe, `isContentEditable`.
+ */
+function isEditableElement(element: Element): boolean {
+  const editable = element.getAttribute('contenteditable');
+  if (editable !== null && EDITABLE_VALUES.has(editable.trim().toLowerCase())) return true;
+  // Defesa extra: no Chromium, `isContentEditable` também cobre editáveis
+  // herdados ou ativados por outro caminho. Só existe em HTMLElement e falta
+  // no jsdom; o `in` cobre SVG/MathML e ambientes sem a propriedade.
+  return 'isContentEditable' in element && element.isContentEditable === true;
+}
+
+/**
  * Indica se o elemento e toda a sua subárvore ficam fora da coleta. Não há
  * reativação: um `translate="yes"` dentro de uma área excluída continua fora.
  * Exportado para a segmentação, que trata o elemento excluído como fronteira.
@@ -144,12 +157,7 @@ export function isExcludedElement(element: Element): boolean {
   const translate = element.getAttribute('translate');
   if (translate !== null && translate.trim().toLowerCase() === 'no') return true;
 
-  const editable = element.getAttribute('contenteditable');
-  if (editable !== null && EDITABLE_VALUES.has(editable.trim().toLowerCase())) return true;
-  // Defesa extra: no Chromium, `isContentEditable` também cobre editáveis
-  // herdados ou ativados por outro caminho. Só existe em HTMLElement e falta
-  // no jsdom; o `in` cobre SVG/MathML e ambientes sem a propriedade.
-  if ('isContentEditable' in element && element.isContentEditable === true) return true;
+  if (isEditableElement(element)) return true;
 
   const style = element.getAttribute('style');
   return style !== null && isHiddenByInlineStyle(style);
@@ -170,6 +178,20 @@ function isDesignModeOn(document: Document): boolean {
 function isInsideExcludedArea(root: Element): boolean {
   for (let element: Element | null = root; element !== null; element = element.parentElement) {
     if (isExcludedElement(element)) return true;
+  }
+  return false;
+}
+
+/**
+ * O nó está agora num contexto editável: documento em `designMode` ou algum
+ * ancestral editável (mesmo critério da coleta). Exportado para a aplicação,
+ * que não escreve onde o usuário pode estar digitando.
+ */
+export function isInEditableContext(node: Node): boolean {
+  const document = node.ownerDocument;
+  if (document !== null && isDesignModeOn(document)) return true;
+  for (let element = node.parentElement; element !== null; element = element.parentElement) {
+    if (isEditableElement(element)) return true;
   }
   return false;
 }

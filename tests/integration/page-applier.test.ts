@@ -401,6 +401,52 @@ describe('atomicidade entre plan e apply', () => {
     expect(htmlOf(document)).toBe('<p><!--a-->Hello\n</p>');
   });
 
+  it('nó movido para outro pai: node_changed e nada é escrito', () => {
+    const document = parse('<p id="a">Hello there</p><p id="b"></p><style></style>');
+    const node = byId(document, 'a').firstChild as Text;
+    for (const target of ['#b', 'style']) {
+      const applier = createPageApplier();
+      const plan = planOf(applier, segmentTextNodes([node])[0] as TranslationSegment);
+      document.querySelector(target)?.append(node);
+      expect(applier.apply('seg-0', resultsFor(plan, upperCase))).toEqual({
+        ok: false,
+        reason: 'node_changed',
+      });
+      expect(node.data).toBe('Hello there');
+      byId(document, 'a').append(node);
+    }
+  });
+
+  it('pai movido para área excluída: node_changed e nada é escrito', () => {
+    for (const area of ['textarea', 'style', 'code']) {
+      const document = parse(`<p>The <em>red</em> stone.</p><div><${area}></${area}></div>`);
+      const applier = createPageApplier();
+      const plan = planOf(applier, onlySegment(document));
+      const em = document.querySelector('em') as Element;
+      document.querySelector(area)?.append(em);
+      const before = htmlOf(document);
+      expect(applier.apply('seg-0', resultsFor(plan, upperCase))).toEqual({
+        ok: false,
+        reason: 'node_changed',
+      });
+      expect(htmlOf(document)).toBe(before);
+    }
+  });
+
+  it('pai ou ancestral que virou editável: node_changed e nada é escrito', () => {
+    for (const selector of ['p', 'div']) {
+      const document = parse('<div><p>Hello there</p></div>');
+      const applier = createPageApplier();
+      const plan = planOf(applier, onlySegment(document));
+      document.querySelector(selector)?.setAttribute('contenteditable', 'true');
+      expect(applier.apply('seg-0', resultsFor(plan, upperCase))).toEqual({
+        ok: false,
+        reason: 'node_changed',
+      });
+      expect(document.querySelector('p')?.textContent).toBe('Hello there');
+    }
+  });
+
   it('fallback usa o snapshot do plano original', () => {
     const document = parse('<p>The <em>red</em> stone.</p>');
     const applier = createPageApplier();
@@ -557,6 +603,34 @@ describe('restore e reapply', () => {
     expect(applier.restore()).toEqual({ restored: 2, skipped: 3 });
     expect(htmlOf(document)).toBe('<p id="a">Hello there.</p><p id="c">Good night.</p>');
     expect(removed.textContent).toBe('THE RED STONE.');
+  });
+
+  it('esquece os nós desconectados depois de contá-los como pulados', () => {
+    const { document, applier } = translatedDocument();
+    const removed = byId(document, 'b');
+    removed.remove();
+    expect(applier.restore()).toEqual({ restored: 2, skipped: 3 });
+    document.body.append(removed);
+    expect(applier.reapply()).toEqual({ reapplied: 2, skipped: 0 });
+    expect(removed.textContent).toBe('THE RED STONE.');
+  });
+
+  it('restore e reapply pulam nós em contexto editável', () => {
+    const { document, applier } = translatedDocument();
+    byId(document, 'a').setAttribute('contenteditable', '');
+    expect(applier.restore()).toEqual({ restored: 4, skipped: 1 });
+    expect(byId(document, 'a').textContent).toBe('HELLO THERE.');
+    byId(document, 'a').removeAttribute('contenteditable');
+    byId(document, 'c').setAttribute('contenteditable', 'plaintext-only');
+    expect(applier.reapply()).toEqual({ reapplied: 3, skipped: 2 });
+    expect(byId(document, 'c').textContent).toBe('Good night.');
+  });
+
+  it('um segundo restore seguido conta tudo como pulado', () => {
+    const { document, applier } = translatedDocument();
+    expect(applier.restore()).toEqual({ restored: 5, skipped: 0 });
+    expect(applier.restore()).toEqual({ restored: 0, skipped: 5 });
+    expect(htmlOf(document)).toBe(ORIGINAL);
   });
 
   it('reapply não toca no nó alterado depois do restore', () => {
