@@ -1,0 +1,364 @@
+/**
+ * Codec de marcadores inline (experimento da ADR-003, opção 2). Módulo puro:
+ * não referencia DOM, `chrome` nem `console`.
+ *
+ * Um bloco com markup inline (`<em>`, `<strong>`, `<a>`...) é descrito como
+ * uma sequência de *runs* de texto. Cada run carrega o `path` dos wrappers
+ * inline que o envolvem, do mais externo ao mais interno. `encodeMarkers`
+ * concatena os runs com marcadores numerados para o modelo traduzir o bloco
+ * inteiro; `decodeMarkers` valida a saída do modelo e devolve um texto por
+ * run, para aplicar via `nodeValue` (nunca como HTML).
+ *
+ * Layout canônico (qualquer desvio torna o layout inválido):
+ * - ids são inteiros 1-based atribuídos na ordem de abertura (1, 2, 3...);
+ * - um wrapper cobre runs contíguos: depois de fechado, não reabre;
+ * - runs vizinhos têm `path` diferente (senão não haveria fronteira entre eles);
+ * - no máximo `MAX_INLINE_WRAPPERS` wrappers e `MAX_INLINE_DEPTH` níveis;
+ * - pelo menos um wrapper (sem wrapper não há o que marcar).
+ *
+ * Semântica dos runs na decodificação: o DOM não reordena nós, então o que
+ * importa é a sequência de marcadores. A saída é válida se abre e fecha os
+ * mesmos marcadores, na mesma ordem e com o mesmo aninhamento da entrada. O
+ * texto de cada intervalo entre marcadores vai para o run que ocupava esse
+ * intervalo, mesmo que o modelo tenha deslocado palavras de um lado para o
+ * outro de um marcador (ex.: "the ⟦1⟧red⟦/1⟧ stone" → "a pedra ⟦1⟧vermelha⟦/1⟧":
+ * o run externo inicial recebe "a pedra ", o marcado "vermelha" e o externo
+ * final "").
+ *
+ * `empty_run` vale só para runs dentro de wrapper: se um run marcado que tinha
+ * letra volta vazio ou só com espaço, o elemento inline ficaria vazio na
+ * página. Um run externo pode ficar vazio, porque a tradução desloca palavras.
+ *
+ * Intervalos sem run (entre dois marcadores colados, ou antes do primeiro
+ * marcador quando o primeiro run já é marcado) não têm nó de destino: espaço
+ * neles é descartado; qualquer outro texto falha com `orphan_text`.
+ *
+ * Espaços: o interior de cada intervalo é devolvido literalmente, sem trim
+ * (espaço junto a um marcador é parte do texto do run). Só as bordas externas
+ * da saída inteira são normalizadas: o espaço inicial e final que o modelo
+ * produzir é trocado pelo espaço inicial e final do texto codificado. Assim
+ * uma quebra de linha extra no fim da resposta não vira texto do último run.
+ *
+ * Colisão: não há escape. Se um run já contém sintaxe do formato (inclusive
+ * malformada), `encodeMarkers` devolve `null` e o chamador escolhe outro
+ * formato ou outra estratégia. Na saída, qualquer sintaxe do formato que não
+ * seja um marcador exato (ex.: `⟦x⟧`, `< g1>`, `[ /1]`) é `collision`; por isso
+ * nenhum marcador vaza para `texts`.
+ */
+
+export interface InlineRun {
+  readonly text: string;
+  /** Ids dos wrappers inline, do mais externo ao mais interno; `[]` = fora de wrapper. */
+  readonly path: readonly number[];
+}
+
+export interface InlineLayout {
+  readonly runs: readonly InlineRun[];
+}
+
+/** `⟦1⟧…⟦/1⟧` | `<g1>…</g1>` | `[1]…[/1]`. */
+export type MarkerFormat = 'brackets_math' | 'xml_g' | 'square';
+
+export const MARKER_FORMATS: readonly MarkerFormat[] = Object.freeze([
+  'brackets_math',
+  'xml_g',
+  'square',
+]);
+
+export const MAX_INLINE_WRAPPERS = 8;
+export const MAX_INLINE_DEPTH = 3;
+
+export type InlineLayoutError =
+  | 'invalid_layout'
+  | 'adjacent_same_path'
+  | 'non_canonical_ids'
+  | 'too_deep'
+  | 'too_many_wrappers'
+  | 'no_wrappers';
+
+/**
+ * Prioridade quando há mais de um problema: `invalid_layout` → `collision` →
+ * `unknown` → `duplicate` → `missing` → `nesting` (marcadores cruzados) →
+ * `order` → `nesting` (estrutura diferente da original) → `orphan_text` →
+ * `empty_run`.
+ *
+ * `invalid_layout`: o layout não é codificável (`encodeMarkers` daria `null`).
+ * `orphan_text`: texto não branco num intervalo sem run de destino.
+ */
+export type DecodeError =
+  | 'missing'
+  | 'unknown'
+  | 'duplicate'
+  | 'order'
+  | 'nesting'
+  | 'empty_run'
+  | 'collision'
+  | 'orphan_text'
+  | 'invalid_layout';
+
+export type DecodeResult = { ok: true; texts: string[] } | { ok: false; error: DecodeError };
+
+interface FormatSpec {
+  open(id: number): string;
+  close(id: number): string;
+  /** Qualquer coisa parecida com marcador do formato (exata ou malformada). Global. */
+  loose: RegExp;
+  /** Marcador exato, ancorado: grupo 1 = `/` de fechamento, grupo 2 = id. */
+  strict: RegExp;
+}
+
+const FORMATS: Readonly<Record<MarkerFormat, FormatSpec>> = Object.freeze({
+  brackets_math: {
+    open: (id) => `⟦${id}⟧`,
+    close: (id) => `⟦/${id}⟧`,
+    // Os colchetes matemáticos não aparecem em prosa: qualquer um é sintaxe.
+    loose: /⟦[^⟦⟧]*⟧|[⟦⟧]/gu,
+    strict: /^⟦(\/?)([1-9]\d{0,2})⟧$/u,
+  },
+  xml_g: {
+    open: (id) => `<g${id}>`,
+    close: (id) => `</g${id}>`,
+    loose: /<\s*\/?\s*g\s*\d*\s*\/?\s*>/giu,
+    strict: /^<(\/?)g([1-9]\d{0,2})>$/u,
+  },
+  square: {
+    open: (id) => `[${id}]`,
+    close: (id) => `[/${id}]`,
+    // Notas de rodapé como "[1]" colidem; "[sic]" não.
+    loose: /\[\s*\/?\s*\d+\s*\]/gu,
+    strict: /^\[(\/?)([1-9]\d{0,2})\]$/u,
+  },
+});
+
+interface MarkerEvent {
+  readonly close: boolean;
+  readonly id: number;
+}
+
+interface LayoutPlan {
+  readonly events: readonly MarkerEvent[];
+  /** Para cada run, o índice do intervalo (entre eventos) que ele ocupa. */
+  readonly runSlots: readonly number[];
+  readonly wrappers: number;
+  readonly depth: number;
+}
+
+type PlanResult = { ok: true; plan: LayoutPlan } | { ok: false; error: InlineLayoutError };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+const isPositiveInteger = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 1;
+
+const HAS_LETTER = /\p{L}/u;
+
+/** Lê o layout uma vez, validando forma e estrutura. Nunca lança. */
+function planLayout(layout: unknown): PlanResult {
+  const fail = (error: InlineLayoutError): PlanResult => ({ ok: false, error });
+  try {
+    if (!isRecord(layout) || !Array.isArray(layout.runs) || layout.runs.length === 0) {
+      return fail('invalid_layout');
+    }
+    const runs: unknown[] = layout.runs;
+    const events: MarkerEvent[] = [];
+    const runSlots: number[] = [];
+    let previous: readonly number[] = [];
+    let nextId = 1;
+    let depth = 0;
+
+    for (const [index, run] of runs.entries()) {
+      if (!isRecord(run) || typeof run.text !== 'string' || !Array.isArray(run.path)) {
+        return fail('invalid_layout');
+      }
+      const path: unknown[] = run.path;
+      if (!path.every(isPositiveInteger)) return fail('invalid_layout');
+      if (new Set(path).size !== path.length) return fail('invalid_layout');
+      if (path.length > MAX_INLINE_DEPTH) return fail('too_deep');
+      const current = path as number[];
+
+      let common = 0;
+      while (
+        common < previous.length &&
+        common < current.length &&
+        previous[common] === current[common]
+      ) {
+        common += 1;
+      }
+      if (index > 0 && common === previous.length && common === current.length) {
+        return fail('adjacent_same_path');
+      }
+      for (let level = previous.length - 1; level >= common; level -= 1) {
+        events.push({ close: true, id: previous[level] as number });
+      }
+      for (let level = common; level < current.length; level += 1) {
+        // Ids canônicos: um id reaberto ou fora de sequência é sempre < ou > nextId.
+        if (current[level] !== nextId) return fail('non_canonical_ids');
+        events.push({ close: false, id: nextId });
+        nextId += 1;
+      }
+      runSlots.push(events.length);
+      depth = Math.max(depth, current.length);
+      previous = current;
+    }
+    for (let level = previous.length - 1; level >= 0; level -= 1) {
+      events.push({ close: true, id: previous[level] as number });
+    }
+
+    const wrappers = nextId - 1;
+    if (wrappers === 0) return fail('no_wrappers');
+    if (wrappers > MAX_INLINE_WRAPPERS) return fail('too_many_wrappers');
+    return { ok: true, plan: { events, runSlots, wrappers, depth } };
+  } catch {
+    // Getters anômalos num layout vindo de outro contexto.
+    return fail('invalid_layout');
+  }
+}
+
+export type InlineLayoutValidation =
+  { ok: true; wrappers: number; depth: number } | { ok: false; error: InlineLayoutError };
+
+/** Valida a estrutura do layout (não verifica colisão com formatos). */
+export function validateInlineLayout(layout: InlineLayout): InlineLayoutValidation {
+  const planned = planLayout(layout);
+  if (!planned.ok) return planned;
+  return { ok: true, wrappers: planned.plan.wrappers, depth: planned.plan.depth };
+}
+
+/** Nº de trechos com sintaxe do formato (exata ou malformada) em `text`. */
+export function countMarkerSyntax(text: string, format: MarkerFormat): number {
+  if (typeof text !== 'string' || !Object.hasOwn(FORMATS, format)) return 0;
+  return [...text.matchAll(FORMATS[format].loose)].length;
+}
+
+function renderEvent(spec: FormatSpec, event: MarkerEvent): string {
+  return event.close ? spec.close(event.id) : spec.open(event.id);
+}
+
+/** Texto codificado; `null` se o layout for inválido ou algum run colidir. */
+function encodeWithPlan(layout: InlineLayout, format: MarkerFormat): string | null {
+  if (!Object.hasOwn(FORMATS, format)) return null;
+  const planned = planLayout(layout);
+  if (!planned.ok) return null;
+  const { events, runSlots } = planned.plan;
+  const texts = layout.runs.map((run) => run.text);
+  if (texts.some((text) => countMarkerSyntax(text, format) > 0)) return null;
+
+  const spec = FORMATS[format];
+  const intervals = Array.from({ length: events.length + 1 }, () => '');
+  runSlots.forEach((slot, index) => {
+    intervals[slot] = texts[index] as string;
+  });
+  let encoded = intervals[0] as string;
+  events.forEach((event, index) => {
+    encoded += renderEvent(spec, event) + (intervals[index + 1] as string);
+  });
+  return encoded;
+}
+
+/**
+ * Concatena os runs com marcadores do formato. Devolve `null` se o layout for
+ * inválido (ver cabeçalho), não tiver wrapper, exceder os limites ou se algum
+ * run já contiver sintaxe do formato (colisão; não há escape).
+ */
+export function encodeMarkers(layout: InlineLayout, format: MarkerFormat): string | null {
+  return encodeWithPlan(layout, format);
+}
+
+const LEADING_SPACE = /^\s*/u;
+const TRAILING_SPACE = /\s*$/u;
+
+interface Token {
+  readonly start: number;
+  readonly end: number;
+  readonly close: boolean;
+  readonly id: number;
+}
+
+/**
+ * Valida a saída do modelo contra o layout e devolve um texto por run, na
+ * ordem de `layout.runs`. Ver o cabeçalho para a semântica dos intervalos,
+ * dos espaços e da colisão, e `DecodeError` para a prioridade dos erros.
+ */
+export function decodeMarkers(
+  output: string,
+  layout: InlineLayout,
+  format: MarkerFormat,
+): DecodeResult {
+  const fail = (error: DecodeError): DecodeResult => ({ ok: false, error });
+  const encoded = encodeWithPlan(layout, format);
+  const planned = planLayout(layout);
+  if (encoded === null || !planned.ok) return fail('invalid_layout');
+  const { events, runSlots, wrappers } = planned.plan;
+  if (typeof output !== 'string') return fail('missing');
+  const spec = FORMATS[format];
+
+  // Bordas externas: trocadas pelas do texto codificado.
+  const lead = LEADING_SPACE.exec(encoded)?.[0] ?? '';
+  const trail = TRAILING_SPACE.exec(encoded)?.[0] ?? '';
+  const text = lead + output.trim() + trail;
+
+  const tokens: Token[] = [];
+  for (const match of text.matchAll(spec.loose)) {
+    const exact = spec.strict.exec(match[0]);
+    if (exact === null) return fail('collision');
+    const start = match.index;
+    tokens.push({
+      start,
+      end: start + match[0].length,
+      close: exact[1] === '/',
+      id: Number(exact[2]),
+    });
+  }
+
+  if (tokens.some((token) => token.id > wrappers)) return fail('unknown');
+
+  const opens = new Array<number>(wrappers + 1).fill(0);
+  const closes = new Array<number>(wrappers + 1).fill(0);
+  for (const token of tokens) {
+    const counter = token.close ? closes : opens;
+    counter[token.id] = (counter[token.id] as number) + 1;
+  }
+  for (let id = 1; id <= wrappers; id += 1) {
+    if ((opens[id] as number) > 1 || (closes[id] as number) > 1) return fail('duplicate');
+  }
+  for (let id = 1; id <= wrappers; id += 1) {
+    if (opens[id] === 0 || closes[id] === 0) return fail('missing');
+  }
+
+  const stack: number[] = [];
+  for (const token of tokens) {
+    if (!token.close) stack.push(token.id);
+    else if (stack.pop() !== token.id) return fail('nesting');
+  }
+
+  const openOrder = tokens.filter((token) => !token.close).map((token) => token.id);
+  if (openOrder.some((id, index) => id !== index + 1)) return fail('order');
+
+  // Mesma ordem de abertura, mas fechamentos em outro lugar: aninhamento diferente.
+  const sameEvents = events.every(
+    (event, index) => event.close === tokens[index]?.close && event.id === tokens[index]?.id,
+  );
+  if (!sameEvents) return fail('nesting');
+
+  const intervals: string[] = [];
+  let cursor = 0;
+  for (const token of tokens) {
+    intervals.push(text.slice(cursor, token.start));
+    cursor = token.end;
+  }
+  intervals.push(text.slice(cursor));
+
+  const occupied = new Set(runSlots);
+  if (intervals.some((interval, slot) => !occupied.has(slot) && interval.trim() !== '')) {
+    return fail('orphan_text');
+  }
+
+  const texts = runSlots.map((slot) => intervals[slot] as string);
+  const lostLetters = layout.runs.some(
+    (run, index) =>
+      run.path.length > 0 && HAS_LETTER.test(run.text) && (texts[index] as string).trim() === '',
+  );
+  if (lostLetters) return fail('empty_run');
+  return { ok: true, texts };
+}
