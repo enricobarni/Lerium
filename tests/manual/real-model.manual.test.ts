@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { createOllamaTranslationProvider } from '../../src/core/ollama-translation-provider';
 import type { LanguageCode } from '../../src/core/types';
-import { loadLiteraryFixtures, type LiteraryFixture } from '../fixtures/literary-fixtures';
+import {
+  findForbidden,
+  findInconsistentTerms,
+  loadLiteraryFixtures,
+  MAX_LENGTH_RATIO,
+  minLengthRatioOf,
+  type LiteraryFixture,
+  type TermCount,
+} from '../fixtures/literary-fixtures';
 
 /**
  * Teste manual opt-in com o modelo real (Fase 3). Só roda com
@@ -10,7 +18,8 @@ import { loadLiteraryFixtures, type LiteraryFixture } from '../fixtures/literary
  * Variáveis:
  * - `LERIUM_OLLAMA_ENDPOINT` (padrão `http://127.0.0.1:11434`);
  * - `LERIUM_OLLAMA_MODEL` (padrão `translategemma:4b`);
- * - `LERIUM_MANUAL_RUNS` execuções por fixture (padrão 1);
+ * - `LERIUM_MANUAL_RUNS` execuções por fixture (padrão 1); cada execução é
+ *   um `it` próprio, para que o `testTimeout` valha por execução;
  * - `LERIUM_MANUAL_SHOW_OUTPUT=1` imprime a tradução (as fixtures são
  *   autorais; por padrão só metadados são impressos).
  */
@@ -29,8 +38,6 @@ const RUNS = parseRuns(process.env.LERIUM_MANUAL_RUNS);
 const PREAMBLE = /^\s*(here is|here's|sure|translation:|tradução:|aqui está|claro[,!])/i;
 const PT_STOPWORDS = new Set(['que', 'não', 'de', 'uma', 'com', 'para', 'o', 'a']);
 const EN_STOPWORDS = new Set(['the', 'and', 'of', 'to', 'was']);
-const MIN_LENGTH_RATIO = 0.6;
-const MAX_LENGTH_RATIO = 2.0;
 
 const countStopwords = (text: string, stopwords: ReadonlySet<string>): number =>
   (text.toLowerCase().match(/\p{L}+/gu) ?? []).filter((word) => stopwords.has(word)).length;
@@ -39,7 +46,9 @@ interface Criteria {
   noPreamble: boolean;
   missing: string[];
   forbidden: string[];
+  inconsistent: TermCount[];
   lengthRatio: number;
+  minLengthRatio: number;
   ptStopwords: number;
   enStopwords: number;
 }
@@ -48,8 +57,11 @@ function evaluate(fixture: LiteraryFixture, output: string): Criteria {
   return {
     noPreamble: !PREAMBLE.test(output),
     missing: fixture.mustContain.filter((term) => !output.includes(term)),
-    forbidden: fixture.mustNotContain.filter((term) => output.includes(term)),
+    // Canários comparados normalizados (maiúsculas, só A-Z0-9).
+    forbidden: findForbidden(fixture, output),
+    inconsistent: findInconsistentTerms(fixture, output),
     lengthRatio: Number((output.length / fixture.text.length).toFixed(2)),
+    minLengthRatio: minLengthRatioOf(fixture),
     ptStopwords: countStopwords(output, PT_STOPWORDS),
     enStopwords: countStopwords(output, EN_STOPWORDS),
   };
@@ -62,8 +74,13 @@ describe.skipIf(!ENABLED)(`modelo real (${MODEL})`, () => {
     fetchFn: (input, init) => fetch(input, init),
   });
 
-  it.each(loadLiteraryFixtures())('$id', async (fixture) => {
-    for (let run = 1; run <= RUNS; run += 1) {
+  const cases = loadLiteraryFixtures().flatMap((fixture) =>
+    Array.from({ length: RUNS }, (_, index) => ({ fixture, run: index + 1 })),
+  );
+
+  // Um `it` por (fixture, execução): o `testTimeout` vale por chamada ao modelo.
+  for (const { fixture, run } of cases) {
+    it(`${fixture.id} #${run}`, async () => {
       const result = await provider.translate({
         text: fixture.text,
         source: fixture.source as LanguageCode,
@@ -100,9 +117,10 @@ describe.skipIf(!ENABLED)(`modelo real (${MODEL})`, () => {
       expect(criteria.noPreamble).toBe(true);
       expect(criteria.missing).toEqual([]);
       expect(criteria.forbidden).toEqual([]);
-      expect(criteria.lengthRatio).toBeGreaterThanOrEqual(MIN_LENGTH_RATIO);
+      expect(criteria.inconsistent).toEqual([]);
+      expect(criteria.lengthRatio).toBeGreaterThanOrEqual(criteria.minLengthRatio);
       expect(criteria.lengthRatio).toBeLessThanOrEqual(MAX_LENGTH_RATIO);
       expect(criteria.ptStopwords).toBeGreaterThan(criteria.enStopwords);
-    }
-  });
+    });
+  }
 });

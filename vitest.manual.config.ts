@@ -13,5 +13,10 @@ export default defineConfig({
     // Modelos locais em hardware modesto podem levar minutos por fixture.
     testTimeout: 600_000,
     passWithNoTests: false,
+    // Os metadados de cada execução (console.log) são a evidência do teste
+    // manual: exibidos também quando o teste passa. `silent: 'passed-only'`
+    // os esconderia; o reporter `verbose` lista cada (fixture, execução).
+    silent: false,
+    reporters: ['verbose'],
   },
 });
