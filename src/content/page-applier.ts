@@ -52,7 +52,12 @@ import { MAX_SEGMENT_CHARS, type TranslationSegment } from './segmenter';
 
 export type UnitKind = 'plain' | 'markers' | 'per_node';
 
-/** Texto a enviar ao modelo; `unitId` identifica o resultado no `apply`. */
+/**
+ * Texto a enviar ao modelo; `unitId` identifica o resultado no `apply`. O id
+ * carrega o token do plano que o gerou (`seg-0#text@7`): um resultado de um
+ * plano substituído, ou um id forjado, não casa com nenhuma unidade e o
+ * segmento fica no original (`translation_failed`).
+ */
 export interface TranslationUnit {
   readonly unitId: string;
   readonly text: string;
@@ -181,17 +186,27 @@ type BuildResult =
   | { readonly ok: true; readonly writes: readonly Write[] }
   | { readonly ok: false; readonly reason: SkipReason };
 
+/**
+ * Id de unidade: `seg-0#text@7`. O sufixo é o token do plano, único por
+ * applier, para que um resultado de um plano substituído (mesmo `segmentId`
+ * de outra segmentação) não encontre nenhuma unidade do plano atual.
+ */
+function unitIdOf(segmentId: string, part: string, token: number): string {
+  return `${segmentId}#${part}@${token}`;
+}
+
 function perNodePlan(
   segmentId: string,
   nodes: readonly Text[],
   snapshot: readonly string[],
+  token: number,
 ): Planned {
   const units: NodeUnit[] = [];
   nodes.forEach((node, index) => {
     const original = snapshot[index] as string;
     if (!LETTER.test(original)) return;
     units.push({
-      unitId: `${segmentId}#node-${index}`,
+      unitId: unitIdOf(segmentId, `node-${index}`, token),
       source: collapse(original),
       node,
       original,
@@ -207,7 +222,11 @@ function perNodePlan(
   };
 }
 
-function planSegment(segment: TranslationSegment, snapshot: readonly string[]): Planned {
+function planSegment(
+  segment: TranslationSegment,
+  snapshot: readonly string[],
+  token: number,
+): Planned {
   const { id, nodes } = segment;
   const layout = inlineLayoutOf(segment);
 
@@ -216,9 +235,9 @@ function planSegment(segment: TranslationSegment, snapshot: readonly string[]): 
       HAS_CONTENT.test(snapshot[index] as string) ? [index] : [],
     );
     const index = content[0];
-    if (content.length !== 1 || index === undefined) return perNodePlan(id, nodes, snapshot);
+    if (content.length !== 1 || index === undefined) return perNodePlan(id, nodes, snapshot, token);
     const unit: NodeUnit = {
-      unitId: `${id}#text`,
+      unitId: unitIdOf(id, 'text', token),
       source: segment.text,
       node: nodes[index] as Text,
       original: snapshot[index] as string,
@@ -229,19 +248,19 @@ function planSegment(segment: TranslationSegment, snapshot: readonly string[]): 
     };
   }
 
-  if (layout === INLINE_LIMITS_EXCEEDED) return perNodePlan(id, nodes, snapshot);
+  if (layout === INLINE_LIMITS_EXCEEDED) return perNodePlan(id, nodes, snapshot, token);
   const encoded = encodeMarkers(layout.layout);
-  if (encoded === null) return perNodePlan(id, nodes, snapshot);
+  if (encoded === null) return perNodePlan(id, nodes, snapshot, token);
 
   const targets: Text[] = [];
   for (const run of layout.runNodes) {
     const content = run.filter((node) => HAS_CONTENT.test(node.data));
-    if (content.length > 1) return perNodePlan(id, nodes, snapshot);
+    if (content.length > 1) return perNodePlan(id, nodes, snapshot, token);
     const target = content[0] ?? run[0];
-    if (target === undefined) return perNodePlan(id, nodes, snapshot);
+    if (target === undefined) return perNodePlan(id, nodes, snapshot, token);
     targets.push(target);
   }
-  const unitId = `${id}#markers`;
+  const unitId = unitIdOf(id, 'markers', token);
   return {
     plan: { segmentId: id, kind: 'markers', units: [{ unitId, text: encoded }] },
     strategy: { kind: 'markers', unitId, layout: layout.layout, targets },
@@ -309,6 +328,7 @@ interface RegistryEntry {
 export function createPageApplier(): PageApplier {
   const registry = new Map<Text, RegistryEntry>();
   const pending = new Map<string, PendingPlan | 'segment_too_long'>();
+  let nextToken = 0;
 
   const write = (node: Text, value: string): void => {
     if (node.data === value) return;
@@ -334,7 +354,7 @@ export function createPageApplier(): PageApplier {
       }
       const nodes = [...segment.nodes];
       const snapshot = nodes.map((node) => node.data);
-      const { plan, strategy } = planSegment(segment, snapshot);
+      const { plan, strategy } = planSegment(segment, snapshot, nextToken++);
       pending.set(segment.id, { nodes, snapshot, plan, strategy });
       return plan;
     },
@@ -349,7 +369,7 @@ export function createPageApplier(): PageApplier {
       const built = buildWrites(entry.strategy, results);
       if (!built.ok) {
         if (built.reason !== 'markers_invalid') return { ok: false, reason: built.reason };
-        const fallback = perNodePlan(segmentId, entry.nodes, entry.snapshot);
+        const fallback = perNodePlan(segmentId, entry.nodes, entry.snapshot, nextToken++);
         pending.set(segmentId, { ...entry, ...fallback });
         return { ok: false, reason: 'markers_invalid', fallback: fallback.plan };
       }

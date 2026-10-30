@@ -68,7 +68,7 @@ describe('caminho de texto puro', () => {
     const applier = createPageApplier();
     const plan = planOf(applier, onlySegment(document));
     expect(plan.kind).toBe('plain');
-    expect(plan.units).toEqual([{ unitId: 'seg-0#text', text: 'Hello there, traveler.' }]);
+    expect(plan.units).toEqual([{ unitId: 'seg-0#text@0', text: 'Hello there, traveler.' }]);
 
     const result = applier.apply(
       'seg-0',
@@ -178,7 +178,7 @@ describe('caminho com marcadores', () => {
     const applier = createPageApplier();
     const plan = planOf(applier, onlySegment(document));
     expect(plan.kind).toBe('markers');
-    expect(plan.units).toEqual([{ unitId: 'seg-0#markers', text: 'The <g1>red</g1> stone.' }]);
+    expect(plan.units).toEqual([{ unitId: 'seg-0#markers@0', text: 'The <g1>red</g1> stone.' }]);
 
     const results = resultsFor(plan, () => 'A pedra <g1>vermelha</g1>.');
     expect(applier.apply('seg-0', results)).toEqual({ ok: true });
@@ -245,7 +245,7 @@ describe('caminho com marcadores', () => {
     const document = parse('<p>The <em>red</em> stone.</p>');
     const applier = createPageApplier();
     planOf(applier, onlySegment(document));
-    expect(applier.apply('seg-0', new Map([['seg-0#markers', null]]))).toEqual({
+    expect(applier.apply('seg-0', new Map([['seg-0#markers@0', null]]))).toEqual({
       ok: false,
       reason: 'translation_failed',
     });
@@ -300,8 +300,8 @@ describe('nó a nó', () => {
     const plan = planOf(applier, onlySegment(document));
     expect(plan.kind).toBe('per_node');
     expect(plan.units).toEqual([
-      { unitId: 'seg-0#node-0', text: 'Hello' },
-      { unitId: 'seg-0#node-2', text: 'world!' },
+      { unitId: 'seg-0#node-0@0', text: 'Hello' },
+      { unitId: 'seg-0#node-2@0', text: 'world!' },
     ]);
     const results = resultsFor(plan, (text) => (text === 'Hello' ? ' Olá ' : 'mundo!'));
     expect(applier.apply('seg-0', results)).toEqual({ ok: true });
@@ -400,7 +400,7 @@ describe('ciclo de vida dos planos', () => {
     const segment = onlySegment(document);
     expect(segment.text.length).toBeGreaterThan(MAX_SEGMENT_CHARS);
     expect(applier.plan(segment)).toEqual({ segmentId: 'seg-0', skipped: 'segment_too_long' });
-    expect(applier.apply('seg-0', new Map([['seg-0#text', 'x']]))).toEqual({
+    expect(applier.apply('seg-0', new Map([['seg-0#text@0', 'x']]))).toEqual({
       ok: false,
       reason: 'segment_too_long',
     });
@@ -411,6 +411,47 @@ describe('ciclo de vida dos planos', () => {
     const document = parse(`<p>${'a'.repeat(MAX_SEGMENT_CHARS)}</p>`);
     const applier = createPageApplier();
     expect(planOf(applier, onlySegment(document)).kind).toBe('plain');
+  });
+
+  it('resultado de um plano substituído não escreve no plano novo', () => {
+    const document = parse('<p id="x">First paragraph</p><p id="y">Second one here</p>');
+    const applier = createPageApplier();
+    const nodes = collectTextNodes(document);
+    // Duas segmentações independentes: as duas devolvem `seg-0`.
+    const [first] = segmentTextNodes([nodes[0] as Text]) as [TranslationSegment];
+    const [second] = segmentTextNodes([nodes[1] as Text]) as [TranslationSegment];
+    expect(first.id).toBe(second.id);
+    const stale = planOf(applier, first);
+    const current = planOf(applier, second);
+    expect(stale.units[0]?.unitId).not.toBe(current.units[0]?.unitId);
+
+    const before = htmlOf(document);
+    expect(
+      applier.apply(
+        'seg-0',
+        resultsFor(stale, () => 'Primeiro parágrafo'),
+      ),
+    ).toEqual({
+      ok: false,
+      reason: 'translation_failed',
+    });
+    expect(htmlOf(document)).toBe(before);
+  });
+
+  it('unitId forjado ou desconhecido nunca escreve', () => {
+    const document = parse('<p>Hello there</p>');
+    const before = htmlOf(document);
+    const applier = createPageApplier();
+    const plan = planOf(applier, onlySegment(document));
+    const unitId = plan.units[0]?.unitId as string;
+    const forged = new Map<string, string | null>([
+      ['seg-0#text', 'Olá'],
+      ['seg-0#text@999', 'Olá'],
+      [`${unitId}x`, 'Olá'],
+      ['seg-0#markers', 'Olá'],
+    ]);
+    expect(applier.apply('seg-0', forged)).toEqual({ ok: false, reason: 'translation_failed' });
+    expect(htmlOf(document)).toBe(before);
   });
 
   it('apply sem plano pendente é unknown_segment; o plano é consumido', () => {
