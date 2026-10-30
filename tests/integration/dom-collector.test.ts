@@ -209,6 +209,12 @@ describe('collectTextNodes: regras de exclusão', () => {
     ['display:none!important sem espaço', '<p style="display:none!important">drop</p>'],
     ['última declaração vence', '<p style="display: block; display: none">drop</p>'],
     ['comentário CSS no meio', '<p style="display: /* x */ none">drop</p>'],
+    ['comentário sem fechamento no fim', '<p style="display: none /* sem fim">drop</p>'],
+    ['display: none ! IMPORTANT', '<p style="display: none ! IMPORTANT">drop</p>'],
+    [
+      '"important" sem ! não protege a anterior',
+      '<p style="display: block important; display: none">drop</p>',
+    ],
     ['data-lerium-ui sem valor', `<div ${LERIUM_UI_ATTRIBUTE}><p>drop</p></div>`],
     ['data-lerium-ui com valor', `<div ${LERIUM_UI_ATTRIBUTE}="overlay">drop</div>`],
   ])('exclui %s', (_label, markup) => {
@@ -235,6 +241,10 @@ describe('collectTextNodes: regras de exclusão', () => {
     ['opacity: 0 (fora do escopo)', '<p style="opacity: 0">keep</p>'],
     ['!important anterior vence', '<p style="display: block !important; display: none">keep</p>'],
     ['propriedade vizinha', '<p style="content-visibility: hidden">keep</p>'],
+    [
+      'comentário sem fechamento descarta o resto',
+      '<p style="color: red /* display: none">keep</p>',
+    ],
   ])('mantém %s', (_label, markup) => {
     const document = parse(`<body>${markup}</body>`);
     expect(visibleTexts(document.body)).toEqual(['keep']);
@@ -319,5 +329,63 @@ describe('collectTextNodes: regras de exclusão', () => {
     collectTextNodes(loadFixture());
     collectTextNodes(parse('<body><p hidden>x</p><p style="display:none">y</p></body>'));
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe('collectTextNodes: style inline em tempo linear', () => {
+  // O objetivo é detectar parse quadrático, não medir desempenho: com regex
+  // de backtracking, 500 estilos patológicos de 4096 caracteres levam
+  // segundos; em tempo linear, poucos milissegundos. O limite de 1000 ms dá
+  // folga para máquinas lentas de CI.
+  const TIME_LIMIT_MS = 1000;
+  const MAX_ANALYZED = 4096;
+
+  /** Documento com `count` parágrafos "keep", cada um com o `style` dado. */
+  function withStyles(style: string, count: number): Document {
+    const document = parse('<body></body>');
+    for (let index = 0; index < count; index += 1) {
+      const paragraph = document.createElement('p');
+      paragraph.setAttribute('style', style);
+      paragraph.append('keep');
+      document.body.append(paragraph);
+    }
+    return document;
+  }
+
+  function timed(document: Document): { texts: string[]; elapsed: number } {
+    const start = performance.now();
+    const texts = visibleTexts(document);
+    return { texts, elapsed: performance.now() - start };
+  }
+
+  it.each([
+    ['comentários abertos em sequência', '/*'.repeat(MAX_ANALYZED / 2)],
+    ['espaços antes de lixo', 'display:none' + ' '.repeat(MAX_ANALYZED - 13) + 'x'],
+    ['espaços antes de !', 'display:none' + ' '.repeat(MAX_ANALYZED - 13) + '!'],
+  ])('analisa 500 estilos de 4096 caracteres (%s) rápido', (_label, style) => {
+    expect(style.length).toBeLessThanOrEqual(MAX_ANALYZED);
+    const { texts, elapsed } = timed(withStyles(style, 500));
+    expect(texts).toHaveLength(500);
+    expect(elapsed).toBeLessThan(TIME_LIMIT_MS);
+  });
+
+  it.each([
+    ['comentário sem fechamento', '/*' + ' '.repeat(200_000)],
+    ['display:none seguido de espaços e lixo', 'display:none' + ' '.repeat(200_000) + 'x'],
+  ])('trata style de 200 mil caracteres (%s) rápido', (_label, style) => {
+    const { texts, elapsed } = timed(withStyles(style, 1));
+    expect(texts).toEqual(['keep']);
+    expect(elapsed).toBeLessThan(TIME_LIMIT_MS);
+  });
+
+  it('não analisa style acima de 4096 caracteres (tratado como visível)', () => {
+    const style = 'display:none;' + ' '.repeat(MAX_ANALYZED);
+    expect(visibleTexts(withStyles(style, 1))).toEqual(['keep']);
+  });
+
+  it('analisa style com exatamente 4096 caracteres', () => {
+    const style = 'display:none;' + ' '.repeat(MAX_ANALYZED - 13);
+    expect(style).toHaveLength(MAX_ANALYZED);
+    expect(visibleTexts(withStyles(style, 1))).toEqual([]);
   });
 });

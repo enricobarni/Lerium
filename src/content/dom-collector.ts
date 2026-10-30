@@ -59,8 +59,44 @@ const EXCLUDED_ELEMENTS: ReadonlySet<string> = new Set([
 /** Valores de `contenteditable` que tornam o próprio elemento editável. */
 const EDITABLE_VALUES: ReadonlySet<string> = new Set(['', 'true', 'plaintext-only']);
 
-const IMPORTANT_SUFFIX = /\s*!\s*important\s*$/;
-const CSS_COMMENT = /\/\*[\s\S]*?\*\//g;
+/**
+ * Tamanho máximo do atributo `style` analisado. Acima disso o atributo é
+ * ignorado e o elemento é tratado como visível (o texto é coletado): estilos
+ * inline legítimos são curtos, e o limite fixa o custo por elemento mesmo
+ * com conteúdo hostil.
+ */
+const MAX_INLINE_STYLE_LENGTH = 4096;
+
+const IMPORTANT = 'important';
+
+/**
+ * Remove comentários CSS em uma passada (sem regex com backtracking). Um
+ * comentário sem fechamento descarta o resto, como no tokenizador CSS.
+ */
+function stripCssComments(style: string): string {
+  let result = '';
+  let index = 0;
+  for (;;) {
+    const start = style.indexOf('/*', index);
+    if (start === -1) return result + style.slice(index);
+    result += style.slice(index, start);
+    const end = style.indexOf('*/', start + 2);
+    if (end === -1) return result;
+    index = end + 2;
+  }
+}
+
+/** Separa um `!important` final (com espaços opcionais) do valor. */
+function splitImportant(raw: string): { value: string; important: boolean } {
+  const trimmed = raw.trimEnd();
+  if (trimmed.endsWith(IMPORTANT)) {
+    const beforeKeyword = trimmed.slice(0, -IMPORTANT.length).trimEnd();
+    if (beforeKeyword.endsWith('!')) {
+      return { value: beforeKeyword.slice(0, -1).trim(), important: true };
+    }
+  }
+  return { value: trimmed.trim(), important: false };
+}
 
 /**
  * Lê `display` do atributo `style` inline, sem estilo computado. Regras de
@@ -70,22 +106,21 @@ const CSS_COMMENT = /\/\*[\s\S]*?\*\//g;
  * `visibility` não poda: é herdada, mas um descendente com
  * `visibility: visible` volta a aparecer. Texto oculto só por `visibility` é
  * coletado, como o oculto por folha de estilo (custo, não risco).
+ *
+ * Tempo linear no tamanho do atributo; acima de `MAX_INLINE_STYLE_LENGTH`
+ * caracteres o atributo não é analisado (visível).
  */
 function isHiddenByInlineStyle(style: string): boolean {
+  if (style.length > MAX_INLINE_STYLE_LENGTH) return false;
   let display: { value: string; important: boolean } | undefined;
-  for (const declaration of style.replace(CSS_COMMENT, '').split(';')) {
+  for (const declaration of stripCssComments(style).split(';')) {
     const colon = declaration.indexOf(':');
     if (colon === -1) continue;
     const property = declaration.slice(0, colon).trim().toLowerCase();
     if (property !== 'display') continue;
-    const raw = declaration
-      .slice(colon + 1)
-      .trim()
-      .toLowerCase();
-    const important = IMPORTANT_SUFFIX.test(raw);
-    const value = raw.replace(IMPORTANT_SUFFIX, '').trim();
-    if (display?.important === true && !important) continue;
-    display = { value, important };
+    const parsed = splitImportant(declaration.slice(colon + 1).toLowerCase());
+    if (display?.important === true && !parsed.important) continue;
+    display = parsed;
   }
   return display?.value === 'none';
 }
