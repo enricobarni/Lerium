@@ -314,6 +314,40 @@ describe('createPageJobHandler — tradução', () => {
       { type: 'job:result', jobId: JOB_ID, unitId: 'seg-0#text@1', ok: true, text },
     ]);
   });
+
+  it('streaming acima do limite aborta cedo e responde uma vez só', async () => {
+    const { port, calls } = setup();
+    port.emit(unit('a'));
+    await flush();
+    const { signal, onToken } = calls[0]!.options!;
+    onToken!('x'.repeat(MAX_OUTPUT_CHARS));
+    expect(signal!.aborted).toBe(false);
+    expect(port.sent).toEqual([]);
+    onToken!('y');
+    expect(signal!.aborted).toBe(true);
+    const overflow = {
+      type: 'job:result',
+      jobId: JOB_ID,
+      unitId: 'a',
+      ok: false,
+      error: 'invalid_response',
+      retryable: false,
+    };
+    expect(port.sent).toEqual([overflow]);
+
+    // Tokens e resultado tardios do provedor são ignorados.
+    onToken!('z'.repeat(10));
+    calls[0]!.resolve({ ok: true, text: 'x'.repeat(MAX_OUTPUT_CHARS + 11), durationMs: 1 });
+    await flush();
+    expect(port.sent).toEqual([overflow]);
+    expect(port.disconnect).not.toHaveBeenCalled();
+
+    // O slot fica livre: a próxima unidade não recebe busy.
+    port.emit(unit('b'));
+    await flush();
+    expect(calls).toHaveLength(2);
+    expect(port.sent).toEqual([overflow]);
+  });
 });
 
 describe('createPageJobHandler — concorrência e jobId', () => {

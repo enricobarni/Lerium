@@ -162,9 +162,27 @@ export function createPageJobHandler(deps: PageJobDeps): (port: PortLike) => voi
       if (!state.ok || disconnected || controller.signal.aborted) return;
 
       let chars = 0;
+      let overflowed = false;
       let lastProgressAt = now();
       const onToken = (delta: string): void => {
+        if (overflowed || controller.signal.aborted) return;
         chars += delta.length;
+        if (chars > MAX_OUTPUT_CHARS) {
+          // Saída grande demais: corta a geração já, sem esperar o fim. O
+          // slot é liberado aqui; o que o provedor devolver depois é ignorado.
+          overflowed = true;
+          controller.abort();
+          if (inFlight === controller) inFlight = null;
+          post({
+            type: 'job:result',
+            jobId: id,
+            unitId: unit.unitId,
+            ok: false,
+            error: 'invalid_response',
+            retryable: false,
+          });
+          return;
+        }
         const at = now();
         if (at - lastProgressAt >= PROGRESS_INTERVAL_MS) {
           lastProgressAt = at;
@@ -187,7 +205,7 @@ export function createPageJobHandler(deps: PageJobDeps): (port: PortLike) => voi
       }
 
       if (inFlight === controller) inFlight = null;
-      if (disconnected) return;
+      if (disconnected || overflowed) return;
 
       if (result.ok) {
         if (result.text.length > MAX_OUTPUT_CHARS) {
