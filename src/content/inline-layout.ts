@@ -6,7 +6,12 @@
  * nós, não loga e não guarda estado entre chamadas.
  */
 
-import type { InlineLayout, InlineRun } from '../core/inline-markers';
+import {
+  MAX_INLINE_DEPTH,
+  MAX_INLINE_WRAPPERS,
+  type InlineLayout,
+  type InlineRun,
+} from '../core/inline-markers';
 import type { TranslationSegment } from './segmenter';
 
 export interface SegmentInlineLayout {
@@ -17,6 +22,14 @@ export interface SegmentInlineLayout {
    */
   readonly runNodes: readonly (readonly Text[])[];
 }
+
+/**
+ * Sinal de que o segmento passa de `MAX_INLINE_DEPTH` níveis ou de
+ * `MAX_INLINE_WRAPPERS` wrappers: `encodeMarkers` recusaria o layout, então
+ * ele nem é montado e quem chama vai direto à tradução nó a nó.
+ */
+export const INLINE_LIMITS_EXCEEDED = 'inline_limits_exceeded';
+export type InlineLimitsExceeded = typeof INLINE_LIMITS_EXCEEDED;
 
 /** Espaço ASCII, o mesmo que o segmentador colapsa; U+00A0 conta como conteúdo. */
 const HAS_CONTENT = /[^ \t\n\r\f]/;
@@ -36,10 +49,10 @@ function samePath(left: readonly number[], right: readonly number[]): boolean {
  * de espaço não contam nessa cobertura: em HTML formatado, as quebras de
  * linha ao redor de `<span>…</span>` ficam fora dele e o transformariam em
  * marcador à toa. Como os nós são contíguos em ordem de documento, basta
- * testar o primeiro e o último nó com conteúdo. Cada elemento restante recebe um id 1..N na ordem de primeira
- * aparição (ids canônicos de `validateInlineLayout`). Nós consecutivos com o
- * mesmo `path` formam um run (ex.: dois nós do mesmo `<em>` separados por um
- * comentário).
+ * testar o primeiro e o último nó com conteúdo. Cada elemento restante
+ * recebe um id 1..N na ordem de primeira aparição (ids canônicos de
+ * `validateInlineLayout`). Nós consecutivos com o mesmo `path` formam um run
+ * (ex.: dois nós do mesmo `<em>` separados por um comentário).
  *
  * Texto: o run é a concatenação dos `nodeValue` crus, sem normalizar. O
  * caminho de texto puro usa `segment.text` (normalizado pelo segmentador); o
@@ -47,11 +60,19 @@ function samePath(left: readonly number[], right: readonly number[]): boolean {
  * interior de cada intervalo, então o espaço entre runs sobrevive à volta.
  *
  * Devolve `null` quando nenhum wrapper sobra: o segmento vai como texto puro.
- * Fora isso, devolve o layout mesmo que exceda `MAX_INLINE_DEPTH` ou
- * `MAX_INLINE_WRAPPERS`; quem chama passa por `encodeMarkers`, que devolve
- * `null` nesses casos (e em colisão), e então traduz nó a nó.
+ * Devolve `INLINE_LIMITS_EXCEEDED` assim que um `path` passa de
+ * `MAX_INLINE_DEPTH` ou os wrappers distintos passam de `MAX_INLINE_WRAPPERS`,
+ * sem montar o resto: quem chama traduz nó a nó. Um layout devolvido ainda
+ * pode ser recusado por `encodeMarkers` (colisão de marcadores no texto).
+ *
+ * Custo: a subida de cada nó para no primeiro wrapper que cobre tudo (os
+ * ancestrais dele também cobrem) ou no `MAX_INLINE_DEPTH + 1`-ésimo que não
+ * cobre, então visita no máximo `MAX_INLINE_DEPTH + 2` elementos por nó,
+ * mesmo com milhares de `<span>` aninhados.
  */
-export function inlineLayoutOf(segment: TranslationSegment): SegmentInlineLayout | null {
+export function inlineLayoutOf(
+  segment: TranslationSegment,
+): SegmentInlineLayout | InlineLimitsExceeded | null {
   const { block, nodes } = segment;
   const content = nodes.filter((node) => HAS_CONTENT.test(node.data));
   const first = content[0];
@@ -63,25 +84,31 @@ export function inlineLayoutOf(segment: TranslationSegment): SegmentInlineLayout
   const paths: number[][] = [];
   const texts: string[] = [];
   const groups: Text[][] = [];
+  const coversAll = (element: Element): boolean => {
+    let result = covering.get(element);
+    if (result === undefined) {
+      result = element.contains(first) && element.contains(last);
+      covering.set(element, result);
+    }
+    return result;
+  };
 
   for (const node of nodes) {
-    const ancestors: Element[] = [];
+    // Do mais interno ao mais externo; só os wrappers que não cobrem tudo.
+    const wrappers: Element[] = [];
     for (let element = node.parentElement; element !== null && element !== block;) {
-      ancestors.push(element);
+      if (coversAll(element)) break;
+      if (wrappers.length === MAX_INLINE_DEPTH) return INLINE_LIMITS_EXCEEDED;
+      wrappers.push(element);
       element = element.parentElement;
     }
-    ancestors.reverse();
 
     const path: number[] = [];
-    for (const element of ancestors) {
-      let coversAll = covering.get(element);
-      if (coversAll === undefined) {
-        coversAll = element.contains(first) && element.contains(last);
-        covering.set(element, coversAll);
-      }
-      if (coversAll) continue;
+    for (let index = wrappers.length - 1; index >= 0; index -= 1) {
+      const element = wrappers[index] as Element;
       let id = ids.get(element);
       if (id === undefined) {
+        if (ids.size === MAX_INLINE_WRAPPERS) return INLINE_LIMITS_EXCEEDED;
         id = ids.size + 1;
         ids.set(element, id);
       }
