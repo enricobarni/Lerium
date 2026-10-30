@@ -462,3 +462,68 @@ describe('createPageJobHandler — progresso', () => {
     expect(port.sent.some((message) => JSON.stringify(message).includes(UNIT_TEXT))).toBe(false);
   });
 });
+
+describe('createPageJobHandler — uma port por aba', () => {
+  const otherTab: PortSenderLike = { ...VALID_SENDER, tab: { id: 8 } };
+
+  it('nova port da mesma aba derruba a anterior e aborta a unidade em voo', async () => {
+    const { handler, port: first, calls } = setup();
+    first.emit(unit('a'));
+    await flush();
+    const signal = calls[0]!.options!.signal!;
+
+    const second = createFakePort();
+    handler(second);
+    expect(signal.aborted).toBe(true);
+    expect(first.disconnect).toHaveBeenCalledTimes(1);
+    expect(first.listenerCount()).toBe(0);
+    expect(second.disconnect).not.toHaveBeenCalled();
+
+    calls[0]!.options!.onToken!('abc');
+    calls[0]!.resolve({ ok: true, text: TRANSLATED, durationMs: 1 });
+    second.emit(unit('b'));
+    await flush();
+    expect(first.sent).toEqual([]);
+    expect(calls).toHaveLength(2);
+    calls[1]!.resolve({ ok: true, text: TRANSLATED, durationMs: 1 });
+    await flush();
+    expect(second.sent).toEqual([
+      { type: 'job:result', jobId: JOB_ID, unitId: 'b', ok: true, text: TRANSLATED },
+    ]);
+  });
+
+  it('abas diferentes coexistem', async () => {
+    const { handler, port: first, calls } = setup();
+    const second = createFakePort(otherTab);
+    handler(second);
+    first.emit(unit('a'));
+    second.emit(unit('b'));
+    await flush();
+    expect(calls).toHaveLength(2);
+    expect(calls.every((call) => call.options!.signal!.aborted === false)).toBe(true);
+    expect(first.disconnect).not.toHaveBeenCalled();
+    expect(second.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('disconnect da port substituída não remove a nova do registro', () => {
+    const { handler, port: first } = setup();
+    const second = createFakePort();
+    handler(second);
+    first.close();
+    // Se a segunda ainda está registrada, a terceira a derruba.
+    const third = createFakePort();
+    handler(third);
+    expect(second.disconnect).toHaveBeenCalledTimes(1);
+    expect(second.listenerCount()).toBe(0);
+    expect(third.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('port encerrada sai do registro sem afetar a próxima', () => {
+    const { handler, port: first } = setup();
+    first.close();
+    const second = createFakePort();
+    handler(second);
+    expect(first.disconnect).not.toHaveBeenCalled();
+    expect(second.disconnect).not.toHaveBeenCalled();
+  });
+});

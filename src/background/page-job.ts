@@ -16,6 +16,11 @@ import type { PortLike, PortSenderLike } from '../shared/port-like';
  * configurações e provedor são lidos uma única vez (snapshot), há no máximo
  * uma unidade em voo e nada é enviado depois do desligamento. Nenhum texto
  * da página ou do modelo é registrado; só o resultado final volta pela port.
+ *
+ * Há no máximo um job por aba: uma nova port válida da mesma aba (recarga,
+ * novo clique) derruba a anterior, que aborta a unidade em voo e não posta
+ * mais nada. O limite global de traduções simultâneas entre abas não é
+ * tratado aqui; cabe ao scheduler da Fase 5.
  */
 
 export interface PageJobDeps {
@@ -54,15 +59,17 @@ function isHttpUrl(url: unknown): boolean {
 /**
  * Só o frame principal de uma aba web, vindo do próprio content script do
  * Lerium, abre um job: o `id` barra outras extensões; `tab`/`frameId`/`url`
- * barram páginas da extensão, iframes e esquemas não web.
+ * barram páginas da extensão, iframes e esquemas não web. Devolve o id da
+ * aba, ou `null` se a port não é confiável.
  */
-function isTrustedPort(port: PortLike, runtimeId: string): boolean {
-  if (port.name !== PAGE_JOB_PORT_NAME) return false;
+function trustedTabId(port: PortLike, runtimeId: string): number | null {
+  if (port.name !== PAGE_JOB_PORT_NAME) return null;
   const sender: PortSenderLike | undefined = port.sender;
-  if (!sender || sender.id !== runtimeId) return false;
-  if (typeof sender.tab?.id !== 'number') return false;
-  if (sender.frameId !== 0) return false;
-  return isHttpUrl(sender.url);
+  if (!sender || sender.id !== runtimeId) return null;
+  const tabId = sender.tab?.id;
+  if (typeof tabId !== 'number') return null;
+  if (sender.frameId !== 0) return null;
+  return isHttpUrl(sender.url) ? tabId : null;
 }
 
 function safeDisconnect(port: PortLike): void {
@@ -78,11 +85,21 @@ type Ready =
 
 export function createPageJobHandler(deps: PageJobDeps): (port: PortLike) => void {
   const now = typeof deps.now === 'function' ? deps.now : () => Date.now();
+  /** Job ativo de cada aba; `stop` encerra sem postar mais nada. */
+  const jobsByTab = new Map<number, { port: PortLike; stop: () => void }>();
 
   return (port) => {
-    if (!isTrustedPort(port, deps.runtimeId)) {
+    const tabId = trustedTabId(port, deps.runtimeId);
+    if (tabId === null) {
       safeDisconnect(port);
       return;
+    }
+
+    const previous = jobsByTab.get(tabId);
+    if (previous !== undefined) {
+      // `disconnect()` não dispara o onDisconnect local: encerra à mão.
+      previous.stop();
+      safeDisconnect(previous.port);
     }
 
     let disconnected = false;
@@ -107,6 +124,8 @@ export function createPageJobHandler(deps: PageJobDeps): (port: PortLike) => voi
       inFlight = null;
       port.onMessage.removeListener(onMessage);
       port.onDisconnect.removeListener(onDisconnect);
+      // Só remove o registro se ainda for desta port (pode ter sido trocada).
+      if (jobsByTab.get(tabId)?.port === port) jobsByTab.delete(tabId);
     };
 
     const fatal = (id: string, error: JobFatalErrorKind): void => {
@@ -233,6 +252,7 @@ export function createPageJobHandler(deps: PageJobDeps): (port: PortLike) => voi
       teardown();
     }
 
+    jobsByTab.set(tabId, { port, stop: teardown });
     port.onMessage.addListener(onMessage);
     port.onDisconnect.addListener(onDisconnect);
   };
