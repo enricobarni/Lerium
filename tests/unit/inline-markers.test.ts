@@ -332,3 +332,42 @@ describe('propriedade de ida e volta', () => {
     }
   });
 });
+
+/**
+ * Detector de custo super-linear nas regex (backtracking). O limite é
+ * generoso de propósito: com regex lineares cada chamada leva poucos ms; com
+ * backtracking polinomial as mesmas entradas levam segundos.
+ */
+describe('custo linear das regex', () => {
+  const LIMIT_MS = 200;
+  const PATHOLOGICAL: readonly [string, string][] = [
+    ['marcador aberto sem fim', '<' + ' '.repeat(10000) + 'g' + ' '.repeat(10000) + 'x'],
+    ['<g seguido de espaços', '<g' + ' '.repeat(20000)],
+    ['espaço longo entre letras', 'a' + ' '.repeat(50000) + 'b'],
+  ];
+
+  const elapsed = (fn: () => unknown): number => {
+    const start = performance.now();
+    fn();
+    return performance.now() - start;
+  };
+
+  it.each(PATHOLOGICAL)('countMarkerSyntax: %s', (_, text) => {
+    expect(elapsed(() => countMarkerSyntax(text))).toBeLessThan(LIMIT_MS);
+  });
+
+  it.each(PATHOLOGICAL)('encodeMarkers com o texto como run: %s', (_, text) => {
+    const layout = layoutOf([text, []], ['word', [1]]);
+    expect(elapsed(() => encodeMarkers(layout))).toBeLessThan(LIMIT_MS);
+  });
+
+  it.each(PATHOLOGICAL)('decodeMarkers com o texto como run: %s', (_, text) => {
+    const layout = layoutOf([text, []], ['word', [1]]);
+    expect(elapsed(() => decodeMarkers(`${text}<g1>palavra</g1>`, layout))).toBeLessThan(LIMIT_MS);
+  });
+
+  it.each(PATHOLOGICAL)('decodeMarkers com o texto como saída: %s', (_, text) => {
+    expect(elapsed(() => decodeMarkers(text, RED_STONE))).toBeLessThan(LIMIT_MS);
+    expect(elapsed(() => decodeMarkers(`a <g1>b</g1>${text}`, RED_STONE))).toBeLessThan(LIMIT_MS);
+  });
+});

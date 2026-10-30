@@ -105,8 +105,16 @@ export type DecodeResult = { ok: true; texts: string[] } | { ok: false; error: D
 
 const openMarker = (id: number): string => `<g${id}>`;
 const closeMarker = (id: number): string => `</g${id}>`;
-/** Qualquer coisa parecida com marcador (exata ou malformada). Global. */
-const LOOSE_MARKER = /<\s*\/?\s*g\s*\d*\s*\/?\s*>/giu;
+/**
+ * Qualquer coisa parecida com marcador (exata ou malformada). Global.
+ *
+ * Linear de propósito: cada quantificador cobre uma classe que não contém o
+ * caractere seguinte (`g` depois de `[\s/]*`, `>` depois de `[\s\d/]*`), então
+ * não há backtracking. A forma anterior (`<\s*\/?\s*g\s*\d*\s*\/?\s*>`) tinha
+ * `\s*` adjacentes e custo polinomial (2000 espaços → dezenas de segundos). É
+ * mais permissiva que a sintaxe real; `STRICT_MARKER` decide o que é exato.
+ */
+const LOOSE_MARKER = /<[\s/]*g[\s\d/]*>/giu;
 /** Marcador exato, ancorado: grupo 1 = `/` de fechamento, grupo 2 = id. */
 const STRICT_MARKER = /^<(\/?)g([1-9]\d{0,2})>$/u;
 
@@ -243,8 +251,11 @@ export function encodeMarkers(layout: InlineLayout): string | null {
   return encodeWithPlan(layout);
 }
 
-const LEADING_SPACE = /^\s*/u;
-const TRAILING_SPACE = /\s*$/u;
+// Sem regex: `/\s*$/u` testa cada posição inicial e é quadrática numa
+// sequência longa de espaços seguida de não-espaço. `trimStart`/`trimEnd`
+// usam o mesmo conjunto de espaços que `\s` e são lineares.
+const leadingSpace = (text: string): string => text.slice(0, text.length - text.trimStart().length);
+const trailingSpace = (text: string): string => text.slice(text.trimEnd().length);
 
 interface Token {
   readonly start: number;
@@ -267,8 +278,8 @@ export function decodeMarkers(output: string, layout: InlineLayout): DecodeResul
   if (typeof output !== 'string') return fail('missing');
 
   // Bordas externas: trocadas pelas do texto codificado.
-  const lead = LEADING_SPACE.exec(encoded)?.[0] ?? '';
-  const trail = TRAILING_SPACE.exec(encoded)?.[0] ?? '';
+  const lead = leadingSpace(encoded);
+  const trail = trailingSpace(encoded);
   const text = lead + output.trim() + trail;
 
   const tokens: Token[] = [];
