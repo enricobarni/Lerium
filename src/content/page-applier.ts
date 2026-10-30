@@ -304,6 +304,14 @@ function isRefusedContext(node: Text, block: Element): boolean {
   return isInEditableContext(node);
 }
 
+/**
+ * Maior saída do modelo aceita por unidade: 4× o maior segmento (a razão
+ * máxima de letras) mais folga para marcadores e espaço. Acima disso a saída
+ * é `implausible_output` antes de qualquer processamento (trim, razão de
+ * letras ou decode), para que uma resposta degenerada não seja varrida inteira.
+ */
+export const MAX_OUTPUT_CHARS = 4 * MAX_SEGMENT_CHARS + 1024;
+
 function resultOf(results: ReadonlyMap<string, string | null>, unitId: string): string | null {
   const value: unknown = results.get(unitId);
   return typeof value === 'string' ? value : null;
@@ -316,6 +324,7 @@ function nodeWrite(
 ): Write | SkipReason {
   const output = resultOf(results, unit.unitId);
   if (output === null) return 'translation_failed';
+  if (output.length > MAX_OUTPUT_CHARS) return 'implausible_output';
   const translation = trimAscii(output);
   if (translation === '' || !checkLetterRatio(unit.source, translation)) {
     return 'implausible_output';
@@ -334,6 +343,7 @@ function buildWrites(strategy: Strategy, results: ReadonlyMap<string, string | n
     case 'markers': {
       const output = resultOf(results, strategy.unitId);
       if (output === null) return { ok: false, reason: 'translation_failed' };
+      if (output.length > MAX_OUTPUT_CHARS) return { ok: false, reason: 'implausible_output' };
       const decoded = decodeMarkers(output, strategy.layout);
       if (!decoded.ok) return { ok: false, reason: 'markers_invalid' };
       const writes: Write[] = [];

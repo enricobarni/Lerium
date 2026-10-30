@@ -470,6 +470,65 @@ describe('atomicidade entre plan e apply', () => {
   });
 });
 
+describe('tamanho da saída', () => {
+  const LIMIT = 4 * MAX_SEGMENT_CHARS + 1024;
+  /** Saída válida depois do `trim`, com `length` exato. */
+  const padded = (text: string, length: number): string => text + ' '.repeat(length - text.length);
+
+  const cases = [
+    { kind: 'plain', body: '<p>Hello</p>', output: 'Olá' },
+    { kind: 'markers', body: '<p>The <em>red</em> stone.</p>', output: 'A <g1>rubra</g1> pedra.' },
+    { kind: 'per_node', body: '<p>Hello<!--x--> world</p>', output: 'Olá' },
+  ] as const;
+
+  for (const { kind, body, output } of cases) {
+    it(`${kind}: saída acima do limite é implausible_output, no limite é aceita`, () => {
+      const document = parse(body);
+      const before = htmlOf(document);
+      const applier = createPageApplier();
+      const segment = onlySegment(document);
+      const plan = planOf(applier, segment);
+      expect(plan.kind).toBe(kind);
+      expect(
+        applier.apply(
+          'seg-0',
+          resultsFor(plan, () => padded(output, LIMIT + 1)),
+        ),
+      ).toEqual({
+        ok: false,
+        reason: 'implausible_output',
+      });
+      expect(htmlOf(document)).toBe(before);
+
+      const again = planOf(applier, segment);
+      expect(
+        applier.apply(
+          'seg-0',
+          resultsFor(again, () => padded(output, LIMIT)),
+        ),
+      ).toEqual({
+        ok: true,
+      });
+    });
+  }
+
+  it('saída enorme é recusada sem chegar ao codec', () => {
+    const document = parse('<p>The <em>red</em> stone.</p>');
+    const applier = createPageApplier();
+    const plan = planOf(applier, onlySegment(document));
+    const huge = '<g1>'.repeat(200_000);
+    expect(
+      applier.apply(
+        'seg-0',
+        resultsFor(plan, () => huge),
+      ),
+    ).toEqual({
+      ok: false,
+      reason: 'implausible_output',
+    });
+  });
+});
+
 describe('ciclo de vida dos planos', () => {
   it('segmento acima de MAX_SEGMENT_CHARS é pulado, sem unidades', () => {
     const words = 'word '.repeat(Math.ceil((MAX_SEGMENT_CHARS + 1) / 5));
