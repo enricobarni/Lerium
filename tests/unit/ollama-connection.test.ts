@@ -148,6 +148,26 @@ describe('showModel: resultado', () => {
 
     await expect(pending).resolves.toEqual({ ok: false, error: 'timeout' });
   });
+
+  it.each([
+    ['200', () => jsonResponse({})],
+    ['404', () => jsonResponse({ error: 'x' }, 404)],
+    ['500', () => jsonResponse({ error: 'x' }, 500)],
+    [
+      'TypeError',
+      () => {
+        throw new TypeError('Failed to fetch');
+      },
+    ],
+  ])('não deixa timers pendentes após %s', async (_label, make) => {
+    vi.useFakeTimers();
+    const fetchFn = vi.fn<typeof fetch>(async () => make());
+
+    await showModel(ENDPOINT, MODEL, { fetchFn });
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(fetchFn.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+  });
 });
 
 describe('testConnection', () => {
