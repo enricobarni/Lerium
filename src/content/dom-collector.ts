@@ -63,30 +63,31 @@ const IMPORTANT_SUFFIX = /\s*!\s*important\s*$/;
 const CSS_COMMENT = /\/\*[\s\S]*?\*\//g;
 
 /**
- * Lê `display` e `visibility` do atributo `style` inline, sem estilo
- * computado. Regras de cascata do próprio atributo: a última declaração vence,
- * exceto quando uma anterior tem `!important` e a posterior não.
+ * Lê `display` do atributo `style` inline, sem estilo computado. Regras de
+ * cascata do próprio atributo: a última declaração vence, exceto quando uma
+ * anterior tem `!important` e a posterior não.
+ *
+ * `visibility` não poda: é herdada, mas um descendente com
+ * `visibility: visible` volta a aparecer. Texto oculto só por `visibility` é
+ * coletado, como o oculto por folha de estilo (custo, não risco).
  */
 function isHiddenByInlineStyle(style: string): boolean {
-  const declared = new Map<string, { value: string; important: boolean }>();
+  let display: { value: string; important: boolean } | undefined;
   for (const declaration of style.replace(CSS_COMMENT, '').split(';')) {
     const colon = declaration.indexOf(':');
     if (colon === -1) continue;
     const property = declaration.slice(0, colon).trim().toLowerCase();
-    if (property !== 'display' && property !== 'visibility') continue;
+    if (property !== 'display') continue;
     const raw = declaration
       .slice(colon + 1)
       .trim()
       .toLowerCase();
     const important = IMPORTANT_SUFFIX.test(raw);
     const value = raw.replace(IMPORTANT_SUFFIX, '').trim();
-    const previous = declared.get(property);
-    if (previous?.important === true && !important) continue;
-    declared.set(property, { value, important });
+    if (display?.important === true && !important) continue;
+    display = { value, important };
   }
-  return (
-    declared.get('display')?.value === 'none' || declared.get('visibility')?.value === 'hidden'
-  );
+  return display?.value === 'none';
 }
 
 /**
