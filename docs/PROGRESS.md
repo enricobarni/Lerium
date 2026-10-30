@@ -6,12 +6,43 @@
 ## Estado atual
 
 - **Fase:** 4 — DOM e tradução de página (em andamento)
-- **Tarefa:** `feat/dom-apply-restore` (aplicação da tradução e restauração exata do original)
+- **Tarefa:** `feat/page-job-protocol` (mensagens do job, Port entre página e service worker, executor sequencial)
 - **Fase 3:** concluída — PRs #13–#16 mesclados; gate cumprido (18/18 execuções com o modelo real); ADR-011 aceita após conferência do model card pelo responsável
 - **Versão:** `0.1.0` (esqueleto + conexão com o Ollama, PLAN.md §5.4; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.1.0` em `ab06507` (validado: lint, typecheck, 398 testes, build, 8 E2E) e release [Lerium 0.1.0](https://github.com/enricobarni/Lerium/releases/tag/v0.1.0) publicadas pelo responsável.
 - **Fase 2:** concluída — PRs #9 e #10 mesclados; aceite manual do responsável no Chrome estável (conexão, modelos listados, Ollama fechado)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
+
+## Fase 4 — `feat/page-job-protocol`
+
+| Commit | Mensagem |
+|---|---|
+| `11be3e6` | `feat(shared): define mensagens tipadas do job de página` |
+| `5f9cab2` | `feat(shared): define interface mínima de port do job de página` |
+| `5bf5913` | `feat(content): orquestra job sequencial e descarta resultados antigos` |
+| `9864d22` | `feat(background): atende job de página por port com abort` |
+| `0130062` | `fix(content): valida unidade antes de enviar ao service worker` |
+| `4fe55c0` | `refactor(content): restringe o tipo do erro do job` |
+| `d2fc5c8` | `test(content): cobre sequências reais do job de página` |
+| `0891eac` | `fix(background): mantém uma port de job por aba` |
+| `cad1949` | `fix(background): aborta cedo saída acima do limite` |
+| `f118efd` | `fix(background): aceita só documento ativo no job de página` |
+| (este commit) | `docs: registra adr-010 e decide adr-004 do job de página` |
+
+Segunda de três branches de `feat/page-translation`.
+
+**O que foi feito:**
+
+- `src/shared/page-messages.ts`: mensagens tipadas e validadas do job; `src/core/text-limits.ts` concentra os limites de tamanho; `src/shared/port-like.ts` define a interface mínima de Port, escrita antes do trabalho paralelo para os dois lados não divergirem.
+- `src/background/page-job.ts`: atendimento da Port no service worker (ADR-010), ligado em `chrome.runtime.onConnect`.
+- `src/content/job-runner.ts`: executor sequencial na página, sobre o `page-applier`.
+- Trabalho paralelo: service worker em worktree isolada e content no checkout principal, integrados por `cherry-pick` sem conflitos.
+
+**Revisão:** reviewer e security aprovaram com ressalvas, sem achado crítico, alto ou médio. Aplicados: uma Port por aba, abort cedo de saída gigante, só documento ativo, unidade validada antes do envio (evita espera infinita), tipo de erro restrito, comentário de `busy` corrigido e testes das sequências reais (resultado e depois fatal, resultado atrasado da Port antiga, reentrância).
+
+**Validações executadas:** `npm run lint`, `typecheck`, `test` (1263/1263; eram 1170), `build` e `test:e2e` (8/8) com código 0.
+
+**Pendências para `feat/page-translation`:** prender a Port ao `documentId` da injeção; `minimum_chrome_version`; medir no Chrome real o worker com modelo frio (mais de 30 s até os cabeçalhos); conferir a permissão de porta personalizada no popup; avaliar `storage.local.setAccessLevel`; estado “mostrando original” para a interface.
 
 ## Fase 4 — `feat/dom-apply-restore`
 
@@ -470,4 +501,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 4 — `feat/page-job-protocol`: mensagens tipadas do job de página, uma Port por job entre content script e service worker com cancelamento (ADR-010 e ADR-004) e executor sequencial que usa o `page-applier`.
+Fase 4 — `feat/page-translation`: entrada do content script em build IIFE, permissões `activeTab` + `scripting` (ADR-002), popup com “Traduzir página” e “Mostrar original”, E2E com o mock do Ollama e smoke manual no Chrome real. Fecha o Gate da Fase 4.

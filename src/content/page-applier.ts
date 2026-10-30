@@ -60,7 +60,11 @@ import { decodeMarkers, encodeMarkers, type InlineLayout } from '../core/inline-
 import { checkLetterRatio } from '../core/letter-ratio';
 import { isExcludedElement, isInEditableContext } from './dom-collector';
 import { INLINE_LIMITS_EXCEEDED, inlineLayoutOf } from './inline-layout';
-import { MAX_SEGMENT_CHARS, type TranslationSegment } from './segmenter';
+import { MAX_OUTPUT_CHARS, MAX_SEGMENT_CHARS } from '../core/text-limits';
+import type { TranslationSegment } from './segmenter';
+
+/** Reexportado de `core/text-limits` para manter os imports existentes. */
+export { MAX_OUTPUT_CHARS } from '../core/text-limits';
 
 export type UnitKind = 'plain' | 'markers' | 'per_node';
 
@@ -303,14 +307,6 @@ function isRefusedContext(node: Text, block: Element): boolean {
   }
   return isInEditableContext(node);
 }
-
-/**
- * Maior saída do modelo aceita por unidade: 4× o maior segmento (a razão
- * máxima de letras) mais folga para marcadores e espaço. Acima disso a saída
- * é `implausible_output` antes de qualquer processamento (trim, razão de
- * letras ou decode), para que uma resposta degenerada não seja varrida inteira.
- */
-export const MAX_OUTPUT_CHARS = 4 * MAX_SEGMENT_CHARS + 1024;
 
 function resultOf(results: ReadonlyMap<string, string | null>, unitId: string): string | null {
   const value: unknown = results.get(unitId);

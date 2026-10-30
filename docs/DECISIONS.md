@@ -154,6 +154,21 @@ worker MV3 pode reiniciar no meio de uma tradução.
 **Quando decidir.** Nas Fases 3/4, após experimento de suspensão do worker e
 requisições longas; revisar na Fase 7 (SPA).
 
+**Decisão (30/10/2026, parcial).** Opções 1 e 3 combinadas, no mínimo
+necessário para a Fase 4:
+
+- `jobId` UUID v4 gerado no content script, que é a fonte de verdade do job;
+  `tabId`, `frameId` e ciclo de vida do documento vêm de `port.sender`,
+  nunca da mensagem.
+- Cada Port pertence a um documento: navegação, recarga ou fechamento da aba
+  descarregam o frame e fecham a Port, e nada do job sobrevive.
+- O content descarta resultado cujo `jobId` não é o atual ou cujo `unitId`
+  não é o pendente; os ids de unidade carregam o token do plano (ADR-014).
+- Sem `chrome.storage.session` por enquanto: não há o que reidratar, porque
+  o job morre com a Port.
+- Prender a Port ao `documentId` registrado na injeção fica para a branch
+  que injeta o content script; SPA e reidratação, para a Fase 7.
+
 ## ADR-005 — UX da tradução de seleção
 
 **Status:** Proposta
@@ -665,8 +680,60 @@ qualquer momento, e resultados podem chegar atrasados.
 - A restauração respeita mudanças do site e do usuário, à custa de não
   restaurar nós que o site alterou depois da tradução.
 - O registro guarda referências fortes até o `clear`, que o executor de job
-  chama ao cancelar e ao descarregar a página.
+  chama ao iniciar um novo job; cancelar não limpa, para que “Mostrar
+  original” ainda restaure o que já foi aplicado. Limpar ao descarregar a
+  página fica com a entrada do content script.
 - As garantias pressupõem o mundo isolado do content script; com
   `world: 'MAIN'`, a página poderia adulterar protótipos e elas não valem.
 - Nó movido dentro do mesmo pai ou texto inserido no meio do segmento entre o
   plano e a aplicação não são detectados no MVP.
+
+## ADR-010 — Protocolo entre service worker e página
+
+**Status:** Aceita (30/10/2026)
+
+**Contexto.** O content script coleta, segmenta e aplica (ADR-012 a 014), mas
+só o service worker fala com o Ollama (ADR-009). O worker MV3 pode ser
+encerrado por ociosidade, e a tradução de uma página leva minutos.
+
+**Decisão.** Uma `chrome.runtime.Port` por job, com o content script no
+comando (`src/shared/page-messages.ts`, `src/background/page-job.ts`,
+`src/content/job-runner.ts`).
+
+- **Conexão:** `chrome.runtime.connect({ name: 'lerium:page-job' })`. O worker
+  aceita só a própria extensão (`sender.id`), aba com id numérico, frame
+  principal (`frameId === 0`), página `http(s)` e documento ativo
+  (`documentLifecycle`); qualquer outra Port é desconectada sem resposta. O
+  manifesto não declara `externally_connectable`.
+- **Configurações:** endpoint, modelo e idiomas vêm do storage, lidos uma vez
+  por Port na primeira mensagem válida; um provedor por Port (snapshot). A
+  mensagem só traz o texto, então o content não consegue mudar destino nem
+  idiomas.
+- **Mensagens tipadas e validadas** nos dois sentidos, com allowlist de
+  códigos de erro: `job:unit` (texto até `MAX_UNIT_CHARS`), `job:ping`,
+  `job:result`, `job:progress` (só contagem de caracteres) e `job:fatal`
+  (`invalid_config`, `model_missing`, `forbidden`, `settings_unavailable`).
+  Nenhuma mensagem além do resultado leva texto.
+- **Sequência:** o content envia uma unidade por vez e espera o resultado; o
+  worker responde `busy` a uma segunda unidade na mesma Port. Uma Port por
+  aba: uma nova derruba a anterior. O limite global entre abas é do
+  scheduler (Fase 5).
+- **Cancelamento:** desconectar a Port aborta a requisição em voo; saída
+  acima de `MAX_OUTPUT_CHARS` é abortada durante o stream.
+- **Ciclo de vida do worker:** pela documentação do Chrome, mensagens de
+  Port renovam o timer de ociosidade de 30 s (Chrome 114+). O content envia
+  `job:ping` a cada 20 s com unidade em voo, e o worker envia `job:progress`
+  no máximo a cada 5 s. Port que cai sem resultado vira `interrupted`; o que
+  já foi aplicado continua restaurável.
+
+**Consequências.**
+
+- Precisa ser medido no Chrome real: se uma resposta do Ollama que demora
+  mais de 30 s para começar (modelo frio) encerra o worker mesmo com ping.
+  Mitigações previstas: aquecer o modelo antes ou repetir uma vez a primeira
+  unidade interrompida. `minimum_chrome_version` entra com as demais mudanças
+  do manifesto.
+- Porta personalizada do Ollama sem permissão opcional aparece como falha do
+  provedor; o popup confere a permissão antes de injetar o content script.
+- Avaliar `chrome.storage.local.setAccessLevel` para impedir que um content
+  script comprometido regrave as configurações.

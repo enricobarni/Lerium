@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { collectTextNodes } from '../../src/content/dom-collector';
 import {
   createPageApplier,
+  MAX_OUTPUT_CHARS,
   type PageApplier,
   type SegmentPlan,
 } from '../../src/content/page-applier';
@@ -11,6 +12,10 @@ import {
   type TranslationSegment,
 } from '../../src/content/segmenter';
 import { MAX_INLINE_WRAPPERS } from '../../src/core/inline-markers';
+import {
+  MAX_OUTPUT_CHARS as CORE_MAX_OUTPUT_CHARS,
+  MAX_SEGMENT_CHARS as CORE_MAX_SEGMENT_CHARS,
+} from '../../src/core/text-limits';
 
 /** Documento novo a cada chamada; nunca `innerHTML` nem `document.write`. */
 function parse(body: string): Document {
@@ -474,6 +479,12 @@ describe('tamanho da saída', () => {
   const LIMIT = 4 * MAX_SEGMENT_CHARS + 1024;
   /** Saída válida depois do `trim`, com `length` exato. */
   const padded = (text: string, length: number): string => text + ' '.repeat(length - text.length);
+
+  it('reexporta os limites de core/text-limits', () => {
+    expect(MAX_OUTPUT_CHARS).toBe(LIMIT);
+    expect(MAX_OUTPUT_CHARS).toBe(CORE_MAX_OUTPUT_CHARS);
+    expect(MAX_SEGMENT_CHARS).toBe(CORE_MAX_SEGMENT_CHARS);
+  });
 
   const cases = [
     { kind: 'plain', body: '<p>Hello</p>', output: 'Olá' },
