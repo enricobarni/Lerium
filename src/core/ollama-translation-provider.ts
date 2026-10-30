@@ -1,5 +1,6 @@
 import {
   chatStream,
+  MAX_TIMEOUT_MS,
   type ChatStreamErrorKind,
   type ChatStreamResult,
   type ChatStreamTimeouts,
@@ -17,7 +18,16 @@ import type {
  * Provedor de tradução sobre o chat em streaming do Ollama (Fase 3). Módulo
  * puro: recebe `fetch` por injeção e não referencia `chrome` nem DOM. É o
  * único consumidor de `chatStream` em `src/`.
+ *
+ * Nova tentativa interna (conservadora): no máximo uma (duas chamadas no
+ * total), só para falhas transitórias de transporte (`network`,
+ * `incomplete_stream`, HTTP 429/5xx), só se nenhum token foi entregue ao
+ * consumidor e o sinal externo não abortou. Prazo estourado nunca é repetido
+ * aqui: o modelo pode estar lento de fato, e a decisão fica com a fila.
  */
+
+/** Espera padrão antes da nova tentativa interna. */
+export const DEFAULT_RETRY_DELAY_MS = 500;
 
 export interface OllamaTranslationProviderConfig {
   /** Endpoint loopback; validado a cada tradução por `chatStream`. */
@@ -27,6 +37,11 @@ export interface OllamaTranslationProviderConfig {
   fetchFn: typeof fetch;
   /** Prazos do chat; campos ausentes ou inválidos usam `DEFAULT_CHAT_TIMEOUTS`. */
   timeouts?: Partial<ChatStreamTimeouts>;
+  /**
+   * Espera fixa antes da nova tentativa interna. Inteiro de 0 a
+   * `MAX_TIMEOUT_MS`; fora disso vale `DEFAULT_RETRY_DELAY_MS`.
+   */
+  retryDelayMs?: number;
   /** Relógio monotônico em milissegundos; padrão `performance.now()`. */
   now?: () => number;
 }
@@ -114,6 +129,36 @@ export function mapChatFailure({ error, status }: ChatFailure): TranslationFailu
 
 const defaultNow = (): number => performance.now();
 
+/** Falhas do chat que podem passar numa nova tentativa imediata e idêntica. */
+const isInternallyRetryable = ({ error, status }: ChatFailure): boolean =>
+  error === 'network' ||
+  error === 'incomplete_stream' ||
+  (error === 'http_error' && isTransientStatus(status));
+
+const resolveRetryDelay = (value: unknown): number =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= MAX_TIMEOUT_MS
+    ? value
+    : DEFAULT_RETRY_DELAY_MS;
+
+/**
+ * Espera `ms`; resolve `false` assim que `signal` abortar. Em qualquer
+ * desfecho não sobra timer nem listener pendente.
+ */
+function waitUnlessAborted(ms: number, signal: AbortSignal | undefined): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(false);
+  return new Promise<boolean>((resolve) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve(true);
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 /**
  * Cria um provedor com snapshot do endpoint, do modelo e dos prazos: mudar a
  * configuração exige outra instância. Nunca lança na criação; configuração
@@ -127,6 +172,7 @@ export function createOllamaTranslationProvider(
   const fetchFn = config.fetchFn;
   const timeouts = isRecord(config.timeouts) ? { ...config.timeouts } : undefined;
   const now = typeof config.now === 'function' ? config.now : defaultNow;
+  const retryDelayMs = resolveRetryDelay(config.retryDelayMs);
 
   const run = async (input: unknown, options: unknown): Promise<TranslationResult> => {
     const startedAt = now();
@@ -141,15 +187,26 @@ export function createOllamaTranslationProvider(
     });
     if (!built.ok) return mapBuildError(built.error);
 
-    const userOnToken = opts.onToken;
-    const result = await chatStream(endpoint, built.request, {
-      fetchFn,
-      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
-      ...(timeouts !== undefined ? { timeouts } : {}),
-      onToken: (delta) => {
-        userOnToken?.(delta);
-      },
-    });
+    const { signal, onToken: userOnToken } = opts;
+    let delivered = false;
+    // Cada tentativa é uma chamada nova (prazos do zero) com o mesmo pedido.
+    const attempt = (): Promise<ChatStreamResult> =>
+      chatStream(endpoint, built.request, {
+        fetchFn,
+        ...(signal !== undefined ? { signal } : {}),
+        ...(timeouts !== undefined ? { timeouts } : {}),
+        onToken: (delta) => {
+          // Marcado antes: mesmo que o consumidor lance, ele já viu o token.
+          delivered = true;
+          userOnToken?.(delta);
+        },
+      });
+
+    let result = await attempt();
+    if (!result.ok && isInternallyRetryable(result) && !delivered && !signal?.aborted) {
+      if (!(await waitUnlessAborted(retryDelayMs, signal))) return failure('cancelled', false);
+      result = await attempt();
+    }
     if (!result.ok) return mapChatFailure(result);
 
     const outputTokens = result.metrics.evalCount;

@@ -470,3 +470,242 @@ describe('translate: snapshot da configuração', () => {
     expect(await pending).toEqual({ ok: false, error: 'timeout', retryable: true });
   });
 });
+
+/** `fetch` que responde, em ordem, com cada fábrica dada (a última se repete). */
+const fetchSequence = (...steps: (() => Response | Promise<Response>)[]) => {
+  let call = 0;
+  return vi.fn<typeof fetch>(async () => {
+    const step = steps[Math.min(call, steps.length - 1)];
+    call += 1;
+    if (step === undefined) throw new Error('sequência vazia');
+    return step();
+  });
+};
+
+const throwNetwork = (): never => {
+  throw new TypeError('Failed to fetch');
+};
+
+describe('translate: nova tentativa interna', () => {
+  it.each<[string, () => Response]>([
+    ['erro de rede', throwNetwork],
+    ['stream sem done e sem token', () => okResponse()],
+    ['503', () => statusResponse(503)],
+    ['500', () => statusResponse(500)],
+    ['429', () => statusResponse(429)],
+  ])('sucesso na 2ª tentativa após %s, com tokens só dela', async (_label, first) => {
+    const fetchFn = fetchSequence(first, () =>
+      okResponse(token('A noite '), token('era fria.'), doneLine()),
+    );
+    const tokens: string[] = [];
+
+    const result = await settle(
+      providerWith(fetchFn).translate(INPUT, { onToken: (delta) => tokens.push(delta) }),
+    );
+
+    expect(result).toMatchObject({ ok: true, text: 'A noite era fria.' });
+    expect(tokens).toEqual(['A noite ', 'era fria.']);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('reusa o mesmo pedido na 2ª tentativa', async () => {
+    const fetchFn = fetchSequence(throwNetwork, () => okResponse(token('Oi'), doneLine()));
+
+    await settle(providerWith(fetchFn).translate(INPUT));
+
+    const [first, second] = fetchFn.mock.calls;
+    expect(String(second?.[0])).toBe(String(first?.[0]));
+    expect(second?.[1]?.body).toBe(first?.[1]?.body);
+  });
+
+  it.each<[string, () => Response, Omit<Extract<TranslationResult, { ok: false }>, 'ok'>]>([
+    ['404', () => statusResponse(404), { error: 'model_missing', retryable: false, status: 404 }],
+    ['500', () => statusResponse(500), { error: 'http_error', retryable: true, status: 500 }],
+    ['400', () => statusResponse(400), { error: 'http_error', retryable: false, status: 400 }],
+    ['done sem texto', () => okResponse(doneLine()), { error: 'empty_response', retryable: false }],
+  ])('falha da 2ª tentativa (%s) é a devolvida', async (_label, second, expected) => {
+    const fetchFn = fetchSequence(() => statusResponse(503), second);
+
+    const result = await settle(providerWith(fetchFn).translate(INPUT));
+
+    expect(result).toEqual({ ok: false, ...expected });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('nunca passa de duas chamadas', async () => {
+    const fetchFn = networkFailure();
+
+    const result = await settle(providerWith(fetchFn).translate(INPUT));
+
+    expect(result).toEqual({ ok: false, error: 'network', retryable: true });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('não repete após token entregue', async () => {
+    const fetchFn = fetchSequence(
+      () => okResponse(token('A noite')),
+      () => okResponse(token('x'), doneLine()),
+    );
+    const tokens: string[] = [];
+
+    const result = await settle(
+      providerWith(fetchFn).translate(INPUT, { onToken: (delta) => tokens.push(delta) }),
+    );
+
+    expect(result).toEqual({ ok: false, error: 'network', retryable: true });
+    expect(tokens).toEqual(['A noite']);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each<[string, () => Response]>([
+    ['400', () => statusResponse(400)],
+    ['401', () => statusResponse(401)],
+    ['403', () => statusResponse(403)],
+    ['404', () => statusResponse(404)],
+    ['linha de erro do Ollama', () => okResponse(`${JSON.stringify({ error: 'boom' })}\n`)],
+    ['resposta inválida', () => okResponse('not json\n')],
+    ['truncada', () => okResponse(token('A'), doneLine({ done_reason: 'length' }))],
+    ['vazia', () => okResponse(doneLine())],
+  ])('não repete após %s', async (_label, first) => {
+    const fetchFn = fetchSequence(first, () => okResponse(token('x'), doneLine()));
+
+    const result = await settle(providerWith(fetchFn).translate(INPUT));
+
+    expect(result.ok).toBe(false);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('não repete após prazo estourado', async () => {
+    const fetchFn = hangingFetch();
+    const pending = providerWith(fetchFn, { timeouts: { firstTokenMs: 1000 } }).translate(INPUT);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await pending).toEqual({ ok: false, error: 'timeout', retryable: true });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('não repete quando onToken lança', async () => {
+    const fetchFn = fetchSequence(
+      () => okResponse(token('A')),
+      () => okResponse(token('x'), doneLine()),
+    );
+
+    const result = await settle(
+      providerWith(fetchFn).translate(INPUT, {
+        onToken: () => {
+          throw new Error('falha do consumidor');
+        },
+      }),
+    );
+
+    expect(result).toEqual({ ok: false, error: 'consumer_error', retryable: false });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('não repete quando o sinal aborta durante a 1ª tentativa', async () => {
+    const controller = new AbortController();
+    const fetchFn = vi.fn<typeof fetch>(async () => {
+      controller.abort();
+      throw new TypeError('Failed to fetch');
+    });
+
+    const result = await settle(
+      providerWith(fetchFn).translate(INPUT, { signal: controller.signal }),
+    );
+
+    expect(result).toEqual({ ok: false, error: 'cancelled', retryable: false });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('espera retryDelayMs antes da 2ª chamada', async () => {
+    const fetchFn = fetchSequence(throwNetwork, () => okResponse(token('Oi'), doneLine()));
+    const pending = providerWith(fetchFn, { retryDelayMs: 300 }).translate(INPUT);
+
+    await vi.advanceTimersByTimeAsync(299);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(await pending).toMatchObject({ ok: true, text: 'Oi' });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, '500'])(
+    'retryDelayMs inválido (%s) usa o padrão de 500 ms',
+    async (retryDelayMs) => {
+      const fetchFn = fetchSequence(throwNetwork, () => okResponse(token('Oi'), doneLine()));
+      const pending = providerWith(fetchFn, { retryDelayMs: retryDelayMs as number }).translate(
+        INPUT,
+      );
+
+      await vi.advanceTimersByTimeAsync(499);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(await pending).toMatchObject({ ok: true });
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it('abort durante a espera devolve cancelled na hora, sem 2ª chamada', async () => {
+    const controller = new AbortController();
+    const fetchFn = fetchSequence(throwNetwork, () => okResponse(token('Oi'), doneLine()));
+    const pending = providerWith(fetchFn).translate(INPUT, { signal: controller.signal });
+    const state = track(pending);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(state.settled).toBe(false);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(state.settled).toBe(true);
+    expect(await pending).toEqual({ ok: false, error: 'cancelled', retryable: false });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('a 2ª tentativa tem prazos novos', async () => {
+    let call = 0;
+    const hang = hangingFetch();
+    const fetchFn = vi.fn<typeof fetch>((input, init) => {
+      call += 1;
+      if (call === 1) {
+        return new Promise<Response>((_resolve, reject) => {
+          setTimeout(() => reject(new TypeError('Failed to fetch')), 900);
+        });
+      }
+      return hang(input, init);
+    });
+    const pending = providerWith(fetchFn, {
+      timeouts: { firstTokenMs: 1000, totalMs: 1000 },
+    }).translate(INPUT);
+    const state = track(pending);
+
+    await vi.advanceTimersByTimeAsync(900 + 500 + 999);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(state.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(await pending).toEqual({ ok: false, error: 'timeout', retryable: true });
+  });
+
+  it('durationMs cobre as duas tentativas e a espera', async () => {
+    let clock = 0;
+    const fetchFn = fetchSequence(
+      () => {
+        clock += 100;
+        return throwNetwork();
+      },
+      () => {
+        clock += 500 + 250;
+        return okResponse(token('Oi'), doneLine());
+      },
+    );
+
+    const result = await settle(providerWith(fetchFn, { now: () => clock }).translate(INPUT));
+
+    expect(result).toMatchObject({ ok: true, durationMs: 850 });
+  });
+});
