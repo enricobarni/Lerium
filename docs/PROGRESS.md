@@ -5,9 +5,10 @@
 
 ## Estado atual
 
-- **Fase:** 3 — Motor de tradução e streaming (gate cumprido; aguardando merge do PR de `test/translation-service`)
-- **Tarefa:** `test/translation-service` (provider de tradução, nova tentativa conservadora, fixtures literárias e validação com o modelo real)
-- **Versão:** `0.1.0` (esqueleto + conexão com o Ollama, PLAN.md §5.4; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.1.0` autorizada pelo responsável, em `ab06507` (validado: lint, typecheck, 398 testes, build, 8 E2E); criação manual pendente.
+- **Fase:** 4 — DOM e tradução de página (em andamento)
+- **Tarefa:** `feat/dom-collection` (coleta de texto com `TreeWalker` e regras de exclusão)
+- **Fase 3:** concluída — PRs #13–#16 mesclados; gate cumprido (18/18 execuções com o modelo real); ADR-011 aceita após conferência do model card pelo responsável
+- **Versão:** `0.1.0` (esqueleto + conexão com o Ollama, PLAN.md §5.4; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.1.0` em `ab06507` (validado: lint, typecheck, 398 testes, build, 8 E2E) e release [Lerium 0.1.0](https://github.com/enricobarni/Lerium/releases/tag/v0.1.0) publicadas pelo responsável.
 - **Fase 2:** concluída — PRs #9 e #10 mesclados; aceite manual do responsável no Chrome estável (conexão, modelos listados, Ollama fechado)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
@@ -52,7 +53,7 @@
 - [x] Nenhum conteúdo perdido por chunk arbitrário: parser (todos os cortes + 200 aleatórios) e provider (64 fatiamentos aleatórios, inclusive no meio de UTF-8).
 - [x] Todos os fluxos usam o mesmo cliente: teste de varredura de `src/`.
 
-**Pendências:** ADR-011 só passa a Aceita após confirmar o formato no model card oficial (exige navegação web autorizada); A/B com prompt literário (PLAN.md §9) fica como versão futura; ADR-010 (protocolo SW↔página) na Fase 4; `incomplete_stream` aparece como `network` ("inacessível") na interface, aceitável no MVP.
+**Pendências:** ~~ADR-011 só passa a Aceita após confirmar o model card~~ (aceita em `a6ce8d9`); A/B com prompt literário (PLAN.md §9) fica como versão futura; ADR-010 (protocolo SW↔página) na Fase 4; `incomplete_stream` aparece como `network` ("inacessível") na interface, aceitável no MVP.
 
 ## Fase 3 — `feat/ollama-chat`
 
