@@ -511,6 +511,18 @@ describe('restore e reapply', () => {
     expect(htmlOf(document)).toBe(ORIGINAL);
   });
 
+  it('o site muda um nó traduzido: nova tradução restaura o texto do site', () => {
+    const { document, applier } = translatedDocument();
+    const node = byId(document, 'a').firstChild as Text;
+    node.data = 'Site new text';
+    const segment = segmentsOf(document)[0] as TranslationSegment;
+    const plan = planOf(applier, segment);
+    expect(applier.apply(segment.id, resultsFor(plan, upperCase))).toEqual({ ok: true });
+    expect(node.data).toBe('SITE NEW TEXT');
+    applier.restore();
+    expect(node.data).toBe('Site new text');
+  });
+
   it('clear esquece o registro sem escrever no DOM', () => {
     const { document, applier } = translatedDocument();
     applier.clear();

@@ -37,8 +37,9 @@
  * `checkLetterRatio` é `implausible_output` (no `markers`, o codec já aplica
  * a mesma razão e o erro vira `markers_invalid`).
  *
- * Restauração: o registro guarda, por nó, o `original` (gravado só na
- * primeira escrita) e o último `applied`. `restore` só escreve o original em
+ * Restauração: o registro guarda, por nó, o `original` e o último `applied`.
+ * O `original` é gravado na primeira escrita e regravado quando uma nova
+ * escrita encontra no nó um texto diferente do aplicado (o site o trocou). `restore` só escreve o original em
  * nós conectados cujo `data` ainda é o aplicado; `reapply` só escreve o
  * aplicado em nós conectados cujo `data` ainda é o original. Um nó que o site
  * alterou depois da escrita não é tocado.
@@ -312,8 +313,13 @@ export function createPageApplier(): PageApplier {
   const write = (node: Text, value: string): void => {
     if (node.data === value) return;
     const entry = registry.get(node);
-    if (entry === undefined) registry.set(node, { original: node.data, applied: value });
-    else entry.applied = value;
+    // Sem entrada, ou o site trocou o texto aplicado: o `data` atual passa a
+    // ser o original (restaurar o antigo apagaria a mudança do site).
+    if (entry === undefined || node.data !== entry.applied) {
+      registry.set(node, { original: node.data, applied: value });
+    } else {
+      entry.applied = value;
+    }
     node.data = value;
   };
 
