@@ -18,5 +18,5 @@
       }
     ]
   },
-  "notes": "Texto autoral. Contém \"[1]\" de nota de rodapé: colide com o formato square (encode_null esperado) e não com os demais, onde avalia se o modelo preserva a nota como texto."
+  "notes": "Texto autoral. Contém \"[1]\" de nota de rodapé, que não colide com o formato xml (<g1>): avalia se o modelo preserva a nota como texto ao lado do marcador. Era a colisão esperada do formato square, removido pela ADR-003."
 }

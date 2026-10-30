@@ -3,13 +3,11 @@ import {
   countMarkerSyntax,
   decodeMarkers,
   encodeMarkers,
-  MARKER_FORMATS,
   MAX_INLINE_DEPTH,
   MAX_INLINE_WRAPPERS,
   validateInlineLayout,
   type InlineLayout,
   type InlineRun,
-  type MarkerFormat,
 } from '../../src/core/inline-markers';
 
 const layoutOf = (...runs: [string, number[]][]): InlineLayout => ({
@@ -33,21 +31,14 @@ const ADJACENT_AT_START = layoutOf(['Red', [1]], ['Blue', [2]], [' sky', []]);
 
 const texts = (layout: InlineLayout): string[] => layout.runs.map((run) => run.text);
 
-const decodeBrackets = (output: string, layout: InlineLayout) =>
-  decodeMarkers(output, layout, 'brackets_math');
-
 describe('encodeMarkers', () => {
-  it.each<[MarkerFormat, string]>([
-    ['brackets_math', 'She ⟦1⟧took the ⟦2⟧blade⟦/2⟧ back⟦/1⟧.'],
-    ['xml_g', 'She <g1>took the <g2>blade</g2> back</g1>.'],
-    ['square', 'She [1]took the [2]blade[/2] back[/1].'],
-  ])('aninha os marcadores no formato %s', (format, expected) => {
-    expect(encodeMarkers(NESTED, format)).toBe(expected);
+  it('aninha os marcadores', () => {
+    expect(encodeMarkers(NESTED)).toBe('She <g1>took the <g2>blade</g2> back</g1>.');
   });
 
   it('fecha e abre marcadores colados sem texto entre eles', () => {
-    expect(encodeMarkers(ADJACENT_AT_START, 'brackets_math')).toBe('⟦1⟧Red⟦/1⟧⟦2⟧Blue⟦/2⟧ sky');
-    expect(encodeMarkers(layoutOf(['a', [1, 2]], ['b', [1, 3]]), 'xml_g')).toBe(
+    expect(encodeMarkers(ADJACENT_AT_START)).toBe('<g1>Red</g1><g2>Blue</g2> sky');
+    expect(encodeMarkers(layoutOf(['a', [1, 2]], ['b', [1, 3]]))).toBe(
       '<g1><g2>a</g2><g3>b</g3></g1>',
     );
   });
@@ -59,10 +50,10 @@ describe('encodeMarkers', () => {
         [i + 1],
       ]),
     );
-    expect(encodeMarkers(eight, 'square')).not.toBeNull();
+    expect(encodeMarkers(eight)).not.toBeNull();
     const deep = layoutOf(['a', [1, 2, 3]]);
     expect(MAX_INLINE_DEPTH).toBe(3);
-    expect(encodeMarkers(deep, 'square')).toBe('[1][2][3]a[/3][/2][/1]');
+    expect(encodeMarkers(deep)).toBe('<g1><g2><g3>a</g3></g2></g1>');
   });
 
   it('devolve null acima do limite de wrappers ou de profundidade', () => {
@@ -72,12 +63,12 @@ describe('encodeMarkers', () => {
         [i + 1],
       ]),
     );
-    expect(encodeMarkers(nine, 'brackets_math')).toBeNull();
-    expect(encodeMarkers(layoutOf(['a', [1, 2, 3, 4]]), 'brackets_math')).toBeNull();
+    expect(encodeMarkers(nine)).toBeNull();
+    expect(encodeMarkers(layoutOf(['a', [1, 2, 3, 4]]))).toBeNull();
   });
 
   it('devolve null para layout sem wrapper', () => {
-    expect(encodeMarkers(layoutOf(['plain text', []]), 'brackets_math')).toBeNull();
+    expect(encodeMarkers(layoutOf(['plain text', []]))).toBeNull();
   });
 
   it.each<[string, InlineLayout]>([
@@ -91,36 +82,30 @@ describe('encodeMarkers', () => {
     ['id não inteiro', layoutOf(['a', [1.5]])],
     ['id repetido no path', layoutOf(['a', [1, 1]])],
   ])('devolve null para layout inválido: %s', (_, layout) => {
-    expect(encodeMarkers(layout, 'brackets_math')).toBeNull();
+    expect(encodeMarkers(layout)).toBeNull();
   });
 
   it('devolve null para entradas anômalas sem lançar', () => {
     const bad = [null, {}, { runs: 'x' }, { runs: [null] }, { runs: [{ text: 1, path: [] }] }];
     for (const layout of bad) {
-      expect(encodeMarkers(layout as unknown as InlineLayout, 'xml_g')).toBeNull();
+      expect(encodeMarkers(layout as unknown as InlineLayout)).toBeNull();
     }
-    expect(encodeMarkers(RED_STONE, 'html' as MarkerFormat)).toBeNull();
   });
 
-  it.each<[MarkerFormat, string]>([
-    ['brackets_math', 'see ⟦note⟧ here'],
-    ['brackets_math', 'a lone ⟧ bracket'],
-    ['xml_g', 'tag <g1> inside'],
-    ['xml_g', 'tag </G2> inside'],
-    ['xml_g', 'bare <g> tag'],
-    ['square', 'a footnote [1] here'],
-    ['square', 'odd [ /2 ] spacing'],
-  ])('devolve null quando o texto colide com %s: %s', (format, collidingText) => {
+  it.each([
+    'tag <g1> inside',
+    'tag </G2> inside',
+    'bare <g> tag',
+    'spaced < g 3 > tag',
+    'self-closing <g1/> tag',
+  ])('devolve null quando o texto colide com a sintaxe de marcador: %s', (collidingText) => {
     const layout = layoutOf([collidingText, []], ['word', [1]]);
-    expect(encodeMarkers(layout, format)).toBeNull();
+    expect(encodeMarkers(layout)).toBeNull();
   });
 
-  it('só colide com a sintaxe do próprio formato', () => {
-    const layout = layoutOf(['a footnote [1] and <g1> ', []], ['word', [1]]);
-    expect(encodeMarkers(layout, 'brackets_math')).toBe('a footnote [1] and <g1> ⟦1⟧word⟦/1⟧');
-    expect(encodeMarkers(layout, 'square')).toBeNull();
-    expect(encodeMarkers(layout, 'xml_g')).toBeNull();
-    expect(encodeMarkers(layoutOf(['[sic] ', []], ['x', [1]]), 'square')).toBe('[sic] [1]x[/1]');
+  it('não colide com colchetes nem com outras tags', () => {
+    const layout = layoutOf(['a footnote [1], ⟦x⟧ and <b> or <gx> ', []], ['word', [1]]);
+    expect(encodeMarkers(layout)).toBe('a footnote [1], ⟦x⟧ and <b> or <gx> <g1>word</g1>');
   });
 });
 
@@ -143,118 +128,109 @@ describe('validateInlineLayout', () => {
     expect(validateInlineLayout(layout)).toEqual({ ok: false, error });
   });
 
-  it('não verifica colisão (depende do formato)', () => {
-    expect(validateInlineLayout(layoutOf(['[1] ', []], ['x', [1]])).ok).toBe(true);
+  it('não verifica colisão', () => {
+    expect(validateInlineLayout(layoutOf(['<g1> ', []], ['x', [1]])).ok).toBe(true);
   });
 });
 
 describe('countMarkerSyntax', () => {
-  it('conta marcadores exatos e malformados do formato', () => {
-    expect(countMarkerSyntax('a ⟦1⟧b⟦/1⟧ ⟦x⟧', 'brackets_math')).toBe(3);
-    expect(countMarkerSyntax('<g1>a</g1> < g2 >', 'xml_g')).toBe(3);
-    expect(countMarkerSyntax('[1] [/1] [sic]', 'square')).toBe(2);
-    expect(countMarkerSyntax('plain', 'square')).toBe(0);
+  it('conta marcadores exatos e malformados', () => {
+    expect(countMarkerSyntax('<g1>a</g1> < g2 > <G3/>')).toBe(4);
+    expect(countMarkerSyntax('[1] [/1] ⟦1⟧ <b>')).toBe(0);
+    expect(countMarkerSyntax(undefined as unknown as string)).toBe(0);
   });
 });
 
 describe('decodeMarkers', () => {
   it('alinha os runs quando a tradução move texto para fora do marcador', () => {
-    const result = decodeBrackets('a pedra ⟦1⟧vermelha⟦/1⟧', RED_STONE);
+    const result = decodeMarkers('a pedra <g1>vermelha</g1>', RED_STONE);
     expect(result).toEqual({ ok: true, texts: ['a pedra ', 'vermelha', ''] });
   });
 
   it('aceita texto externo deslocado entre intervalos', () => {
-    const result = decodeMarkers('A x B C [1]x[/1] [2]y[/2]', TWO_SPANS, 'square');
+    const result = decodeMarkers('A x B C <g1>x</g1> <g2>y</g2>', TWO_SPANS);
     expect(result).toEqual({ ok: true, texts: ['A x B C ', 'x', ' ', 'y', ''] });
   });
 
   it('preserva espaços internos junto aos marcadores', () => {
-    const result = decodeBrackets('a pedra ⟦1⟧ vermelha ⟦/1⟧', RED_STONE);
+    const result = decodeMarkers('a pedra <g1> vermelha </g1>', RED_STONE);
     expect(result).toEqual({ ok: true, texts: ['a pedra ', ' vermelha ', ''] });
   });
 
   it('troca as bordas externas da saída pelas do texto codificado', () => {
     const layout = layoutOf(['  Lead ', []], ['red', [1]], [' tail\n', []]);
-    const result = decodeBrackets('\n\nInício ⟦1⟧vermelho⟦/1⟧ fim   \n', layout);
+    const result = decodeMarkers('\n\nInício <g1>vermelho</g1> fim   \n', layout);
     expect(result).toEqual({ ok: true, texts: ['  Início ', 'vermelho', ' fim\n'] });
   });
 
   it('descarta espaço em intervalo sem run', () => {
-    const result = decodeBrackets('  ⟦1⟧Vermelho⟦/1⟧ ⟦2⟧Azul⟦/2⟧ céu', ADJACENT_AT_START);
+    const result = decodeMarkers('  <g1>Vermelho</g1> <g2>Azul</g2> céu', ADJACENT_AT_START);
     expect(result).toEqual({ ok: true, texts: ['Vermelho', 'Azul', ' céu'] });
   });
 
-  it('decodifica a estrutura aninhada nos três formatos', () => {
-    const outputs: Record<MarkerFormat, string> = {
-      brackets_math: 'Ela ⟦1⟧pegou a ⟦2⟧lâmina⟦/2⟧ de volta⟦/1⟧.',
-      xml_g: 'Ela <g1>pegou a <g2>lâmina</g2> de volta</g1>.',
-      square: 'Ela [1]pegou a [2]lâmina[/2] de volta[/1].',
-    };
-    for (const format of MARKER_FORMATS) {
-      expect(decodeMarkers(outputs[format], NESTED, format)).toEqual({
-        ok: true,
-        texts: ['Ela ', 'pegou a ', 'lâmina', ' de volta', '.'],
-      });
-    }
+  it('decodifica a estrutura aninhada', () => {
+    expect(decodeMarkers('Ela <g1>pegou a <g2>lâmina</g2> de volta</g1>.', NESTED)).toEqual({
+      ok: true,
+      texts: ['Ela ', 'pegou a ', 'lâmina', ' de volta', '.'],
+    });
+  });
+
+  it('mantém nota de rodapé entre colchetes como texto', () => {
+    const layout = layoutOf(['the ', []], ['Gate', [1]], ['[1].', []]);
+    expect(decodeMarkers('o <g1>Portão</g1>[1].', layout)).toEqual({
+      ok: true,
+      texts: ['o ', 'Portão', '[1].'],
+    });
   });
 
   it.each<[string, string, InlineLayout]>([
     ['missing', 'a pedra vermelha', RED_STONE],
-    ['missing', 'a pedra ⟦1⟧vermelha', RED_STONE],
-    ['unknown', 'a ⟦1⟧pedra⟦/1⟧ ⟦3⟧x⟦/3⟧', RED_STONE],
-    ['duplicate', '⟦1⟧a⟦/1⟧ pedra ⟦1⟧b⟦/1⟧', RED_STONE],
-    ['duplicate', 'a pedra ⟦1⟧vermelha⟦/1⟧⟦/1⟧', RED_STONE],
-    ['order', 'A ⟦2⟧y⟦/2⟧ B ⟦1⟧x⟦/1⟧ C', TWO_SPANS],
-    ['nesting', 'Ela ⟦1⟧pegou ⟦2⟧a⟦/1⟧ lâmina⟦/2⟧.', NESTED],
-    ['nesting', 'a pedra ⟦/1⟧vermelha⟦1⟧', RED_STONE],
-    ['nesting', 'Ela ⟦1⟧pegou⟦/1⟧ a ⟦2⟧lâmina⟦/2⟧.', NESTED],
-    ['nesting', 'A ⟦1⟧x B ⟦2⟧y⟦/2⟧⟦/1⟧ C', TWO_SPANS],
-    ['empty_run', 'a pedra ⟦1⟧⟦/1⟧', RED_STONE],
-    ['empty_run', 'a pedra ⟦1⟧  ⟦/1⟧', RED_STONE],
-    ['empty_run', 'Ela ⟦1⟧⟦2⟧lâmina⟦/2⟧⟦/1⟧ de volta.', NESTED],
-    ['collision', 'a pedra ⟦1⟧vermelha⟦/1⟧ ⟦x⟧', RED_STONE],
-    ['collision', 'a pedra ⟦ 1⟧vermelha⟦/1⟧', RED_STONE],
-    ['collision', 'a pedra ⟦1⟧vermelha⟦/01⟧', RED_STONE],
-    ['orphan_text', 'O ⟦1⟧Vermelho⟦/1⟧⟦2⟧Azul⟦/2⟧ céu', ADJACENT_AT_START],
-    ['orphan_text', '⟦1⟧Vermelho⟦/1⟧ e ⟦2⟧Azul⟦/2⟧ céu', ADJACENT_AT_START],
+    ['missing', 'a pedra <g1>vermelha', RED_STONE],
+    ['unknown', 'a <g1>pedra</g1> <g3>x</g3>', RED_STONE],
+    ['duplicate', '<g1>a</g1> pedra <g1>b</g1>', RED_STONE],
+    ['duplicate', 'a pedra <g1>vermelha</g1></g1>', RED_STONE],
+    ['order', 'A <g2>y</g2> B <g1>x</g1> C', TWO_SPANS],
+    ['nesting', 'Ela <g1>pegou <g2>a</g1> lâmina</g2>.', NESTED],
+    ['nesting', 'a pedra </g1>vermelha<g1>', RED_STONE],
+    ['nesting', 'Ela <g1>pegou</g1> a <g2>lâmina</g2>.', NESTED],
+    ['nesting', 'A <g1>x B <g2>y</g2></g1> C', TWO_SPANS],
+    ['empty_run', 'a pedra <g1></g1>', RED_STONE],
+    ['empty_run', 'a pedra <g1>  </g1>', RED_STONE],
+    ['empty_run', 'Ela <g1><g2>lâmina</g2></g1> de volta.', NESTED],
+    ['collision', 'a pedra <g1>vermelha</g1> < g1>', RED_STONE],
+    ['collision', 'a pedra <g1>vermelha<g1/>', RED_STONE],
+    ['collision', 'a pedra <G1>vermelha</g1>', RED_STONE],
+    ['collision', 'a pedra <g1>vermelha</g01>', RED_STONE],
+    ['orphan_text', 'O <g1>Vermelho</g1><g2>Azul</g2> céu', ADJACENT_AT_START],
+    ['orphan_text', '<g1>Vermelho</g1> e <g2>Azul</g2> céu', ADJACENT_AT_START],
   ])('devolve %s para %j', (error, output, layout) => {
-    expect(decodeBrackets(output, layout)).toEqual({ ok: false, error });
+    expect(decodeMarkers(output, layout)).toEqual({ ok: false, error });
   });
 
   it('permite que um run externo com letra fique vazio', () => {
-    const result = decodeBrackets('⟦1⟧Vermelha⟦/1⟧, a pedra', RED_STONE);
+    const result = decodeMarkers('<g1>Vermelha</g1>, a pedra', RED_STONE);
     expect(result).toEqual({ ok: true, texts: ['', 'Vermelha', ', a pedra'] });
   });
 
   it('não exige letra em run que não tinha letra', () => {
     const layout = layoutOf(['Wait', []], ['...', [1]]);
-    expect(decodeBrackets('Espere⟦1⟧ ⟦/1⟧', layout)).toEqual({ ok: true, texts: ['Espere', ' '] });
-  });
-
-  it.each<[MarkerFormat, string]>([
-    ['xml_g', 'a pedra <g1>vermelha</g1> < g1>'],
-    ['xml_g', 'a pedra <g1>vermelha<g1/>'],
-    ['xml_g', 'a pedra <G1>vermelha</g1>'],
-    ['square', 'a pedra [1]vermelha[/1] [ 2]'],
-    ['square', 'a pedra [1]vermelha[/ 1]'],
-  ])('devolve collision para marcador malformado em %s: %j', (format, output) => {
-    expect(decodeMarkers(output, RED_STONE, format)).toEqual({ ok: false, error: 'collision' });
+    expect(decodeMarkers('Espere<g1> </g1>', layout)).toEqual({ ok: true, texts: ['Espere', ' '] });
   });
 
   it('devolve invalid_layout quando o layout não é codificável', () => {
-    expect(decodeBrackets('texto', layoutOf(['texto', []]))).toEqual({
+    expect(decodeMarkers('texto', layoutOf(['texto', []]))).toEqual({
       ok: false,
       error: 'invalid_layout',
     });
-    const colliding = layoutOf(['note [1] ', []], ['x', [1]]);
-    expect(decodeMarkers('nota [1] [1]x[/1]', colliding, 'square')).toEqual({
+    const colliding = layoutOf(['note <g1> ', []], ['x', [1]]);
+    expect(decodeMarkers('nota <g1> <g1>x</g1>', colliding)).toEqual({
       ok: false,
       error: 'invalid_layout',
     });
   });
 
   it('devolve missing para saída que não é string', () => {
-    expect(decodeBrackets(undefined as unknown as string, RED_STONE)).toEqual({
+    expect(decodeMarkers(undefined as unknown as string, RED_STONE)).toEqual({
       ok: false,
       error: 'missing',
     });
@@ -337,16 +313,16 @@ describe('propriedade de ida e volta', () => {
     expect(depths.has(1) && depths.has(MAX_INLINE_DEPTH)).toBe(true);
   });
 
-  it.each(MARKER_FORMATS)('decode(encode(layout)) devolve os textos originais em %s', (format) => {
+  it('decode(encode(layout)) devolve os textos originais', () => {
     for (const layout of layouts) {
-      const encoded = encodeMarkers(layout, format);
+      const encoded = encodeMarkers(layout);
       expect(encoded).not.toBeNull();
-      expect(decodeMarkers(encoded as string, layout, format)).toEqual({
+      expect(decodeMarkers(encoded as string, layout)).toEqual({
         ok: true,
         texts: texts(layout),
       });
       // Espaço extra nas bordas externas da resposta não altera o resultado.
-      expect(decodeMarkers(`\n ${encoded as string} \n\n`, layout, format)).toEqual({
+      expect(decodeMarkers(`\n ${encoded as string} \n\n`, layout)).toEqual({
         ok: true,
         texts: texts(layout),
       });

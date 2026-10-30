@@ -1,6 +1,10 @@
 /**
- * Codec de marcadores inline (experimento da ADR-003, opção 2). Módulo puro:
- * não referencia DOM, `chrome` nem `console`.
+ * Codec de marcadores inline (ADR-003, opção 3 híbrida). Módulo puro: não
+ * referencia DOM, `chrome` nem `console`.
+ *
+ * Formato único `<g1>…</g1>`: no experimento com `translategemma:4b` (10
+ * fixtures × 3 execuções) teve a maior taxa de decode válido (73%, contra 67%
+ * de `[1]…[/1]` e 63% de `⟦1⟧…⟦/1⟧`); os outros formatos saíram do código.
  *
  * Um bloco com markup inline (`<em>`, `<strong>`, `<a>`...) é descrito como
  * uma sequência de *runs* de texto. Cada run carrega o `path` dos wrappers
@@ -21,9 +25,9 @@
  * mesmos marcadores, na mesma ordem e com o mesmo aninhamento da entrada. O
  * texto de cada intervalo entre marcadores vai para o run que ocupava esse
  * intervalo, mesmo que o modelo tenha deslocado palavras de um lado para o
- * outro de um marcador (ex.: "the ⟦1⟧red⟦/1⟧ stone" → "a pedra ⟦1⟧vermelha⟦/1⟧":
- * o run externo inicial recebe "a pedra ", o marcado "vermelha" e o externo
- * final "").
+ * outro de um marcador (ex.: "the <g1>red</g1> stone" →
+ * "a pedra <g1>vermelha</g1>": o run externo inicial recebe "a pedra ", o
+ * marcado "vermelha" e o externo final "").
  *
  * `empty_run` vale só para runs dentro de wrapper: se um run marcado que tinha
  * letra volta vazio ou só com espaço, o elemento inline ficaria vazio na
@@ -39,11 +43,12 @@
  * produzir é trocado pelo espaço inicial e final do texto codificado. Assim
  * uma quebra de linha extra no fim da resposta não vira texto do último run.
  *
- * Colisão: não há escape. Se um run já contém sintaxe do formato (inclusive
- * malformada), `encodeMarkers` devolve `null` e o chamador escolhe outro
- * formato ou outra estratégia. Na saída, qualquer sintaxe do formato que não
- * seja um marcador exato (ex.: `⟦x⟧`, `< g1>`, `[ /1]`) é `collision`; por isso
- * nenhum marcador vaza para `texts`.
+ * Colisão: não há escape. Se um run já contém sintaxe de marcador (inclusive
+ * malformada, sem diferenciar maiúsculas: `<g>`, `</G2>`, `< g1 >`),
+ * `encodeMarkers` devolve `null` e o chamador usa outra estratégia (nó a nó).
+ * Na saída, qualquer sintaxe de marcador que não seja exata (ex.: `< g1>`,
+ * `<G1>`, `<g1/>`) é `collision`; por isso nenhum marcador vaza para `texts`.
+ * Colchetes como a nota de rodapé "[1]" não são sintaxe deste formato.
  */
 
 export interface InlineRun {
@@ -55,15 +60,6 @@ export interface InlineRun {
 export interface InlineLayout {
   readonly runs: readonly InlineRun[];
 }
-
-/** `⟦1⟧…⟦/1⟧` | `<g1>…</g1>` | `[1]…[/1]`. */
-export type MarkerFormat = 'brackets_math' | 'xml_g' | 'square';
-
-export const MARKER_FORMATS: readonly MarkerFormat[] = Object.freeze([
-  'brackets_math',
-  'xml_g',
-  'square',
-]);
 
 export const MAX_INLINE_WRAPPERS = 8;
 export const MAX_INLINE_DEPTH = 3;
@@ -98,37 +94,12 @@ export type DecodeError =
 
 export type DecodeResult = { ok: true; texts: string[] } | { ok: false; error: DecodeError };
 
-interface FormatSpec {
-  open(id: number): string;
-  close(id: number): string;
-  /** Qualquer coisa parecida com marcador do formato (exata ou malformada). Global. */
-  loose: RegExp;
-  /** Marcador exato, ancorado: grupo 1 = `/` de fechamento, grupo 2 = id. */
-  strict: RegExp;
-}
-
-const FORMATS: Readonly<Record<MarkerFormat, FormatSpec>> = Object.freeze({
-  brackets_math: {
-    open: (id) => `⟦${id}⟧`,
-    close: (id) => `⟦/${id}⟧`,
-    // Os colchetes matemáticos não aparecem em prosa: qualquer um é sintaxe.
-    loose: /⟦[^⟦⟧]*⟧|[⟦⟧]/gu,
-    strict: /^⟦(\/?)([1-9]\d{0,2})⟧$/u,
-  },
-  xml_g: {
-    open: (id) => `<g${id}>`,
-    close: (id) => `</g${id}>`,
-    loose: /<\s*\/?\s*g\s*\d*\s*\/?\s*>/giu,
-    strict: /^<(\/?)g([1-9]\d{0,2})>$/u,
-  },
-  square: {
-    open: (id) => `[${id}]`,
-    close: (id) => `[/${id}]`,
-    // Notas de rodapé como "[1]" colidem; "[sic]" não.
-    loose: /\[\s*\/?\s*\d+\s*\]/gu,
-    strict: /^\[(\/?)([1-9]\d{0,2})\]$/u,
-  },
-});
+const openMarker = (id: number): string => `<g${id}>`;
+const closeMarker = (id: number): string => `</g${id}>`;
+/** Qualquer coisa parecida com marcador (exata ou malformada). Global. */
+const LOOSE_MARKER = /<\s*\/?\s*g\s*\d*\s*\/?\s*>/giu;
+/** Marcador exato, ancorado: grupo 1 = `/` de fechamento, grupo 2 = id. */
+const STRICT_MARKER = /^<(\/?)g([1-9]\d{0,2})>$/u;
 
 interface MarkerEvent {
   readonly close: boolean;
@@ -218,51 +189,49 @@ function planLayout(layout: unknown): PlanResult {
 export type InlineLayoutValidation =
   { ok: true; wrappers: number; depth: number } | { ok: false; error: InlineLayoutError };
 
-/** Valida a estrutura do layout (não verifica colisão com formatos). */
+/** Valida a estrutura do layout (não verifica colisão com marcadores). */
 export function validateInlineLayout(layout: InlineLayout): InlineLayoutValidation {
   const planned = planLayout(layout);
   if (!planned.ok) return planned;
   return { ok: true, wrappers: planned.plan.wrappers, depth: planned.plan.depth };
 }
 
-/** Nº de trechos com sintaxe do formato (exata ou malformada) em `text`. */
-export function countMarkerSyntax(text: string, format: MarkerFormat): number {
-  if (typeof text !== 'string' || !Object.hasOwn(FORMATS, format)) return 0;
-  return [...text.matchAll(FORMATS[format].loose)].length;
+/** Nº de trechos com sintaxe de marcador (exata ou malformada) em `text`. */
+export function countMarkerSyntax(text: string): number {
+  if (typeof text !== 'string') return 0;
+  return [...text.matchAll(LOOSE_MARKER)].length;
 }
 
-function renderEvent(spec: FormatSpec, event: MarkerEvent): string {
-  return event.close ? spec.close(event.id) : spec.open(event.id);
+function renderEvent(event: MarkerEvent): string {
+  return event.close ? closeMarker(event.id) : openMarker(event.id);
 }
 
 /** Texto codificado; `null` se o layout for inválido ou algum run colidir. */
-function encodeWithPlan(layout: InlineLayout, format: MarkerFormat): string | null {
-  if (!Object.hasOwn(FORMATS, format)) return null;
+function encodeWithPlan(layout: InlineLayout): string | null {
   const planned = planLayout(layout);
   if (!planned.ok) return null;
   const { events, runSlots } = planned.plan;
   const texts = layout.runs.map((run) => run.text);
-  if (texts.some((text) => countMarkerSyntax(text, format) > 0)) return null;
+  if (texts.some((text) => countMarkerSyntax(text) > 0)) return null;
 
-  const spec = FORMATS[format];
   const intervals = Array.from({ length: events.length + 1 }, () => '');
   runSlots.forEach((slot, index) => {
     intervals[slot] = texts[index] as string;
   });
   let encoded = intervals[0] as string;
   events.forEach((event, index) => {
-    encoded += renderEvent(spec, event) + (intervals[index + 1] as string);
+    encoded += renderEvent(event) + (intervals[index + 1] as string);
   });
   return encoded;
 }
 
 /**
- * Concatena os runs com marcadores do formato. Devolve `null` se o layout for
- * inválido (ver cabeçalho), não tiver wrapper, exceder os limites ou se algum
- * run já contiver sintaxe do formato (colisão; não há escape).
+ * Concatena os runs com marcadores `<gN>…</gN>`. Devolve `null` se o layout
+ * for inválido (ver cabeçalho), não tiver wrapper, exceder os limites ou se
+ * algum run já contiver sintaxe de marcador (colisão; não há escape).
  */
-export function encodeMarkers(layout: InlineLayout, format: MarkerFormat): string | null {
-  return encodeWithPlan(layout, format);
+export function encodeMarkers(layout: InlineLayout): string | null {
+  return encodeWithPlan(layout);
 }
 
 const LEADING_SPACE = /^\s*/u;
@@ -280,18 +249,13 @@ interface Token {
  * ordem de `layout.runs`. Ver o cabeçalho para a semântica dos intervalos,
  * dos espaços e da colisão, e `DecodeError` para a prioridade dos erros.
  */
-export function decodeMarkers(
-  output: string,
-  layout: InlineLayout,
-  format: MarkerFormat,
-): DecodeResult {
+export function decodeMarkers(output: string, layout: InlineLayout): DecodeResult {
   const fail = (error: DecodeError): DecodeResult => ({ ok: false, error });
-  const encoded = encodeWithPlan(layout, format);
+  const encoded = encodeWithPlan(layout);
   const planned = planLayout(layout);
   if (encoded === null || !planned.ok) return fail('invalid_layout');
   const { events, runSlots, wrappers } = planned.plan;
   if (typeof output !== 'string') return fail('missing');
-  const spec = FORMATS[format];
 
   // Bordas externas: trocadas pelas do texto codificado.
   const lead = LEADING_SPACE.exec(encoded)?.[0] ?? '';
@@ -299,8 +263,8 @@ export function decodeMarkers(
   const text = lead + output.trim() + trail;
 
   const tokens: Token[] = [];
-  for (const match of text.matchAll(spec.loose)) {
-    const exact = spec.strict.exec(match[0]);
+  for (const match of text.matchAll(LOOSE_MARKER)) {
+    const exact = STRICT_MARKER.exec(match[0]);
     if (exact === null) return fail('collision');
     const start = match.index;
     tokens.push({

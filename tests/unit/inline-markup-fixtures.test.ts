@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   encodeMarkers,
-  MARKER_FORMATS,
   validateInlineLayout,
   type InlineLayout,
 } from '../../src/core/inline-markers';
@@ -20,10 +19,8 @@ const EXPECTED_IDS = [
   'strong-and-link',
 ];
 
-/** Fixtures cujo texto colide de propósito com algum formato. */
-const EXPECTED_COLLISIONS: Readonly<Record<string, readonly string[]>> = {
-  'footnote-collision': ['square'],
-};
+/** Fixtures que `encodeMarkers` recusa de propósito (vão nó a nó). */
+const EXPECTED_ENCODE_NULL: ReadonlySet<string> = new Set<string>();
 
 const ALLOWED_KEYS = new Set(['id', 'source', 'target', 'layout', 'notes']);
 
@@ -79,10 +76,9 @@ describe('fixtures de markup inline', () => {
       expect(validation.ok).toBe(true);
     });
 
-    it('colide só com os formatos esperados', () => {
+    it('codifica salvo as recusas esperadas', () => {
       const { id, layout } = data as { id: string; layout: InlineLayout };
-      const colliding = MARKER_FORMATS.filter((format) => encodeMarkers(layout, format) === null);
-      expect(colliding).toEqual(EXPECTED_COLLISIONS[id] ?? []);
+      expect(encodeMarkers(layout) === null).toBe(EXPECTED_ENCODE_NULL.has(id));
     });
   });
 });
