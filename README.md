@@ -6,7 +6,7 @@ Lerium é uma extensão para Chrome que traduzirá páginas e seleções de text
 
 ## Requisitos
 
-- Node.js 24 (versão fixada em [`.nvmrc`](.nvmrc)) e npm.
+- Node.js 24.15 ou superior na linha 24 (major fixada em [`.nvmrc`](.nvmrc)) e npm.
 - Google Chrome para desktop.
 - Ollama em execução local. A página de configurações já testa a conexão e lista os modelos instalados; a tradução virá nas próximas versões.
 

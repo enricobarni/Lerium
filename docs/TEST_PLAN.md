@@ -20,7 +20,7 @@ literária de [PLAN.md §9](PLAN.md). Arquitetura em
 | Unitário | Vitest | Validação de endpoint (loopback permitido, remoto negado, URL inválida), modelo ausente, idioma desconhecido; storage (defaults, migração não destrutiva, persistência após atualização) | Fase 2 |
 | Unitário | Vitest | Parser NDJSON (linha em 2–N chunks, dois objetos por chunk, UTF-8 dividido, CRLF, linha final sem newline, JSON inválido, erro do Ollama, `done`, abort); `PromptBuilder` (idioma, versão estável, nenhuma referência fixa a obra); `chatStream` (prazos, cancelamento, corridas, erros HTTP e do stream); provider (mapeamento de erros, nova tentativa, resposta fatiada em pontos aleatórios); schema das fixtures literárias; cliente único em `src/` | Fase 3 |
 | Manual (opt-in) | Vitest (`vitest.manual.config.ts`) + Ollama real | 6 fixtures literárias próprias em `tests/fixtures/literary/` (narrativa, diálogo, termo técnico, nomes próprios, parágrafo longo, injeção de instrução): sem preâmbulo, nomes e termos consistentes, canário de injeção ausente, razão de tamanho, idioma plausível. Fora do CI | Fase 3 |
-| Integração/DOM | Vitest + ambiente DOM | Parágrafos, títulos, listas, `<em>`/`<strong>`/`<a>`, espaços e quebras; exclusões (`code`/`pre`, campos editáveis, scripts, UI da extensão); restauração exata; resultado fora de ordem no bloco correto; nó removido/substituído | Fase 4 |
+| Integração/DOM | Vitest + jsdom (projeto `integration`, `tests/integration/`; ADR-012) | Coleta (`collectTextNodes`): ordem de documento na fixture de novel, uma regra de exclusão por caso, raiz excluída, DOM inalterado, Shadow DOM fora. A seguir: parágrafos, títulos, listas, `<em>`/`<strong>`/`<a>`, espaços e quebras; exclusões (`code`/`pre`, campos editáveis, scripts, UI da extensão); restauração exata; resultado fora de ordem no bloco correto; nó removido/substituído | Fase 4 |
 | Unitário + integração | Vitest | Scheduler: prioridade, limite de concorrência (inclusive no scroll), cancelamento, sem duplicação | Fase 5 |
 | E2E | Playwright + Chromium | Extensão MV3 carregada; iniciar/parar; seleção; menu de contexto; opções; alternar original; Ollama mock indisponível, HTTP 404 de modelo e resposta lenta | Fases 4–6 |
 | E2E | Playwright + Chromium | Duas abas simultâneas, fechar aba durante tradução, reabrir popup, navegação SPA, auditoria de permissões | Fase 7 |
@@ -28,8 +28,8 @@ literária de [PLAN.md §9](PLAN.md). Arquitetura em
 
 ## Cenário de novel (fixture própria)
 
-Fixture a ser **criada na Fase 4**, no caminho previsto
-`tests/fixtures/novel-chapter.html`. Ainda não existe. Requisitos:
+Fixture criada na Fase 4 em `tests/fixtures/novel-chapter.html` (texto
+autoral), usada pelos testes de integração do DOM. Requisitos:
 
 - Capítulo curto, **original**, em inglês, gênero fantasia.
 - Título em `<h1>` e parágrafos narrativos.
@@ -133,8 +133,8 @@ resultados (sem SLA fixo):
 | Comando | O que faz | No CI |
 |---|---|---|
 | `npm run lint` | ESLint e verificação do Prettier | sim |
-| `npm run typecheck` | `tsc` nos três tsconfigs (extensão, Node, E2E) | sim |
-| `npm test` | testes unitários (`tests/unit`) | sim |
+| `npm run typecheck` | `tsc` nos quatro tsconfigs (extensão, Node, E2E, integração) | sim |
+| `npm test` | projetos `unit` (`tests/unit`, Node) e `integration` (`tests/integration`, jsdom) | sim |
 | `npm run build` | build Vite em `dist/` | sim |
 | `npm run test:e2e` | E2E no Chromium com Ollama simulado | sim |
 | `npm run test:manual` | fixtures literárias com o modelo real; fica *skipped* sem `LERIUM_MANUAL_OLLAMA=1` | não |

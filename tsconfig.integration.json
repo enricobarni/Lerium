@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.node.json",
+  "compilerOptions": {
+    // Os testes de integração rodam no Vitest com jsdom e usam document/DOMParser.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+  },
+  "include": ["tests/integration"],
+  "exclude": []
+}

@@ -5,12 +5,57 @@
 
 ## Estado atual
 
-- **Fase:** 3 — Motor de tradução e streaming (gate cumprido; aguardando merge do PR de `test/translation-service`)
-- **Tarefa:** `test/translation-service` (provider de tradução, nova tentativa conservadora, fixtures literárias e validação com o modelo real)
-- **Versão:** `0.1.0` (esqueleto + conexão com o Ollama, PLAN.md §5.4; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.1.0` autorizada pelo responsável, em `ab06507` (validado: lint, typecheck, 398 testes, build, 8 E2E); criação manual pendente.
+- **Fase:** 4 — DOM e tradução de página (em andamento)
+- **Tarefa:** `feat/dom-collection` (coleta de texto com `TreeWalker` e regras de exclusão)
+- **Fase 3:** concluída — PRs #13–#16 mesclados; gate cumprido (18/18 execuções com o modelo real); ADR-011 aceita após conferência do model card pelo responsável
+- **Versão:** `0.1.0` (esqueleto + conexão com o Ollama, PLAN.md §5.4; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.1.0` em `ab06507` (validado: lint, typecheck, 398 testes, build, 8 E2E) e release [Lerium 0.1.0](https://github.com/enricobarni/Lerium/releases/tag/v0.1.0) publicadas pelo responsável.
 - **Fase 2:** concluída — PRs #9 e #10 mesclados; aceite manual do responsável no Chrome estável (conexão, modelos listados, Ollama fechado)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
+
+## Fase 4 — `feat/dom-collection`
+
+| Commit | Mensagem |
+|---|---|
+| `dfe42a8` | `test(dom): adiciona fixture própria de capítulo de novel` |
+| `c9c677f` | `feat(dom): coleta nós de texto com treewalker e exclusões` |
+| `3380a0e` | `docs(decisions): registra adr-012 de coleta de texto do dom` |
+| `3db0518` | `docs(progress): registra coleta de texto da fase 4` |
+| `eee5628` | `fix(dom): não descarta subárvore por visibility hidden` |
+| `051614f` | `fix(dom): ignora documento em designmode e reforça editáveis` |
+| `a782aad` | `fix(dom): lê style inline em tempo linear` |
+| `0394d6b` | `fix(dom): exclui xmp, listing, plaintext e title fora do head` |
+| `37abba9` | `build: exige node 24.15 ou superior` |
+| `2ea5725` | `docs(decisions): ajusta adr-012 após revisão` |
+| (este commit) | `docs(progress): registra correções da revisão da coleta` |
+
+**O que foi feito:**
+
+- `src/content/dom-collector.ts`: `collectTextNodes(root)` devolve os nós `Text` elegíveis em ordem de documento, com um único `TreeWalker` (elemento excluído é podado, sem reativação). Exclusões, motivos e limites (sem estilo computado, Shadow DOM e iframes fora) na [ADR-012](DECISIONS.md). Ainda não é usado por nenhum entry do build.
+- `tests/fixtures/novel-chapter.html`: capítulo autoral em inglês com os elementos do [TEST_PLAN.md](TEST_PLAN.md#cenário-de-novel-fixture-própria).
+- Vitest com projetos `unit` (Node) e `integration` (jsdom); `tsconfig.integration.json` no `typecheck`. `vitest.manual.config.ts` segue independente.
+- O commit de infraestrutura (`build(test)`) foi unido ao `feat(dom)`: com `tests/integration` vazio o `typecheck` falha (TS18003). Por isso a fixture veio antes.
+
+**Revisão:** reviewer e security aprovaram com ressalvas; todas aplicadas nos commits `eee5628`–`2ea5725`:
+
+- `visibility: hidden` inline deixou de podar (um filho com `visibility: visible` aparece); só `display: none` poda.
+- `designMode` `"on"` devolve `[]`; `isContentEditable === true` poda como defesa extra (stub nos testes, o jsdom não implementa).
+- Parse do `style` inline em tempo linear (as regex tinham backtracking quadrático: 500 estilos patológicos de 4096 caracteres levavam mais de 5 s, e um de 200 mil, 27 s; agora < 100 ms); `style` acima de 4096 caracteres não é analisado (visível).
+- Novas exclusões: `xmp`, `listing`, `plaintext` e `title` fora do `head`. Removidas da fixture as asserções de valores de atributo (`Search the archive`, `Type a name`), que nunca são nós `Text`.
+- `engines.node` `>=24.15` (exigência do jsdom 30); lockfile só no campo `engines` da raiz.
+- ADR-012 ajustada: limitações aceitas, `data-lerium-ui` só como exclusão e verificação futura de jsdom fora de `dist`.
+
+**Validações executadas:**
+
+- `npm run lint` e `typecheck` (4 tsconfigs) com código 0.
+- `npm test`: 831/831, 19 arquivos (eram 751): `unit` 751 (18 arquivos, inalterado) + `integration` 80 (1 arquivo novo).
+- `npm run test:manual` sem a variável: 6 *skipped*. `npm run build` com código 0; `npm run test:e2e`: 8/8.
+- Após a revisão: `npm test` 855/855, 19 arquivos (`unit` 751 + `integration` 104); lint e `typecheck` com código 0; `test:manual` 6 *skipped*; `build` com código 0, sem `jsdom` em `dist` (0 ocorrências, `dist` com 61 KB; conferido pelo orquestrador e novamente aqui); `test:e2e` 8/8. Testes de tempo falharam contra as regex antigas antes da correção.
+- Mutações manuais no coletor (poda trocada por *skip*, sem checagem de ancestrais, só a própria raiz, sem `!important`, sem comentário CSS, sem `plaintext-only`, `translate` e `contenteditable` sensíveis a maiúsculas, `localName` sem minúsculas): todas detectadas pelos testes.
+- `jsdom` 30.1.3 (MIT, devDependency); `npm audit`: 0 vulnerabilidades.
+- Sem `chrome`, `innerHTML`, `getComputedStyle` ou `console` em `src/content`.
+
+**Pendências:** segmentação por bloco e identidade de segmento (`feat/dom-segmentation`); ADR-003 (markup inline) e ADR-010 (protocolo SW↔página) seguem em aberto; texto oculto só por folha de estilo é coletado até a Fase 5.
 
 ## Fase 3 — `test/translation-service`
 
@@ -52,7 +97,7 @@
 - [x] Nenhum conteúdo perdido por chunk arbitrário: parser (todos os cortes + 200 aleatórios) e provider (64 fatiamentos aleatórios, inclusive no meio de UTF-8).
 - [x] Todos os fluxos usam o mesmo cliente: teste de varredura de `src/`.
 
-**Pendências:** ADR-011 só passa a Aceita após confirmar o formato no model card oficial (exige navegação web autorizada); A/B com prompt literário (PLAN.md §9) fica como versão futura; ADR-010 (protocolo SW↔página) na Fase 4; `incomplete_stream` aparece como `network` ("inacessível") na interface, aceitável no MVP.
+**Pendências:** ~~ADR-011 só passa a Aceita após confirmar o model card~~ (aceita em `a6ce8d9`); A/B com prompt literário (PLAN.md §9) fica como versão futura; ADR-010 (protocolo SW↔página) na Fase 4; `incomplete_stream` aparece como `network` ("inacessível") na interface, aceitável no MVP.
 
 ## Fase 3 — `feat/ollama-chat`
 
@@ -351,4 +396,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 4 — `feat/dom-collection`: coleta de texto com `TreeWalker` e regras de exclusão, com a fixture própria `tests/fixtures/novel-chapter.html`.
+Fase 4 — `feat/dom-segmentation`: segmentação por bloco (parágrafo, subtítulo, lista) sobre a lista de nós da coleta, preservando espaços e quebras, com identidade de segmento estável e decisão da ADR-003.

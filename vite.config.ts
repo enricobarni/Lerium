@@ -28,9 +28,27 @@ export default defineConfig({
   test: {
     // Os testes ficam fora de src/, então a raiz do Vitest é a do repositório.
     root: fromRoot('.'),
-    // Só unitários: os E2E (tests/e2e, *.spec.ts) rodam no Playwright.
-    include: ['tests/unit/**/*.test.ts'],
-    environment: 'node',
     passWithNoTests: false,
+    // `npm test` roda os dois projetos. Os E2E (tests/e2e, *.spec.ts) rodam
+    // no Playwright; os manuais, em vitest.manual.config.ts.
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'unit',
+          include: ['tests/unit/**/*.test.ts'],
+          environment: 'node',
+        },
+      },
+      {
+        extends: true,
+        test: {
+          // DOM simulado (jsdom) para coleta e aplicação no DOM (ADR-012).
+          name: 'integration',
+          include: ['tests/integration/**/*.test.ts'],
+          environment: 'jsdom',
+        },
+      },
+    ],
   },
 });
