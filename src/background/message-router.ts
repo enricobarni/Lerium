@@ -5,6 +5,12 @@ import {
   type TestConnectionResponse,
 } from '../shared/runtime-messages';
 import { originMatchPattern } from '../shared/host-permission';
+import {
+  PAGE_INJECT_MESSAGE_TYPE,
+  parsePageInjectRequest,
+  type PageInjectRequest,
+  type PageInjectResponse,
+} from '../shared/page-control';
 import { normalizeEndpoint, validateModel } from '../shared/validation';
 
 /**
@@ -26,12 +32,14 @@ export interface MessageHandlerDeps {
   permissionsContains: (originPattern: string) => Promise<boolean>;
   fetchFn: typeof fetch;
   timeoutMs?: number;
+  /** Injeta o content script na aba (`createInjectHandler`). */
+  injectPage: (request: PageInjectRequest) => Promise<PageInjectResponse>;
 }
 
 export type MessageHandler = (
   message: unknown,
   sender: MessageSenderLike,
-) => Promise<TestConnectionResponse | undefined>;
+) => Promise<TestConnectionResponse | PageInjectResponse | undefined>;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -42,13 +50,16 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  * assíncrona) e `return false` (deixar a mensagem para outros listeners).
  */
 export function isHandledMessage(message: unknown): boolean {
-  return isRecord(message) && message.type === TEST_CONNECTION_MESSAGE_TYPE;
+  return (
+    isRecord(message) &&
+    (message.type === TEST_CONNECTION_MESSAGE_TYPE || message.type === PAGE_INJECT_MESSAGE_TYPE)
+  );
 }
 
 /**
- * Só páginas da própria extensão (opções, popup) pedem o teste de conexão.
- * O `id` barra outras extensões; a `url` barra content scripts, que rodam
- * dentro de páginas web e não precisam desta ação.
+ * Só páginas da própria extensão (opções, popup) pedem o teste de conexão e
+ * a injeção na aba. O `id` barra outras extensões; a `url` barra content
+ * scripts, que rodam dentro de páginas web e não precisam dessas ações.
  */
 function isTrustedSender(sender: MessageSenderLike, runtimeId: string): boolean {
   if (sender.id !== runtimeId || typeof sender.url !== 'string') return false;
@@ -59,6 +70,12 @@ export function createMessageHandler(deps: MessageHandlerDeps): MessageHandler {
   return async (message, sender) => {
     if (!isTrustedSender(sender, deps.runtimeId) || !isHandledMessage(message)) {
       return undefined;
+    }
+
+    if (isRecord(message) && message.type === PAGE_INJECT_MESSAGE_TYPE) {
+      const inject = parsePageInjectRequest(message);
+      if (!inject) return { ok: false, error: 'invalid_request' };
+      return deps.injectPage(inject);
     }
 
     const request = parseTestConnectionRequest(message);

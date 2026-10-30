@@ -1,17 +1,44 @@
 import { createOllamaTranslationProvider } from '../core/ollama-translation-provider';
 import { createSettingsRepository } from '../storage/settings-repository';
+import { createInjectHandler, createInjectionRegistry } from './injection';
 import { createMessageHandler, isHandledMessage } from './message-router';
 import { createPageJobHandler } from './page-job';
 
 /**
  * Service worker do Lerium (ADR-009): único cliente HTTP do Ollama. O
  * listener é registrado de forma síncrona no topo do módulo, como exige o
- * MV3 para acordar o worker. Sem estado global e sem logs de dados.
+ * MV3 para acordar o worker. O único estado global é o registro de injeção
+ * (ids de documento, sem conteúdo); nada de dados vai para log.
  */
+const settingsRepository = createSettingsRepository(chrome.storage.local);
+const permissionsContains = (originPattern: string): Promise<boolean> =>
+  chrome.permissions.contains({ origins: [originPattern] });
+
+// Documentos em que o Lerium injetou o content script (ADR-010).
+const injectionRegistry = createInjectionRegistry();
+chrome.tabs.onRemoved.addListener((tabId) => injectionRegistry.forget(tabId));
+
+const injectPage = createInjectHandler({
+  // `url` só vem preenchida com acesso à aba: o grant de `activeTab` (clique
+  // no ícone) vale para a extensão inteira, inclusive o service worker.
+  getTabUrl: async (tabId) => (await chrome.tabs.get(tabId)).url ?? null,
+  loadSettings: () => settingsRepository.load().catch(() => null),
+  hasOriginPermission: permissionsContains,
+  executeScript: async (tabId) => {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [0] },
+      files: ['content.js'],
+    });
+    return results[0] ?? null;
+  },
+  registry: injectionRegistry,
+});
+
 const handleMessage = createMessageHandler({
   runtimeId: chrome.runtime.id,
-  permissionsContains: (originPattern) => chrome.permissions.contains({ origins: [originPattern] }),
+  permissionsContains,
   fetchFn: (input, init) => fetch(input, init),
+  injectPage,
 });
 
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
@@ -23,8 +50,6 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   // Mantém o canal aberto até `sendResponse`.
   return true;
 });
-
-const settingsRepository = createSettingsRepository(chrome.storage.local);
 
 // Job de página: uma port por job, aberta pelo content script da aba.
 chrome.runtime.onConnect.addListener(
