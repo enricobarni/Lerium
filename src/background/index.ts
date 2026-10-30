@@ -1,4 +1,7 @@
+import { createOllamaTranslationProvider } from '../core/ollama-translation-provider';
+import { createSettingsRepository } from '../storage/settings-repository';
 import { createMessageHandler, isHandledMessage } from './message-router';
+import { createPageJobHandler } from './page-job';
 
 /**
  * Service worker do Lerium (ADR-009): único cliente HTTP do Ollama. O
@@ -20,3 +23,19 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   // Mantém o canal aberto até `sendResponse`.
   return true;
 });
+
+const settingsRepository = createSettingsRepository(chrome.storage.local);
+
+// Job de página: uma port por job, aberta pelo content script da aba.
+chrome.runtime.onConnect.addListener(
+  createPageJobHandler({
+    runtimeId: chrome.runtime.id,
+    loadSettings: () => settingsRepository.load().catch(() => null),
+    createProvider: (settings) =>
+      createOllamaTranslationProvider({
+        endpoint: settings.endpoint,
+        model: settings.model,
+        fetchFn: (input, init) => fetch(input, init),
+      }),
+  }),
+);
