@@ -44,7 +44,7 @@ usuário; não há backend próprio.
 Tipos compartilhados previstos (definidos em código a partir das Fases 2 e 3):
 
 - `TranslationSettings` — preferências do usuário: endpoint local, modelo, idiomas, paralelismo, modo e domínios excluídos.
-- `TranslationSegment` — unidade de texto coletada do DOM, com identidade estável no documento.
+- `TranslationSegment` — bloco de texto segmentado do DOM (`src/content/segmenter.ts`, ADR-013): id ordinal `seg-N`, elemento de bloco, nós `Text` e texto normalizado. Guarda referências do DOM e **nunca atravessa mensagens**: do content script só sai `{ segmentId, text }`. Blocos com markup inline de um nível vão ao modelo com marcadores `<gN>` (`src/core/inline-markers.ts`, ADR-003); os demais, como texto puro ou nó a nó.
 - `TranslationRequest` — pedido de tradução de um segmento dentro de um job, com idiomas e versão de prompt.
 - `TranslationResult` — texto traduzido de um segmento, associado ao job e ao segmento de origem.
 - `TranslationProgress` — contagem de segmentos concluídos, pendentes e com falha para a UI.

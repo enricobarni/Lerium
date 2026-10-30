@@ -6,12 +6,57 @@
 ## Estado atual
 
 - **Fase:** 4 — DOM e tradução de página (em andamento)
-- **Tarefa:** `feat/dom-collection` (coleta de texto com `TreeWalker` e regras de exclusão)
+- **Tarefa:** `feat/dom-segmentation` (segmentação por bloco, codec de marcadores inline e decisão da ADR-003)
 - **Fase 3:** concluída — PRs #13–#16 mesclados; gate cumprido (18/18 execuções com o modelo real); ADR-011 aceita após conferência do model card pelo responsável
 - **Versão:** `0.1.0` (esqueleto + conexão com o Ollama, PLAN.md §5.4; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.1.0` em `ab06507` (validado: lint, typecheck, 398 testes, build, 8 E2E) e release [Lerium 0.1.0](https://github.com/enricobarni/Lerium/releases/tag/v0.1.0) publicadas pelo responsável.
 - **Fase 2:** concluída — PRs #9 e #10 mesclados; aceite manual do responsável no Chrome estável (conexão, modelos listados, Ollama fechado)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
+
+## Fase 4 — `feat/dom-segmentation`
+
+| Commit | Mensagem |
+|---|---|
+| `60972d5` | `feat(dom): segmenta nós de texto por bloco com ids estáveis` |
+| `dc83bdb` | `feat(core): adiciona codec puro de marcadores inline` |
+| `064f4d2` | `test(dom): adiciona experimento manual de marcadores inline` |
+| `5873ee9` | `refactor(core): mantém só o formato xml nos marcadores inline` |
+| `5ddd4c2` | `fix(core): limita marcadores inline a um nível` |
+| `9e5ca63` | `feat(dom): extrai layout inline de um segmento` |
+| `991bf71` | `fix(dom): ignora nós só de espaço na cobertura de wrappers` |
+| `bf91a5c` | `fix(dom): completa a lista de elementos de bloco` |
+| `f372fa5` | `perf(dom): interrompe layout inline acima dos limites` |
+| `914f2eb` | `fix(core): remove backtracking polinomial das regex de marcadores` |
+| `798597a` | `fix(core): recusa saída que omite ou desloca texto entre runs` |
+| `159326a` | `fix(core): recusa tags html na saída e preserva espaço entre marcadores` |
+| `b22f66f` | `test(core): valida endpoint loopback nos testes manuais com modelo` |
+| `046967d` | `docs: aceita adr-003, registra adr-013 e atualiza arquitetura` |
+| `f581c91` | `docs(core): corrige alcance do limite de razão para destinos cjk` |
+| (este commit) | `docs(progress): registra segmentação e adr-003 da fase 4` |
+
+**O que foi feito:**
+
+- `src/content/segmenter.ts`: `segmentTextNodes` agrupa os nós da coleta por bloco (ADR-013), com `<br>` e elementos excluídos como fronteira, ids ordinais `seg-N`, nós só de espaço preservados e segmentos sem letras descartados.
+- `src/core/inline-markers.ts`: codec puro dos marcadores `<gN>`, com profundidade máxima 1, recusa de colisão e guardas de integridade (`lost_text`, `run_growth`, tags HTML na saída).
+- `src/content/inline-layout.ts`: `inlineLayoutOf` descreve o markup inline de um segmento como runs e devolve `INLINE_LIMITS_EXCEEDED` acima dos limites.
+- ADR-003 aceita (Opção 3, híbrida) a partir de experimento com o modelo real; ADR-013 registrada.
+- Trabalho paralelo: o codec foi feito em worktree isolada e integrado por `cherry-pick`, sem conflitos (arquivos disjuntos).
+
+**Experimento da ADR-003** (`translategemma:4b`, instância Ollama isolada na porta 11998, i5-13420H, 10 fixtures × 3 execuções):
+
+- 1ª rodada, três formatos: `<g1>` 73%, `[1]` 67%, `⟦1⟧` 63% de saídas válidas.
+- 2ª rodada, só `<g>` e profundidade 1: 81% das codificadas (22/27); aninhamento vai direto para nó a nó.
+- 3ª rodada, com as guardas de integridade: os mesmos 22/27, sem nenhum falso positivo.
+- Falhas recorrentes: marcador em volta de fala entre aspas (3/3) e ênfase em palavra reescrita (2/3).
+
+**Revisão:**
+
+- Reviewer bloqueou na 1ª rodada (ReDoS, omissão silenciosa aceita, `<center>`/`<form>` fundindo parágrafos, tags HTML vazando, espaço perdido entre marcadores); todos corrigidos e testados; re-revisão aprovou com ressalvas.
+- Security: aprovado, sem crítico ou alto; aplicados o ReDoS (medido: 2.000 espaços levavam 42 s; agora 0,2 ms com 10.000), `run_growth` e o corte do layout em DOM profundo.
+
+**Validações executadas:** `npm run lint`, `typecheck` (4 tsconfigs), `test` (1103/1103; eram 855) e `build` com código 0; testes manuais *skipped* sem a variável.
+
+**Pendências:** aplicação e restauração no DOM (`feat/page-translation`), incluindo checagem de tamanho plausível no caminho de texto puro; prompt v2 para marcadores (`test/inline-markup`); piso de razão por idioma para destinos CJK; `translate="no"` no meio da frase e `<ruby>` (ADR-013).
 
 ## Fase 4 — `feat/dom-collection`
 
@@ -396,4 +441,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 4 — `feat/dom-segmentation`: segmentação por bloco (parágrafo, subtítulo, lista) sobre a lista de nós da coleta, preservando espaços e quebras, com identidade de segmento estável e decisão da ADR-003.
+Fase 4 — `feat/page-translation`: aplicação segura da tradução e restauração exata do original, content script injetado sob demanda (ADR-002) e protocolo entre service worker e página (ADR-010).

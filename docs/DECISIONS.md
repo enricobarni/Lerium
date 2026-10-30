@@ -61,7 +61,7 @@ ADR.
 
 ## ADR-003 — Estratégia de DOM para markup inline
 
-**Status:** Proposta
+**Status:** Aceita (30/10/2026)
 
 **Contexto.** A referência insere toda a tradução no primeiro nó de texto e
 esvazia os seguintes, quebrando `<em>`, `<strong>` e `<a>`
@@ -74,10 +74,68 @@ inteiro, mas a resposta nunca pode ser inserida como HTML.
 2. Tradução por bloco com marcadores para nós inline, validados e mapeados de volta via `nodeValue`.
 3. Híbrida: bloco quando não há markup inline; marcadores ou nó a nó quando há, com fallback seguro.
 
-Em qualquer opção: nunca esvaziar nós inline silenciosamente.
+**Experimento** (`tests/manual/inline-markers.manual.test.ts`, 30/10/2026):
+`translategemma:4b` no Ollama 0.40.12 (instância isolada, i5-13420H), prompt
+v1 da ADR-011 sem alteração, 10 fixtures autorais de markup inline
+(`tests/fixtures/inline-markup/`) × 3 execuções. Regra de decisão fixada
+antes da medição: ≥ 90% de saídas válidas → Opção 3 com o formato; 60–90% →
+Opção 3 registrando a taxa de fallback; < 60% → inline vai nó a nó.
 
-**Quando decidir.** Na Fase 4, após testes com a fixture
-`tests/fixtures/novel-chapter.html` (ver [TEST_PLAN.md](TEST_PLAN.md)).
+| Formato | Saídas válidas (1ª rodada) |
+|---|---|
+| `<g1>…</g1>` | **73%** (22/30) |
+| `[1]…[/1]` | 67% (18/27; 3 recusados por colisão com nota de rodapé) |
+| `⟦1⟧…⟦/1⟧` | 63% (19/30) |
+
+Padrões observados (iguais nos três formatos):
+
+- marcadores em palavras e nomes, sem aninhamento, são preservados (7 de 10
+  fixtures em 3/3 com `<g>`);
+- marcador em volta de fala entre aspas é trocado pelas aspas e some;
+- aninhamento (`<a><strong>`) é achatado ou perdido em todos os formatos;
+- ênfase em palavra que muda na tradução às vezes some ("so angry" →
+  "tão furioso").
+
+2ª rodada, só `<g>` e com profundidade máxima 1: 81% das saídas codificadas
+válidas (22/27); as 3 com aninhamento foram direto para nó a nó, sem chamada
+ao modelo. 3ª rodada, com as guardas de integridade abaixo: os mesmos 22/27,
+sem nenhuma saída boa recusada por elas.
+
+**Decisão.** Opção 3 (híbrida), com o formato `<gN>…</gN>`.
+
+1. Bloco sem markup inline vai como texto puro (`segment.text`).
+2. Bloco com markup inline de um nível vai com marcadores
+   (`src/core/inline-markers.ts`): `encodeMarkers` recusa colisão com a
+   sintaxe já presente no texto, mais de `MAX_INLINE_WRAPPERS` wrappers e
+   profundidade acima de 1; `decodeMarkers` exige a mesma sequência e o mesmo
+   aninhamento dos marcadores originais e recusa saídas que:
+   - omitem texto: runs externos com letras que voltam vazios, ou razão de
+     letras saída/entrada fora de 0,25–4 (`lost_text`);
+   - deslocam texto para dentro de um wrapper, como uma frase inteira dentro
+     de um `<a>` (`run_growth`);
+   - trazem tags HTML que não estavam no texto enviado (`collision`).
+   As expressões regulares do codec são lineares: a versão anterior de uma
+   delas levava 42 s com 2.000 espaços (ReDoS).
+3. Marcadores recusados ou inválidos → tradução nó a nó. Se essa também
+   falhar, o original permanece.
+4. Em nenhum caso a tradução é concentrada no primeiro nó, e o texto entra no
+   DOM só por `nodeValue`.
+5. Os formatos perdedores saíram do código.
+
+**Consequências.**
+
+- Cerca de 1 em cada 4 blocos com markup inline cai no nó a nó, com perda de
+  contexto da frase nesses blocos; a taxa vale para o modelo e o prompt
+  medidos e precisa ser medida de novo se algum dos dois mudar.
+- Um prompt v2 que peça para preservar as tags pode subir a taxa; é
+  experimento da branch `test/inline-markup`, como nova versão da ADR-011.
+- A aplicação no DOM e a restauração exata ficam em `feat/page-translation`.
+- O caminho de texto puro tem o mesmo risco de omissão; uma checagem de
+  tamanho plausível equivalente entra junto com a aplicação.
+- O limite inferior de 0,25 pode recusar uma tradução CJK concisa e legítima
+  (uma frase em zh-CN ficou em 0,17 na revisão); nesse caso o bloco vai nó a
+  nó, o que é seguro. Ajustar o piso por idioma fica para quando houver
+  medição com destino CJK.
 
 ## ADR-004 — Identidade de job/documento e estado de sessão
 
@@ -517,3 +575,57 @@ testes de integração com `DOM`.
 - Uma dependência de desenvolvimento a mais (jsdom, MIT), fora do bundle.
   Quando o content script entrar no build, verificar que o jsdom não vai para
   `dist`.
+
+## ADR-013 — Segmentação por bloco e identidade de segmento
+
+**Status:** Aceita (30/10/2026)
+
+**Contexto.** A Fase 4 pede segmentação por bloco (parágrafo, subtítulo,
+lista), preservando espaços e quebras, e identidade de segmento estável por
+documento. A entrada é a lista de nós da coleta (ADR-012).
+
+**Decisão.** Implementada em `src/content/segmenter.ts` e
+`src/content/inline-layout.ts`.
+
+- **Bloco:** o ancestral mais próximo da lista `BLOCK_ELEMENTS` (`p`,
+  `h1`–`h6`, `li`, `dt`, `dd`, `blockquote`, `td`, `th`, `caption`,
+  `figcaption`, `div`, `section`, `article`, `nav`, `center`, `form` e
+  outros). Todo o resto é
+  inline, inclusive elementos customizados; sem estilo computado (ADR-012).
+- **Fronteiras:** novo segmento quando muda o bloco ou quando há, entre dois
+  nós, um elemento de bloco, um `<br>` ou um elemento excluído pela coleta.
+  `<br>` sempre separa: capítulos inteiros em um `div` com `<br><br>` viram
+  parágrafos, em vez de um segmento gigante.
+- **Conteúdo:** `nodes` guarda todos os nós, inclusive os só de espaço, para
+  a restauração exata; `text` colapsa espaço ASCII e preserva U+00A0.
+  Segmentos sem nenhuma letra (`|`, `* * *`, `—`) são descartados.
+- **Identidade:** id ordinal `seg-N` em ordem de documento, por chamada. Hash
+  do conteúdo foi rejeitado (textos repetidos colidem e o hash funcionaria
+  como impressão digital do texto em mensagens); caminho estrutural foi
+  rejeitado (tão frágil quanto o ordinal e mais caro). A identidade real é a
+  referência ao objeto; o job (ADR-004) só aplica resultados que casem
+  `jobId` e `segmentId`. Ids monotônicos por documento ficam para a Fase 7
+  (MutationObserver).
+- **Fronteira de mensagens:** `TranslationSegment` guarda referências do DOM
+  e nunca atravessa mensagens; só `{ segmentId, text }` sai do content script.
+- **Layout inline:** `inlineLayoutOf` descreve o bloco como runs com caminho
+  de wrappers; wrappers que envolvem todo o conteúdo são ignorados (nós só de
+  espaço não contam nessa cobertura). Acima de `MAX_INLINE_DEPTH` ou de
+  `MAX_INLINE_WRAPPERS`, devolve `INLINE_LIMITS_EXCEEDED` sem montar o resto,
+  e o bloco vai nó a nó; cada nó visita no máximo `MAX_INLINE_DEPTH + 2`
+  ancestrais.
+- **Tamanho:** `MAX_SEGMENT_CHARS = 6000`; segmentos maiores são devolvidos
+  inteiros e quem aplica os mantém no original (`segment_too_long`).
+  Divisão por frase fica para a Fase 5, se a medição pedir.
+
+**Consequências.**
+
+- Custo linear no trecho do documento entre o primeiro e o último nó.
+- Elementos exibidos como bloco só por CSS (`span` com `display:block`)
+  são tratados como inline; `white-space: pre-wrap` via CSS não é detectado.
+- `nav` é segmentado como qualquer bloco; prioridade é tema da Fase 5.
+- Elemento excluído no meio da frase (`translate="no"` em um nome, `<code>`
+  inline) separa a frase em fragmentos traduzidos à parte; um marcador opaco
+  no lugar dele fica como melhoria futura.
+- `<ruby>` mistura a leitura (`<rt>`) ao texto enviado ao modelo; excluir
+  `rt`/`rp` fica como melhoria da coleta.

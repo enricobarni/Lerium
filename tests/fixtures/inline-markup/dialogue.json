@@ -1,0 +1,30 @@
+{
+  "id": "dialogue",
+  "source": "en",
+  "target": "pt-BR",
+  "layout": {
+    "runs": [
+      {
+        "text": "\"Run,\" Mei whispered. \"",
+        "path": []
+      },
+      {
+        "text": "Now",
+        "path": [1]
+      },
+      {
+        "text": ", before the ",
+        "path": []
+      },
+      {
+        "text": "Warden",
+        "path": [2]
+      },
+      {
+        "text": " wakes up.\"",
+        "path": []
+      }
+    ]
+  },
+  "notes": "Texto autoral. Diálogo com aspas abrindo antes de um <em> e <strong> num título. Em pt-BR as aspas podem virar travessão; o critério é só a validade dos marcadores."
+}

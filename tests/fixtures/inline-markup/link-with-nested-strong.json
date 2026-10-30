@@ -1,0 +1,30 @@
+{
+  "id": "link-with-nested-strong",
+  "source": "en",
+  "target": "pt-BR",
+  "layout": {
+    "runs": [
+      {
+        "text": "She opened the ",
+        "path": []
+      },
+      {
+        "text": "message from the ",
+        "path": [1]
+      },
+      {
+        "text": "Northern Pavilion",
+        "path": [1, 2]
+      },
+      {
+        "text": " elders",
+        "path": [1]
+      },
+      {
+        "text": " and read it twice.",
+        "path": []
+      }
+    ]
+  },
+  "notes": "Texto autoral. <a> com <strong> aninhado (profundidade 2). Em pt-BR a ordem \"mensagem dos anciãos do Pavilhão do Norte\" tende a mover \" elders\" para antes do nome aninhado, o que exige reorganizar texto dentro do wrapper externo. Decodificou 0/3 no experimento; com MAX_INLINE_DEPTH = 1 o encode é recusado (encode_null esperado, vai nó a nó)."
+}

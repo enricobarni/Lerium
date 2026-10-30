@@ -1,0 +1,22 @@
+{
+  "id": "single-em",
+  "source": "en",
+  "target": "pt-BR",
+  "layout": {
+    "runs": [
+      {
+        "text": "Kael had never seen the sect master ",
+        "path": []
+      },
+      {
+        "text": "this",
+        "path": [1]
+      },
+      {
+        "text": " angry before.",
+        "path": []
+      }
+    ]
+  },
+  "notes": "Texto autoral. Um único <em> no meio da frase, enfatizando um pronome; o caso mais simples."
+}

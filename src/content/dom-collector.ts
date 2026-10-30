@@ -133,8 +133,9 @@ function isHiddenByInlineStyle(style: string): boolean {
 /**
  * Indica se o elemento e toda a sua subárvore ficam fora da coleta. Não há
  * reativação: um `translate="yes"` dentro de uma área excluída continua fora.
+ * Exportado para a segmentação, que trata o elemento excluído como fronteira.
  */
-function isExcludedElement(element: Element): boolean {
+export function isExcludedElement(element: Element): boolean {
   if (EXCLUDED_ELEMENTS.has(element.localName.toLowerCase())) return true;
   if (element.hasAttribute('hidden')) return true;
   if (element.hasAttribute(LERIUM_UI_ATTRIBUTE)) return true;

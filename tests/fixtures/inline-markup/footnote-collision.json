@@ -1,0 +1,22 @@
+{
+  "id": "footnote-collision",
+  "source": "en",
+  "target": "pt-BR",
+  "layout": {
+    "runs": [
+      {
+        "text": "The ancient script spoke of the ",
+        "path": []
+      },
+      {
+        "text": "Ninth Gate",
+        "path": [1]
+      },
+      {
+        "text": "[1], though no scholar had ever found it.",
+        "path": []
+      }
+    ]
+  },
+  "notes": "Texto autoral. Contém \"[1]\" de nota de rodapé, que não colide com o formato xml (<g1>): avalia se o modelo preserva a nota como texto ao lado do marcador. Era a colisão esperada do formato square, removido pela ADR-003."
+}

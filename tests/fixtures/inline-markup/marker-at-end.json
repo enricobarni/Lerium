@@ -1,0 +1,18 @@
+{
+  "id": "marker-at-end",
+  "source": "en",
+  "target": "pt-BR",
+  "layout": {
+    "runs": [
+      {
+        "text": "When the dust settled, only one word remained carved into the gate: ",
+        "path": []
+      },
+      {
+        "text": "Return",
+        "path": [1]
+      }
+    ]
+  },
+  "notes": "Texto autoral. O parágrafo termina dentro de <strong>, sem pontuação depois; avalia se o modelo acrescenta texto após o último marcador (orphan_text)."
+}

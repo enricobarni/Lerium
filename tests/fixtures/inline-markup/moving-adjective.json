@@ -1,0 +1,30 @@
+{
+  "id": "moving-adjective",
+  "source": "en",
+  "target": "pt-BR",
+  "layout": {
+    "runs": [
+      {
+        "text": "He placed the ",
+        "path": []
+      },
+      {
+        "text": "red",
+        "path": [1]
+      },
+      {
+        "text": " stone beside the ",
+        "path": []
+      },
+      {
+        "text": "cracked",
+        "path": [2]
+      },
+      {
+        "text": " mirror.",
+        "path": []
+      }
+    ]
+  },
+  "notes": "Texto autoral. Adjetivos marcados que mudam de posição em pt-BR (\"a pedra vermelha\", \"o espelho rachado\"). A ordem dos marcadores se mantém; o texto externo muda de intervalo, o que o codec aceita."
+}

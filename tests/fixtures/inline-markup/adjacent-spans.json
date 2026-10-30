@@ -1,0 +1,26 @@
+{
+  "id": "adjacent-spans",
+  "source": "en",
+  "target": "pt-BR",
+  "layout": {
+    "runs": [
+      {
+        "text": "The system chimed: ",
+        "path": []
+      },
+      {
+        "text": "Quest complete.",
+        "path": [1]
+      },
+      {
+        "text": "Reward: one silver key.",
+        "path": [2]
+      },
+      {
+        "text": " Lin sighed in relief.",
+        "path": []
+      }
+    ]
+  },
+  "notes": "Texto autoral. Dois <span> colados, sem texto entre eles, no estilo de notificação de sistema de web novel. Texto que o modelo puser entre os marcadores colados não tem nó de destino (orphan_text)."
+}

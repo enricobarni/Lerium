@@ -1,0 +1,30 @@
+{
+  "id": "strong-and-link",
+  "source": "en",
+  "target": "pt-BR",
+  "layout": {
+    "runs": [
+      {
+        "text": "The ",
+        "path": []
+      },
+      {
+        "text": "Azure Flame Pill",
+        "path": [1]
+      },
+      {
+        "text": " was listed in the ",
+        "path": []
+      },
+      {
+        "text": "auction catalogue",
+        "path": [2]
+      },
+      {
+        "text": " at three thousand spirit stones.",
+        "path": []
+      }
+    ]
+  },
+  "notes": "Texto autoral. <strong> com nome de item seguido de <a> irmão; dois wrappers no mesmo nível. Em pt-BR o nome do item pode ser traduzido ou mantido."
+}
