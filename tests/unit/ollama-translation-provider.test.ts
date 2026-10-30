@@ -709,3 +709,74 @@ describe('translate: nova tentativa interna', () => {
     expect(result).toMatchObject({ ok: true, durationMs: 850 });
   });
 });
+
+/** PRNG determinístico (mulberry32): os cortes se repetem em toda execução. */
+function mulberry32(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Fatia `bytes` em pontos aleatórios, inclusive no meio de caracteres multibyte. */
+function sliceRandomly(bytes: Uint8Array, random: () => number): Uint8Array[] {
+  const cuts = new Set<number>();
+  const count = 1 + Math.floor(random() * 40);
+  for (let i = 0; i < count; i += 1) cuts.add(1 + Math.floor(random() * (bytes.length - 1)));
+  const sorted = [...cuts].sort((a, b) => a - b);
+  const chunks: Uint8Array[] = [];
+  let start = 0;
+  for (const cut of [...sorted, bytes.length]) {
+    chunks.push(bytes.slice(start, cut));
+    start = cut;
+  }
+  return chunks;
+}
+
+/** Byte de continuação UTF-8 (`10xxxxxx`): cortar antes dele divide um caractere. */
+const isContinuationByte = (byte: number | undefined): boolean =>
+  byte !== undefined && (byte & 0xc0) === 0x80;
+
+describe('translate: nenhum conteúdo perdido por chunk', () => {
+  const EXPECTED = 'Ação no coração — “olá”, disse ela. 😀🐉 世界の物語 한국어 fim.';
+  // Tokens de tamanhos variados, por ponto de código (sem quebrar pares substitutos).
+  const codePoints = [...EXPECTED];
+  const tokens: string[] = [];
+  for (let i = 0; i < codePoints.length; i += 1 + (i % 4)) {
+    tokens.push(codePoints.slice(i, i + 1 + (i % 4)).join(''));
+  }
+  const bytes = encoder.encode(tokens.map(token).join('') + doneLine({ eval_count: 9 }));
+  const random = mulberry32(0x1e21);
+  const RUNS = 64;
+  let midCharacterCuts = 0;
+
+  it('os tokens recompõem o texto esperado', () => {
+    expect(tokens.join('')).toBe(EXPECTED);
+  });
+
+  it(`${RUNS} fatiamentos aleatórios preservam o texto`, async () => {
+    for (let run = 0; run < RUNS; run += 1) {
+      const chunks = sliceRandomly(bytes, random);
+      let offset = 0;
+      for (const chunk of chunks.slice(0, -1)) {
+        offset += chunk.length;
+        if (isContinuationByte(bytes[offset])) midCharacterCuts += 1;
+      }
+      const fetchFn = fetchWith(() => okResponse(...chunks));
+      const received: string[] = [];
+
+      const result = await providerWith(fetchFn).translate(INPUT, {
+        onToken: (delta) => received.push(delta),
+      });
+
+      expect(result).toMatchObject({ ok: true, text: EXPECTED, outputTokens: 9 });
+      expect(received.join('')).toBe(EXPECTED);
+    }
+    // Garante que o cenário difícil (corte no meio de um caractere) foi exercitado.
+    expect(midCharacterCuts).toBeGreaterThan(0);
+  });
+});
