@@ -322,7 +322,7 @@ está liberada. Só um `POST`, que leva o `Origin`, revela a recusa.
 
 ## ADR-011 — Prompt de tradução para o TranslateGemma
 
-**Status:** Proposta (29/10/2026); validada com o modelo real em 29/10/2026, falta só confirmar o model card (ver Validação)
+**Status:** Aceita (29/10/2026)
 
 > A ADR-010 está reservada para o protocolo entre service worker e páginas.
 
@@ -346,7 +346,7 @@ usuário seguidos, formato que o modelo não viu no treino.
 - **Mensagem única `user`**, com a instrução fixa primeiro e o texto da
   página ao final; nenhuma mensagem `system`.
 - **Formato recomendado para o TranslateGemma** no model card do Google
-  (a confirmar no model card oficial): "You are a professional {Source}
+  (conferido no model card oficial pelo responsável em 29/10/2026): "You are a professional {Source}
   ({src}) to {Target} ({tgt}) translator. … Please translate the following
   {Source} text into {Target}:" seguido de três quebras de linha e do texto.
   Sem frase literária adicional: o baseline fica fiel ao formato.
@@ -407,5 +407,8 @@ Executada em 29/10/2026 com `npm run test:manual` (branch
 - `temperature: 0.2` e `num_predict` mantidos: nenhum caso de corte ou de
   divergência relevante entre execuções.
 
-**Pendente para Aceitar:** confirmar o formato do prompt no model card
-oficial do TranslateGemma (exige navegação web autorizada).
+**Model card:** o responsável conferiu, em 29/10/2026, que a instrução, a
+frase final e as três quebras de linha antes do texto coincidem com o
+formato do model card oficial do TranslateGemma. Com isso e a validação
+acima, a ADR passa a Aceita. O A/B com prompt literário (PLAN.md §9) segue
+como versão futura, sem alterar esta decisão.
