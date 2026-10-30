@@ -273,6 +273,31 @@ describe('createPageJobHandler — tradução', () => {
     expect(port.disconnect).not.toHaveBeenCalled();
   });
 
+  it('network (Ollama inacessível) → job:result, job:fatal e disconnect', async () => {
+    const { port, calls } = setup();
+    port.emit(unit());
+    await flush();
+    calls[0]!.resolve({ ok: false, error: 'network', retryable: true });
+    await flush();
+    expect(port.sent).toEqual([
+      {
+        type: 'job:result',
+        jobId: JOB_ID,
+        unitId: 'seg-0#text@1',
+        ok: false,
+        error: 'network',
+        retryable: true,
+      },
+      { type: 'job:fatal', jobId: JOB_ID, error: 'network' },
+    ]);
+    expect(port.disconnect).toHaveBeenCalledTimes(1);
+    expect(port.listenerCount()).toBe(0);
+    // Nada sai depois do desligamento.
+    port.emit(unit('seg-1#text@1'));
+    await flush();
+    expect(calls).toHaveLength(1);
+  });
+
   it.each(['invalid_config', 'model_missing', 'forbidden'] as const)(
     '%s → job:result, job:fatal e disconnect',
     async (error) => {

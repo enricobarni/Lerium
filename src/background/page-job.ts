@@ -38,11 +38,18 @@ export interface PageJobDeps {
 /** Intervalo mínimo entre dois `job:progress` da mesma unidade. */
 export const PROGRESS_INTERVAL_MS = 5_000;
 
-/** Erros de tradução que tornam inútil continuar o job. */
+/**
+ * Erros de tradução que tornam inútil continuar o job. `network` (Ollama
+ * desligado ou porta fechada) entra aqui: as próximas unidades falhariam do
+ * mesmo jeito, e o usuário precisa agir. `timeout` fica de fora de propósito:
+ * pode ser só um modelo lento num segmento longo, e as demais unidades ainda
+ * podem passar.
+ */
 const FATAL_TRANSLATION_ERRORS: ReadonlySet<string> = new Set<JobFatalErrorKind>([
   'invalid_config',
   'model_missing',
   'forbidden',
+  'network',
 ]);
 
 const isFatalTranslationError = (error: string): error is JobFatalErrorKind =>
