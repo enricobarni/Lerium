@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  expectTypeOf,
+  it,
+  vi,
+  type MockInstance,
+} from 'vitest';
 import {
   createJobRunner,
   isSendableUnit,
@@ -11,6 +20,7 @@ import {
   MAX_UNIT_CHARS,
   MAX_UNIT_ID_CHARS,
   PAGE_JOB_PORT_NAME,
+  type JobFatalErrorKind,
   type JobUnitMessage,
 } from '../../src/shared/page-messages';
 import type { PortLike } from '../../src/shared/port-like';
@@ -556,6 +566,12 @@ describe('createJobRunner — falhas de unidade e fallback', () => {
 });
 
 describe('createJobRunner — término anormal', () => {
+  it('o erro do estado é só código fatal ou interrupted', () => {
+    expectTypeOf<JobState['error']>().toEqualTypeOf<
+      JobFatalErrorKind | 'interrupted' | undefined
+    >();
+  });
+
   it('job:fatal encerra com o código e deixa o restante no original', () => {
     const document = parse(MIXED_PAGE);
     const { runner, port } = setup(document);

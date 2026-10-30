@@ -33,7 +33,12 @@
  * vez só, pelo resultado final.
  */
 
-import { isUnitId, MAX_UNIT_CHARS, parseWorkerToContent } from '../shared/page-messages';
+import {
+  isUnitId,
+  MAX_UNIT_CHARS,
+  parseWorkerToContent,
+  type JobFatalErrorKind,
+} from '../shared/page-messages';
 import type { PortLike } from '../shared/port-like';
 import { collectTextNodes } from './dom-collector';
 import { createPageApplier, type SegmentPlan, type TranslationUnit } from './page-applier';
@@ -48,7 +53,7 @@ export interface JobState {
   failed: number;
   skipped: number;
   /** Código do erro (`JobFatalErrorKind` ou `interrupted`); nunca texto da página. */
-  error?: string;
+  error?: JobErrorKind;
 }
 
 export interface JobRunnerDeps {
@@ -72,7 +77,10 @@ export interface JobRunner {
 export const PING_INTERVAL_MS = 20_000;
 
 /** Porta caiu ou não abriu com trabalho pendente. */
-export const INTERRUPTED = 'interrupted';
+export const INTERRUPTED = 'interrupted' as const;
+
+/** Código de erro do job: falha fatal do service worker ou porta perdida. */
+export type JobErrorKind = JobFatalErrorKind | typeof INTERRUPTED;
 
 interface CurrentPlan {
   readonly plan: SegmentPlan;
@@ -129,7 +137,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     }
   };
 
-  const fail = (job: ActiveJob, error: string): void => {
+  const fail = (job: ActiveJob, error: JobErrorKind): void => {
     teardown(job);
     emit({ ...state, status: 'error', error });
   };
