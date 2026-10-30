@@ -8,6 +8,7 @@ import {
 import { createOllamaTranslationProvider } from '../../src/core/ollama-translation-provider';
 import type { TranslationErrorKind } from '../../src/core/translation-provider';
 import type { LanguageCode } from '../../src/core/types';
+import { normalizeEndpoint } from '../../src/shared/validation';
 import { loadInlineMarkupFixtures } from '../fixtures/inline-markup-fixtures';
 
 /**
@@ -29,7 +30,15 @@ import { loadInlineMarkupFixtures } from '../fixtures/inline-markup-fixtures';
  */
 
 const ENABLED = process.env.LERIUM_MANUAL_OLLAMA === '1';
-const ENDPOINT = process.env.LERIUM_OLLAMA_ENDPOINT ?? 'http://127.0.0.1:11434';
+// Mesmo validador da extensão: só loopback (RF01/RF07). Falha cedo, antes de
+// qualquer requisição, se o endpoint não for aceito.
+const ENDPOINT_CHECK = normalizeEndpoint(
+  process.env.LERIUM_OLLAMA_ENDPOINT ?? 'http://127.0.0.1:11434',
+);
+if (ENABLED && !ENDPOINT_CHECK.ok) {
+  throw new Error(`LERIUM_OLLAMA_ENDPOINT recusado (${ENDPOINT_CHECK.reason}): use loopback`);
+}
+const ENDPOINT = ENDPOINT_CHECK.ok ? ENDPOINT_CHECK.value : '';
 const MODEL = process.env.LERIUM_OLLAMA_MODEL ?? 'translategemma:4b';
 const SHOW_OUTPUT = process.env.LERIUM_MANUAL_SHOW_OUTPUT === '1';
 
