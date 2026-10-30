@@ -13,6 +13,33 @@
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
 
+## Fase 4 — `feat/dom-collection`
+
+| Commit | Mensagem |
+|---|---|
+| `dfe42a8` | `test(dom): adiciona fixture própria de capítulo de novel` |
+| `c9c677f` | `feat(dom): coleta nós de texto com treewalker e exclusões` |
+| `3380a0e` | `docs(decisions): registra adr-012 de coleta de texto do dom` |
+| (este commit) | `docs(progress): registra coleta de texto da fase 4` |
+
+**O que foi feito:**
+
+- `src/content/dom-collector.ts`: `collectTextNodes(root)` devolve os nós `Text` elegíveis em ordem de documento, com um único `TreeWalker` (elemento excluído é podado, sem reativação). Exclusões, motivos e limites (sem estilo computado, Shadow DOM e iframes fora) na [ADR-012](DECISIONS.md). Ainda não é usado por nenhum entry do build.
+- `tests/fixtures/novel-chapter.html`: capítulo autoral em inglês com os elementos do [TEST_PLAN.md](TEST_PLAN.md#cenário-de-novel-fixture-própria).
+- Vitest com projetos `unit` (Node) e `integration` (jsdom); `tsconfig.integration.json` no `typecheck`. `vitest.manual.config.ts` segue independente.
+- O commit de infraestrutura (`build(test)`) foi unido ao `feat(dom)`: com `tests/integration` vazio o `typecheck` falha (TS18003). Por isso a fixture veio antes.
+
+**Validações executadas:**
+
+- `npm run lint` e `typecheck` (4 tsconfigs) com código 0.
+- `npm test`: 831/831, 19 arquivos (eram 751): `unit` 751 (18 arquivos, inalterado) + `integration` 80 (1 arquivo novo).
+- `npm run test:manual` sem a variável: 6 *skipped*. `npm run build` com código 0; `npm run test:e2e`: 8/8.
+- Mutações manuais no coletor (poda trocada por *skip*, sem checagem de ancestrais, só a própria raiz, sem `!important`, sem comentário CSS, sem `plaintext-only`, `translate` e `contenteditable` sensíveis a maiúsculas, `localName` sem minúsculas): todas detectadas pelos testes.
+- `jsdom` 30.1.3 (MIT, devDependency); `npm audit`: 0 vulnerabilidades.
+- Sem `chrome`, `innerHTML`, `getComputedStyle` ou `console` em `src/content`.
+
+**Pendências:** segmentação por bloco e identidade de segmento (`feat/dom-segmentation`); ADR-003 (markup inline) e ADR-010 (protocolo SW↔página) seguem em aberto; texto oculto só por folha de estilo é coletado até a Fase 5.
+
 ## Fase 3 — `test/translation-service`
 
 | Commit | Mensagem |
