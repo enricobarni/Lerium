@@ -5,6 +5,7 @@
     "types": ["node"]
   },
   "include": ["tests", "*.config.ts"],
-  // Os E2E usam DOM nos callbacks de page.evaluate: ficam em tsconfig.e2e.json.
-  "exclude": ["tests/e2e"]
+  // Os E2E (page.evaluate) e os de integração (jsdom) usam DOM: ficam em
+  // tsconfig.e2e.json e tsconfig.integration.json.
+  "exclude": ["tests/e2e", "tests/integration"]
 }
