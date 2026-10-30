@@ -159,6 +159,41 @@ function waitUnlessAborted(ms: number, signal: AbortSignal | undefined): Promise
   });
 }
 
+interface ReadRequest {
+  text: string;
+  source: TranslationInput['source'];
+  target: TranslationInput['target'];
+  signal: AbortSignal | undefined;
+  onToken: TranslateOptions['onToken'];
+}
+
+/**
+ * Lê a entrada e as opções uma única vez, em snapshot. Devolve `undefined`
+ * (vira `invalid_input`) se a entrada não for objeto, se `signal` existir e
+ * não for `AbortSignal`, se `onToken` existir e não for função ou se algum
+ * getter lançar. Opções que não são objeto são ignoradas. O conteúdo de
+ * `text`, `source` e `target` é validado depois, pelo `PromptBuilder`.
+ */
+function readRequest(input: unknown, options: unknown): ReadRequest | undefined {
+  try {
+    if (!isRecord(input)) return undefined;
+    const opts: Record<string, unknown> = isRecord(options) ? options : {};
+    const signal = opts.signal;
+    const onToken = opts.onToken;
+    if (signal !== undefined && !(signal instanceof AbortSignal)) return undefined;
+    if (onToken !== undefined && typeof onToken !== 'function') return undefined;
+    return {
+      text: input.text as string,
+      source: input.source as TranslationInput['source'],
+      target: input.target as TranslationInput['target'],
+      signal,
+      onToken: onToken as TranslateOptions['onToken'],
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Cria um provedor com snapshot do endpoint, do modelo e dos prazos: mudar a
  * configuração exige outra instância. Nunca lança na criação; configuração
@@ -176,18 +211,13 @@ export function createOllamaTranslationProvider(
 
   const run = async (input: unknown, options: unknown): Promise<TranslationResult> => {
     const startedAt = now();
-    if (!isRecord(input)) return failure('invalid_input', false);
-    const opts: TranslateOptions = isRecord(options) ? (options as TranslateOptions) : {};
+    const read = readRequest(input, options);
+    if (read === undefined) return failure('invalid_input', false);
+    const { text, source, target, signal, onToken: userOnToken } = read;
 
-    const built = buildChatRequest({
-      text: input.text as string,
-      source: input.source as TranslationInput['source'],
-      target: input.target as TranslationInput['target'],
-      model,
-    });
+    const built = buildChatRequest({ text, source, target, model });
     if (!built.ok) return mapBuildError(built.error);
 
-    const { signal, onToken: userOnToken } = opts;
     let delivered = false;
     // Cada tentativa é uma chamada nova (prazos do zero) com o mesmo pedido.
     const attempt = (): Promise<ChatStreamResult> =>
@@ -203,9 +233,13 @@ export function createOllamaTranslationProvider(
       });
 
     let result = await attempt();
-    if (!result.ok && isInternallyRetryable(result) && !delivered && !signal?.aborted) {
+    // Um abort que chegue depois de o chat decidir a falha (mesmo tick) vence:
+    // o consumidor pediu para parar e não deve ver `network` nem repetir.
+    if (!result.ok && signal?.aborted) return failure('cancelled', false);
+    if (!result.ok && isInternallyRetryable(result) && !delivered) {
       if (!(await waitUnlessAborted(retryDelayMs, signal))) return failure('cancelled', false);
       result = await attempt();
+      if (!result.ok && signal?.aborted) return failure('cancelled', false);
     }
     if (!result.ok) return mapChatFailure(result);
 
@@ -223,9 +257,10 @@ export function createOllamaTranslationProvider(
       try {
         return await run(input, options);
       } catch {
-        // Só chega aqui com entrada ou opções anômalas vindas de JS (getter
-        // que lança, sinal que não é `AbortSignal`): o pedido é inutilizável.
-        return failure('invalid_input', false);
+        // Entradas e opções anômalas já viraram `invalid_input` em
+        // `readRequest`; o que chega aqui é falha inesperada do próprio Lerium
+        // (relógio injetado que lança, defeito interno). Nada é registrado.
+        return failure('internal_error', false);
       }
     },
   };

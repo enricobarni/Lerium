@@ -375,6 +375,82 @@ describe('translate: entradas anômalas', () => {
     ).resolves.toEqual({ ok: false, error: 'invalid_input', retryable: false });
   });
 
+  it('sinal falso com a forma de AbortSignal -> invalid_input sem fetch', async () => {
+    const fetchFn = fetchWith(() => okResponse(token('x'), doneLine()));
+    const fakeSignal = {
+      aborted: false,
+      reason: undefined,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+
+    const result = await providerWith(fetchFn).translate(INPUT, {
+      signal: fakeSignal as unknown as AbortSignal,
+    });
+
+    expect(result).toEqual({ ok: false, error: 'invalid_input', retryable: false });
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it.each([null, 'fn', 42, {}])(
+    'onToken %s (não função) -> invalid_input sem fetch',
+    async (value) => {
+      const fetchFn = fetchWith(() => okResponse(token('x'), doneLine()));
+
+      const result = await providerWith(fetchFn).translate(INPUT, {
+        onToken: value as unknown as (delta: string) => void,
+      });
+
+      expect(result).toEqual({ ok: false, error: 'invalid_input', retryable: false });
+      expect(fetchFn).not.toHaveBeenCalled();
+    },
+  );
+
+  it('getter de opção que lança -> invalid_input sem fetch', async () => {
+    const fetchFn = fetchWith(() => okResponse(token('x'), doneLine()));
+    const options = {
+      get signal(): AbortSignal {
+        throw new Error('getter');
+      },
+    };
+
+    await expect(providerWith(fetchFn).translate(INPUT, options)).resolves.toEqual({
+      ok: false,
+      error: 'invalid_input',
+      retryable: false,
+    });
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('nunca rejeita: exceção inesperada interna -> internal_error', async () => {
+    const fetchFn = fetchWith(() => okResponse(token('x'), doneLine()));
+    const now = () => {
+      throw new Error('relógio quebrado');
+    };
+
+    await expect(providerWith(fetchFn, { now }).translate(INPUT)).resolves.toEqual({
+      ok: false,
+      error: 'internal_error',
+      retryable: false,
+    });
+  });
+
+  it('exceção interna depois do chat -> internal_error, não invalid_input', async () => {
+    const fetchFn = fetchWith(() => okResponse(token('Oi'), doneLine()));
+    let calls = 0;
+    // 1ª leitura (início) funciona; a 2ª (fim, para durationMs) lança.
+    const now = () => {
+      calls += 1;
+      if (calls > 1) throw new Error('relógio quebrado');
+      return 0;
+    };
+
+    const result = await settle(providerWith(fetchFn, { now }).translate(INPUT));
+
+    expect(result).toEqual({ ok: false, error: 'internal_error', retryable: false });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
   it('opções que não são objeto são ignoradas', async () => {
     const fetchFn = fetchWith(() => okResponse(token('Oi'), doneLine()));
 
@@ -617,6 +693,49 @@ describe('translate: nova tentativa interna', () => {
 
     expect(result).toEqual({ ok: false, error: 'cancelled', retryable: false });
     expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('abort logo depois de o chat decidir network -> cancelled, sem 2ª tentativa', async () => {
+    const controller = new AbortController();
+    const { signal } = controller;
+    // O chat remove seu listener do sinal externo no `finally`, já com a
+    // falha `network` decidida: abortar ali simula um abort que chega no
+    // mesmo tick, depois do chat e antes de o provedor decidir repetir.
+    let armed = true;
+    signal.removeEventListener = (...args: Parameters<AbortSignal['removeEventListener']>) => {
+      AbortSignal.prototype.removeEventListener.apply(signal, args);
+      if (armed) {
+        armed = false;
+        controller.abort();
+      }
+    };
+    const fetchFn = networkFailure();
+
+    const result = await settle(providerWith(fetchFn).translate(INPUT, { signal }));
+
+    expect(armed).toBe(false);
+    expect(result).toEqual({ ok: false, error: 'cancelled', retryable: false });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('abort logo depois de a 2ª tentativa falhar -> cancelled', async () => {
+    const controller = new AbortController();
+    const { signal } = controller;
+    const fetchFn = vi.fn<typeof fetch>(async () => {
+      if (fetchFn.mock.calls.length === 2) {
+        // Mesmo truque do teste acima, armado só durante a 2ª chamada.
+        signal.removeEventListener = (...args: Parameters<AbortSignal['removeEventListener']>) => {
+          AbortSignal.prototype.removeEventListener.apply(signal, args);
+          controller.abort();
+        };
+      }
+      throw new TypeError('Failed to fetch');
+    });
+
+    const result = await settle(providerWith(fetchFn).translate(INPUT, { signal }));
+
+    expect(result).toEqual({ ok: false, error: 'cancelled', retryable: false });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 
   it('espera retryDelayMs antes da 2ª chamada', async () => {

@@ -11,8 +11,11 @@ import type { LanguageCode } from './types';
  * nem mensagens do Ollama: a interface traduz o código em PT-BR.
  *
  * - `invalid_input`: o segmento não é utilizável (não é objeto, texto
- *   ausente ou vazio, pedido não serializável);
- * - `consumer_error`: o `onToken` do consumidor lançou.
+ *   ausente ou vazio, pedido não serializável) ou as opções são inválidas
+ *   (`signal` que não é `AbortSignal`, `onToken` que não é função);
+ * - `consumer_error`: o `onToken` do consumidor lançou;
+ * - `internal_error`: falha inesperada do próprio Lerium; não é culpa do
+ *   texto nem das opções. Não repetível (`retryable: false`).
  */
 export type TranslationErrorKind =
   | 'invalid_config'
@@ -27,7 +30,8 @@ export type TranslationErrorKind =
   | 'empty_response'
   | 'cancelled'
   | 'invalid_input'
-  | 'consumer_error';
+  | 'consumer_error'
+  | 'internal_error';
 
 /** Um segmento a traduzir. `text` é dado não confiável da página. */
 export interface TranslationInput {
