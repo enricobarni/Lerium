@@ -3,6 +3,7 @@ import {
   encodeMarkers,
   validateInlineLayout,
   type InlineLayout,
+  type InlineLayoutError,
 } from '../../src/core/inline-markers';
 import { readInlineFixtureFiles } from '../fixtures/inline-markup-fixtures';
 
@@ -20,7 +21,10 @@ const EXPECTED_IDS = [
 ];
 
 /** Fixtures que `encodeMarkers` recusa de propósito (vão nó a nó). */
-const EXPECTED_ENCODE_NULL: ReadonlySet<string> = new Set<string>();
+const EXPECTED_ENCODE_NULL: Readonly<Record<string, InlineLayoutError>> = {
+  // Profundidade 2 > MAX_INLINE_DEPTH: registra `encode_null` no experimento.
+  'link-with-nested-strong': 'too_deep',
+};
 
 const ALLOWED_KEYS = new Set(['id', 'source', 'target', 'layout', 'notes']);
 
@@ -71,14 +75,17 @@ describe('fixtures de markup inline', () => {
       }
     });
 
-    it('tem paths consistentes dentro dos limites', () => {
-      const validation = validateInlineLayout((data as { layout: InlineLayout }).layout);
-      expect(validation.ok).toBe(true);
+    it('tem paths consistentes dentro dos limites, salvo as recusas esperadas', () => {
+      const { id, layout } = data as { id: string; layout: InlineLayout };
+      const validation = validateInlineLayout(layout);
+      const expected = EXPECTED_ENCODE_NULL[id];
+      if (expected === undefined) expect(validation.ok).toBe(true);
+      else expect(validation).toEqual({ ok: false, error: expected });
     });
 
     it('codifica salvo as recusas esperadas', () => {
       const { id, layout } = data as { id: string; layout: InlineLayout };
-      expect(encodeMarkers(layout) === null).toBe(EXPECTED_ENCODE_NULL.has(id));
+      expect(encodeMarkers(layout) === null).toBe(Object.hasOwn(EXPECTED_ENCODE_NULL, id));
     });
   });
 });

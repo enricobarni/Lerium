@@ -17,7 +17,8 @@
  * - ids são inteiros 1-based atribuídos na ordem de abertura (1, 2, 3...);
  * - um wrapper cobre runs contíguos: depois de fechado, não reabre;
  * - runs vizinhos têm `path` diferente (senão não haveria fronteira entre eles);
- * - no máximo `MAX_INLINE_WRAPPERS` wrappers e `MAX_INLINE_DEPTH` níveis;
+ * - no máximo `MAX_INLINE_WRAPPERS` wrappers e `MAX_INLINE_DEPTH` níveis (hoje
+ *   1: wrappers lado a lado, sem aninhamento);
  * - pelo menos um wrapper (sem wrapper não há o que marcar).
  *
  * Semântica dos runs na decodificação: o DOM não reordena nós, então o que
@@ -62,7 +63,15 @@ export interface InlineLayout {
 }
 
 export const MAX_INLINE_WRAPPERS = 8;
-export const MAX_INLINE_DEPTH = 3;
+
+/**
+ * Só wrappers lado a lado, sem aninhamento. No experimento da ADR-003
+ * (`translategemma:4b`, 3 execuções) a fixture com `<strong>` dentro de `<a>`
+ * não decodificou em nenhuma: 0/3 em `<g1>` e também 0/3 nos demais formatos.
+ * Layout com profundidade maior é recusado (`too_deep`, `encodeMarkers` dá
+ * `null`) e o segmento segue nó a nó.
+ */
+export const MAX_INLINE_DEPTH = 1;
 
 export type InlineLayoutError =
   | 'invalid_layout'

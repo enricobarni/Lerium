@@ -16,7 +16,7 @@ const layoutOf = (...runs: [string, number[]][]): InlineLayout => ({
 
 /** "the <em>red</em> stone" */
 const RED_STONE = layoutOf(['the ', []], ['red', [1]], [' stone', []]);
-/** "She <a>took the <strong>blade</strong> back</a>." */
+/** "She <a>took the <strong>blade</strong> back</a>." (profundidade 2) */
 const NESTED = layoutOf(
   ['She ', []],
   ['took the ', [1]],
@@ -32,15 +32,19 @@ const ADJACENT_AT_START = layoutOf(['Red', [1]], ['Blue', [2]], [' sky', []]);
 const texts = (layout: InlineLayout): string[] => layout.runs.map((run) => run.text);
 
 describe('encodeMarkers', () => {
-  it('aninha os marcadores', () => {
-    expect(encodeMarkers(NESTED)).toBe('She <g1>took the <g2>blade</g2> back</g1>.');
+  it('marca wrappers lado a lado', () => {
+    expect(encodeMarkers(TWO_SPANS)).toBe('A <g1>x</g1> B <g2>y</g2> C');
   });
 
   it('fecha e abre marcadores colados sem texto entre eles', () => {
     expect(encodeMarkers(ADJACENT_AT_START)).toBe('<g1>Red</g1><g2>Blue</g2> sky');
-    expect(encodeMarkers(layoutOf(['a', [1, 2]], ['b', [1, 3]]))).toBe(
-      '<g1><g2>a</g2><g3>b</g3></g1>',
-    );
+  });
+
+  it('devolve null para layout aninhado (aninhamento 0/3 no experimento)', () => {
+    expect(MAX_INLINE_DEPTH).toBe(1);
+    expect(validateInlineLayout(NESTED)).toEqual({ ok: false, error: 'too_deep' });
+    expect(encodeMarkers(NESTED)).toBeNull();
+    expect(encodeMarkers(layoutOf(['a', [1, 2]], ['b', [1, 3]]))).toBeNull();
   });
 
   it('aceita exatamente o limite de wrappers e de profundidade', () => {
@@ -51,9 +55,7 @@ describe('encodeMarkers', () => {
       ]),
     );
     expect(encodeMarkers(eight)).not.toBeNull();
-    const deep = layoutOf(['a', [1, 2, 3]]);
-    expect(MAX_INLINE_DEPTH).toBe(3);
-    expect(encodeMarkers(deep)).toBe('<g1><g2><g3>a</g3></g2></g1>');
+    expect(encodeMarkers(layoutOf(['a', [1]]))).toBe('<g1>a</g1>');
   });
 
   it('devolve null acima do limite de wrappers ou de profundidade', () => {
@@ -64,7 +66,7 @@ describe('encodeMarkers', () => {
       ]),
     );
     expect(encodeMarkers(nine)).toBeNull();
-    expect(encodeMarkers(layoutOf(['a', [1, 2, 3, 4]]))).toBeNull();
+    expect(encodeMarkers(layoutOf(['a', [1, 2]]))).toBeNull();
   });
 
   it('devolve null para layout sem wrapper', () => {
@@ -111,14 +113,14 @@ describe('encodeMarkers', () => {
 
 describe('validateInlineLayout', () => {
   it('informa wrappers e profundidade', () => {
-    expect(validateInlineLayout(NESTED)).toEqual({ ok: true, wrappers: 2, depth: 2 });
+    expect(validateInlineLayout(TWO_SPANS)).toEqual({ ok: true, wrappers: 2, depth: 1 });
   });
 
   it.each<[string, InlineLayout]>([
     ['invalid_layout', { runs: [] }],
     ['adjacent_same_path', layoutOf(['a', []], ['b', []])],
     ['non_canonical_ids', layoutOf(['a', [1]], ['b', []], ['c', [1]])],
-    ['too_deep', layoutOf(['a', [1, 2, 3, 4]])],
+    ['too_deep', layoutOf(['a', [1, 2]])],
     [
       'too_many_wrappers',
       layoutOf(...Array.from({ length: 9 }, (_, i): [string, number[]] => ['w', [i + 1]])),
@@ -168,10 +170,10 @@ describe('decodeMarkers', () => {
     expect(result).toEqual({ ok: true, texts: ['Vermelho', 'Azul', ' céu'] });
   });
 
-  it('decodifica a estrutura aninhada', () => {
+  it('recusa layout aninhado mesmo com saída bem formada', () => {
     expect(decodeMarkers('Ela <g1>pegou a <g2>lâmina</g2> de volta</g1>.', NESTED)).toEqual({
-      ok: true,
-      texts: ['Ela ', 'pegou a ', 'lâmina', ' de volta', '.'],
+      ok: false,
+      error: 'invalid_layout',
     });
   });
 
@@ -190,13 +192,12 @@ describe('decodeMarkers', () => {
     ['duplicate', '<g1>a</g1> pedra <g1>b</g1>', RED_STONE],
     ['duplicate', 'a pedra <g1>vermelha</g1></g1>', RED_STONE],
     ['order', 'A <g2>y</g2> B <g1>x</g1> C', TWO_SPANS],
-    ['nesting', 'Ela <g1>pegou <g2>a</g1> lâmina</g2>.', NESTED],
+    ['nesting', 'A <g1>x <g2>B</g1> y</g2> C', TWO_SPANS],
     ['nesting', 'a pedra </g1>vermelha<g1>', RED_STONE],
-    ['nesting', 'Ela <g1>pegou</g1> a <g2>lâmina</g2>.', NESTED],
     ['nesting', 'A <g1>x B <g2>y</g2></g1> C', TWO_SPANS],
     ['empty_run', 'a pedra <g1></g1>', RED_STONE],
     ['empty_run', 'a pedra <g1>  </g1>', RED_STONE],
-    ['empty_run', 'Ela <g1><g2>lâmina</g2></g1> de volta.', NESTED],
+    ['empty_run', 'A <g1></g1> B <g2>y</g2> C', TWO_SPANS],
     ['collision', 'a pedra <g1>vermelha</g1> < g1>', RED_STONE],
     ['collision', 'a pedra <g1>vermelha<g1/>', RED_STONE],
     ['collision', 'a pedra <G1>vermelha</g1>', RED_STONE],
@@ -280,7 +281,9 @@ function randomLayout(rand: () => number): InlineLayout {
     const runs: InlineRun[] = [];
     let nextId = 1;
     const emit = (path: number[]): void => {
-      const count = 1 + Math.floor(rand() * 3);
+      // Sem aninhamento, todos os wrappers ficam no nível de fora: mais itens
+      // lá para alcançar `MAX_INLINE_WRAPPERS`.
+      const count = 1 + Math.floor(rand() * (path.length === 0 ? 2 * MAX_INLINE_WRAPPERS : 3));
       let lastWasText = false;
       for (let i = 0; i < count; i += 1) {
         const canWrap = path.length < MAX_INLINE_DEPTH && nextId <= budget;
