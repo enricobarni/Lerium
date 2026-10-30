@@ -629,3 +629,44 @@ documento. A entrada é a lista de nós da coleta (ADR-012).
   no lugar dele fica como melhoria futura.
 - `<ruby>` mistura a leitura (`<rt>`) ao texto enviado ao modelo; excluir
   `rt`/`rp` fica como melhoria da coleta.
+
+## ADR-014 — Aplicação da tradução e restauração do original
+
+**Status:** Aceita (30/10/2026)
+
+**Contexto.** O Gate da Fase 4 exige que `original -> traduzido -> original`
+retorne o conteúdo exato, com links e formatação, e o PLAN.md §8 proíbe
+inserir saída do modelo como HTML. A página pode alterar ou remover nós a
+qualquer momento, e resultados podem chegar atrasados.
+
+**Decisão.** Implementada em `src/content/page-applier.ts`, sem `chrome`.
+
+- **Plano por segmento:** `plan(segment)` escolhe o caminho da ADR-003
+  (`plain`, `markers` ou `per_node`) e devolve unidades de texto a traduzir.
+  Texto puro com mais de um nó com conteúdo vai `per_node`: a tradução nunca
+  é concentrada no primeiro nó (risco nº 6 da referência).
+- **Escrita só por `node.data`.** Saída acima de `MAX_OUTPUT_CHARS`, vazia ou
+  com razão de letras implausível (`checkLetterRatio`, também usada pelo
+  codec) é recusada antes de qualquer processamento.
+- **Atomicidade por segmento:** no `apply`, todos os nós do plano precisam
+  estar conectados, com o mesmo texto e o mesmo pai do momento do plano, e
+  fora de contexto excluído ou editável; senão `node_changed` e nada é
+  escrito. Se qualquer unidade falhar, o segmento inteiro fica no original:
+  um parágrafo sem tradução confunde menos que um parágrafo com dois idiomas.
+- **Vínculo resultado-plano:** cada plano tem um token próprio embutido nos
+  ids das unidades; resultado de plano substituído ou id forjado não escreve.
+- **Registro** `Map<Text, { original, applied }>`: se o site trocou o texto
+  aplicado, o texto atual passa a ser o original. `restore` só escreve se o
+  nó ainda tem exatamente o texto aplicado e não está em contexto editável;
+  `reapply` faz o inverso. Nós desconectados saem do registro no `restore`.
+
+**Consequências.**
+
+- A restauração respeita mudanças do site e do usuário, à custa de não
+  restaurar nós que o site alterou depois da tradução.
+- O registro guarda referências fortes até o `clear`, que o executor de job
+  chama ao cancelar e ao descarregar a página.
+- As garantias pressupõem o mundo isolado do content script; com
+  `world: 'MAIN'`, a página poderia adulterar protótipos e elas não valem.
+- Nó movido dentro do mesmo pai ou texto inserido no meio do segmento entre o
+  plano e a aplicação não são detectados no MVP.

@@ -81,6 +81,12 @@
  * o texto de origem, para as palavras vizinhas não ficarem coladas.
  */
 
+import { countLetters, isLetterRatioPlausible } from './letter-ratio';
+
+// A razão de letras vive em `./letter-ratio` (usada também fora do codec);
+// as constantes continuam exportadas daqui para quem já as importava.
+export { MAX_LETTER_RATIO, MIN_LETTER_RATIO, RATIO_MIN_LETTERS } from './letter-ratio';
+
 export interface InlineRun {
   readonly text: string;
   /** Ids dos wrappers inline, do mais externo ao mais interno; `[]` = fora de wrapper. */
@@ -137,12 +143,6 @@ export type DecodeError =
 
 /** Letras mínimas nos runs externos para exigir que alguma volte (`lost_text`). */
 export const LOST_TEXT_MIN_OUTER = 12;
-/** Letras mínimas na entrada para aplicar a razão global (`lost_text`). */
-export const RATIO_MIN_LETTERS = 40;
-/** Razão mínima letras da saída / letras da entrada (cabe CJK: ver o cabeçalho). */
-export const MIN_LETTER_RATIO = 0.25;
-/** Razão máxima letras da saída / letras da entrada. */
-export const MAX_LETTER_RATIO = 4;
 /** Letras mínimas na entrada para aplicar `run_growth`. */
 export const GROWTH_MIN_LETTERS = 20;
 export const GROWTH_FACTOR = 3;
@@ -190,10 +190,6 @@ const isPositiveInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value >= 1;
 
 const HAS_LETTER = /\p{L}/u;
-const LETTERS = /\p{L}/gu;
-
-/** Nº de letras (`\p{L}`); linear, uma classe sem quantificador. */
-const countLetters = (text: string): number => text.match(LETTERS)?.length ?? 0;
 
 /** Lê o layout uma vez, validando forma e estrutura. Nunca lança. */
 function planLayout(layout: unknown): PlanResult {
@@ -444,12 +440,7 @@ export function decodeMarkers(output: string, layout: InlineLayout): DecodeResul
   if (outerIn >= LOST_TEXT_MIN_OUTER && outerOut === 0) return fail('lost_text');
   const inL = sum(lettersIn);
   const outL = sum(lettersOut);
-  if (
-    inL >= RATIO_MIN_LETTERS &&
-    (outL < MIN_LETTER_RATIO * inL || outL > MAX_LETTER_RATIO * inL)
-  ) {
-    return fail('lost_text');
-  }
+  if (!isLetterRatioPlausible(inL, outL)) return fail('lost_text');
 
   if (inL >= GROWTH_MIN_LETTERS && outL > 0) {
     const grew = lettersIn.some((letters, index) => {
