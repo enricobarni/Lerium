@@ -105,6 +105,10 @@ function isExcludedElement(element: Element): boolean {
 
   const editable = element.getAttribute('contenteditable');
   if (editable !== null && EDITABLE_VALUES.has(editable.trim().toLowerCase())) return true;
+  // Defesa extra: no Chromium, `isContentEditable` também cobre editáveis
+  // herdados ou ativados por outro caminho. Só existe em HTMLElement e falta
+  // no jsdom; o `in` cobre SVG/MathML e ambientes sem a propriedade.
+  if ('isContentEditable' in element && element.isContentEditable === true) return true;
 
   const style = element.getAttribute('style');
   return style !== null && isHiddenByInlineStyle(style);
@@ -112,6 +116,13 @@ function isExcludedElement(element: Element): boolean {
 
 function isDocument(root: Document | Element): root is Document {
   return root.nodeType === DOCUMENT_NODE;
+}
+
+/** Documento inteiro editável (`designMode`): nada é coletado. */
+function isDesignModeOn(document: Document): boolean {
+  // `designMode` pode faltar fora de navegadores (jsdom); `typeof` protege.
+  const mode: unknown = document.designMode;
+  return typeof mode === 'string' && mode.toLowerCase() === 'on';
 }
 
 /** A raiz (ou um ancestral dela) já está numa área excluída? */
@@ -132,14 +143,16 @@ function acceptNode(node: Node): number {
  * Nós Text elegíveis sob `root`, em ordem de documento. Não altera o DOM, não
  * loga e não guarda referências.
  *
+ * Devolve [] se o documento estiver em `designMode` "on" (todo editável).
  * Inclui nós só de espaço (a segmentação decide o que fazer com eles).
  * Comentários ficam fora por construção (`SHOW_TEXT`). Não entra em Shadow
  * DOM nem em iframes (ADR-012).
  */
 export function collectTextNodes(root: Document | Element): Text[] {
+  const document = isDocument(root) ? root : root.ownerDocument;
+  if (isDesignModeOn(document)) return [];
   if (!isDocument(root) && isInsideExcludedArea(root)) return [];
 
-  const document = isDocument(root) ? root : root.ownerDocument;
   const walker = document.createTreeWalker(root, SHOW_ELEMENT | SHOW_TEXT, acceptNode);
   const nodes: Text[] = [];
   for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {

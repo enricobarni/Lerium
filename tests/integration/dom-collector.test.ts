@@ -280,6 +280,30 @@ describe('collectTextNodes: regras de exclusão', () => {
     expect(visibleTexts(document.documentElement)).toEqual(['keep']);
   });
 
+  it.each(['on', 'ON', 'On'])('devolve [] com designMode="%s" (Document e Element)', (mode) => {
+    // jsdom não implementa designMode; o stub imita o Chromium.
+    const document = parse('<body><section id="root"><p>drop</p></section></body>');
+    Object.defineProperty(document, 'designMode', { value: mode, configurable: true });
+    expect(collectTextNodes(document)).toEqual([]);
+    expect(collectTextNodes(byId(document, 'root'))).toEqual([]);
+  });
+
+  it('coleta normalmente com designMode="off"', () => {
+    const document = parse('<body><p>keep</p></body>');
+    Object.defineProperty(document, 'designMode', { value: 'off', configurable: true });
+    expect(visibleTexts(document)).toEqual(['keep']);
+  });
+
+  it('poda elemento com isContentEditable=true mesmo sem atributo', () => {
+    // jsdom não implementa isContentEditable; o stub imita o Chromium.
+    const document = parse('<body><p>keep</p><div id="editor"><p>drop</p></div></body>');
+    Object.defineProperty(byId(document, 'editor'), 'isContentEditable', {
+      value: true,
+      configurable: true,
+    });
+    expect(visibleTexts(document)).toEqual(['keep']);
+  });
+
   it('não entra em Shadow DOM (limitação documentada na ADR-012)', () => {
     const document = parse('<body><div id="host"></div><p>keep</p></body>');
     const shadow = byId(document, 'host').attachShadow({ mode: 'open' });
