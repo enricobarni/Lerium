@@ -81,7 +81,7 @@ describe('collectTextNodes na fixture de novel', () => {
     expect(nodes.every((node) => node.nodeType === 3)).toBe(true);
   });
 
-  it('deixa de fora head, pre/code, textarea, input, hidden e comentários', () => {
+  it('deixa de fora head, pre/code, textarea, hidden e comentários', () => {
     const joined = collectTextNodes(loadFixture())
       .map((node) => node.data)
       .join('\n');
@@ -90,8 +90,6 @@ describe('collectTextNodes na fixture de novel', () => {
       'font-family',
       'ward.seal',
       'Reader comment draft',
-      'Search the archive',
-      'Type a name',
       'Draft note',
       'Fixture note',
     ]) {
@@ -145,10 +143,14 @@ describe('collectTextNodes: regras de exclusão', () => {
     'style',
     'noscript',
     'template',
+    'title',
     'code',
     'pre',
     'kbd',
     'samp',
+    'xmp',
+    'listing',
+    'plaintext',
     'textarea',
     'input',
     'select',
@@ -165,7 +167,8 @@ describe('collectTextNodes: regras de exclusão', () => {
     'audio',
   ])('poda <%s> com texto filho', (tag) => {
     // Montado por API do DOM: elementos vazios (input, embed) e o template
-    // não aceitam texto filho pelo parser, mas um site pode inseri-lo.
+    // não aceitam texto filho pelo parser, mas um site pode inseri-lo; e
+    // <plaintext> consumiria o resto do documento no parser.
     const document = parse('<body><p>keep</p></body>');
     const element = document.createElement(tag);
     element.append('drop');
@@ -177,6 +180,9 @@ describe('collectTextNodes: regras de exclusão', () => {
     ['script em maiúsculas', '<SCRIPT>var drop = 1;</SCRIPT>'],
     ['style em maiúsculas', '<STYLE>p { color: red; }</STYLE>'],
     ['pre com code', '<pre><code>drop()</code></pre>'],
+    ['xmp (texto bruto do parser)', '<xmp><b>drop</b></xmp>'],
+    ['listing', '<listing>drop</listing>'],
+    ['title no body', '<title>drop</title>'],
     ['code inline', '<p>keep <code>drop</code></p>'],
     ['select com options', '<select><optgroup label="g"><option>drop</option></optgroup></select>'],
     ['iframe (texto bruto do parser)', '<iframe>drop</iframe>'],

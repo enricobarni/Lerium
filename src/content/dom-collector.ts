@@ -32,11 +32,16 @@ const EXCLUDED_ELEMENTS: ReadonlySet<string> = new Set([
   'style',
   'noscript',
   'template',
-  // Código e saída técnica.
+  // `title` fora do head (o parser o mantém no body; também cobre SVG).
+  'title',
+  // Código e saída técnica, incluindo os elementos obsoletos de texto bruto.
   'code',
   'pre',
   'kbd',
   'samp',
+  'xmp',
+  'listing',
+  'plaintext',
   // Campos de formulário: o valor pertence ao usuário ou ao site.
   'textarea',
   'input',
