@@ -1,5 +1,6 @@
 import { createOllamaTranslationProvider } from '../core/ollama-translation-provider';
 import { createSettingsRepository } from '../storage/settings-repository';
+import { restrictToTrustedContexts } from '../storage/storage-access';
 import { createInjectHandler, createInjectionRegistry } from './injection';
 import { createMessageHandler, isHandledMessage } from './message-router';
 import { createPageJobHandler } from './page-job';
@@ -10,6 +11,13 @@ import { createPageJobHandler } from './page-job';
  * MV3 para acordar o worker. O único estado global é o registro de injeção
  * (ids de documento, sem conteúdo); nada de dados vai para log.
  */
+// Content scripts acessam `storage.local` por padrão; o Lerium não precisa
+// disso (o worker repassa o necessário pela port). Restringe a páginas da
+// extensão e ao worker. Melhor esforço, repetido a cada despertar do worker,
+// que sempre roda antes de qualquer injeção. Confirmar no smoke que um
+// content script recebe erro ao ler `chrome.storage.local`.
+void restrictToTrustedContexts(chrome.storage.local);
+
 const settingsRepository = createSettingsRepository(chrome.storage.local);
 const permissionsContains = (originPattern: string): Promise<boolean> =>
   chrome.permissions.contains({ origins: [originPattern] });
