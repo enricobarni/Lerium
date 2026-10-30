@@ -415,7 +415,7 @@ como versão futura, sem alterar esta decisão.
 
 ## ADR-012 — Coleta de texto do DOM e ambiente de teste
 
-**Status:** Aceita (29/10/2026)
+**Status:** Aceita (30/10/2026)
 
 **Contexto.** O RF03 exige coletar só nós elegíveis e excluir `script`,
 `style`, `noscript`, `code`, `pre`, campos editáveis, inputs, textareas,
@@ -438,19 +438,22 @@ até aqui só rodava no Node.
   `nodeType` e `localName` em minúsculas (vale para HTML, SVG e MathML), sem
   `instanceof`, para não depender do realm do documento.
 - Se a raiz, ou um ancestral dela, é excluída, o resultado é `[]`.
+- Documento em `designMode` `"on"` (sem diferenciar maiúsculas) devolve `[]`,
+  com `Document` ou `Element` como raiz: a página inteira é editável.
 
 | Exclusão (poda da subárvore) | Motivo |
 |---|---|
 | `head` | metadados (`title`, `style`, `script`), não é texto de leitura |
+| `title` (também fora do `head`) | o parser mantém `<title>` no `body`; não é texto de leitura |
 | `script`, `style`, `noscript`, `template` | código, CSS, conteúdo alternativo ou inerte |
-| `code`, `pre`, `kbd`, `samp` | código e saída técnica perderiam sentido traduzidos |
+| `code`, `pre`, `kbd`, `samp`, `xmp`, `listing`, `plaintext` | código, saída técnica e elementos obsoletos de texto bruto perderiam sentido traduzidos |
 | `textarea`, `input`, `select`, `option`, `optgroup`, `datalist` | valores de formulário pertencem ao usuário ou ao site |
 | `svg`, `math` | texto posicionado ou semântico; traduzir quebra o desenho ou a fórmula |
 | `iframe`, `object`, `embed`, `canvas`, `video`, `audio` | outro documento ou conteúdo embutido |
-| `contenteditable` com `""`, `true` ou `plaintext-only` no próprio elemento | campo editável; alterar o texto interfere na edição |
+| `contenteditable` com `""`, `true` ou `plaintext-only` no próprio elemento, ou `isContentEditable === true` | campo editável; alterar o texto interfere na edição (a propriedade, do Chromium, é defesa extra; falta no jsdom) |
 | `translate="no"` (sem diferenciar maiúsculas) e classe `notranslate` | opt-out explícito do autor (HTML e convenção comum) |
 | atributo `hidden` (qualquer valor, inclusive `until-found`) | elemento oculto |
-| `style` inline com `display: none` ou `visibility: hidden` | elemento oculto, detectável sem estilo computado |
+| `style` inline com `display: none` | elemento oculto, detectável sem estilo computado |
 | `[data-lerium-ui]` (`LERIUM_UI_ATTRIBUTE`) | interface do próprio Lerium |
 
 - **Poda sem reativação:** um `translate="yes"` ou `contenteditable="false"`
@@ -459,15 +462,36 @@ até aqui só rodava no Node.
   `contenteditable="false"` é texto comum.
 - **Sem estilo computado:** o `style` inline é lido por um parser simples
   (sem diferenciar maiúsculas, com espaços, comentários e `!important`; a
-  última declaração vence, salvo `!important` anterior). `getComputedStyle`
+  última declaração vence, salvo `!important` anterior), em tempo linear com
+  `indexOf`/`trimEnd`/`endsWith` (as regex anteriores tinham backtracking
+  quadrático); comentário sem fechamento descarta o resto. Atributo `style`
+  com mais de 4096 caracteres não é analisado e o elemento é tratado como
+  visível (coletado), o que fixa o custo por elemento. `getComputedStyle`
   força cálculo de estilo em cada elemento, custa caro em capítulos longos e
   não é necessário para a coleta. Consequência aceita: texto oculto por folha
   de estilo (classe com `display: none`) é coletado; o refino por
   visibilidade fica para a Fase 5, junto com a priorização por viewport.
+- **`visibility` não poda:** é herdada, mas um descendente com
+  `visibility: visible` volta a aparecer; podar a subárvore descartaria texto
+  exibido. Texto oculto só por `visibility` é coletado, como o oculto por
+  folha de estilo (custo, não risco).
 - `button` e `aria-hidden="true"` continuam traduzíveis: são texto visível
   ao leitor (`aria-hidden` só o esconde da árvore de acessibilidade).
 - **Fora do escopo:** Shadow DOM (o `TreeWalker` não entra em shadow roots) e
   iframes (dependem da política de injeção da ADR-002).
+- **`data-lerium-ui` é só exclusão:** nunca deve ser usado como sinal de
+  confiança, porque a página pode aplicá-lo a qualquer elemento. A UI futura
+  fica em shadow root fechado, com referências próprias.
+- **Limitações aceitas (coletado mesmo sem ser texto de leitura visível):**
+  - texto oculto por folha de estilo;
+  - conteúdo de `<dialog>` e `<details>` fechados;
+  - light DOM de custom elements que não é exibido (sem `slot`);
+  - declaração inválida após uma válida (`display:none; display: nonsense`):
+    o navegador ignora a inválida e oculta, a coleta usa a última e coleta;
+  - editores que renderizam o texto do usuário sem `contenteditable` (ex.:
+    Monaco);
+  - dados pessoais exibidos pela própria página: a tradução é iniciada pelo
+    usuário e o destino é o Ollama em loopback.
 
 **Ambiente de teste.** Vitest com dois projetos em `vite.config.ts`: `unit`
 (`tests/unit`, Node) e `integration` (`tests/integration`, jsdom 30.1.3,
@@ -479,7 +503,7 @@ testes de integração com `DOM`.
   coerente com uma coleta que não usa estilo computado.
 - **happy-dom:** em geral mais rápido, mas prioriza velocidade sobre
   conformidade com o padrão; não foi avaliado aqui, e a velocidade não importa
-  no tamanho atual da suíte (os 80 testes de integração rodam em menos de 1 s).
+  no tamanho atual da suíte (a suíte de integração roda em menos de 1 s).
 - **Só Playwright:** DOM real, porém lento e sem isolar a função; fica para
   os E2E de tradução de página.
 
@@ -491,3 +515,5 @@ testes de integração com `DOM`.
   Fase 5.
 - Conteúdo em Shadow DOM ou iframes não é traduzido no MVP.
 - Uma dependência de desenvolvimento a mais (jsdom, MIT), fora do bundle.
+  Quando o content script entrar no build, verificar que o jsdom não vai para
+  `dist`.
