@@ -20,7 +20,14 @@
 | `dfe42a8` | `test(dom): adiciona fixture própria de capítulo de novel` |
 | `c9c677f` | `feat(dom): coleta nós de texto com treewalker e exclusões` |
 | `3380a0e` | `docs(decisions): registra adr-012 de coleta de texto do dom` |
-| (este commit) | `docs(progress): registra coleta de texto da fase 4` |
+| `3db0518` | `docs(progress): registra coleta de texto da fase 4` |
+| `eee5628` | `fix(dom): não descarta subárvore por visibility hidden` |
+| `051614f` | `fix(dom): ignora documento em designmode e reforça editáveis` |
+| `a782aad` | `fix(dom): lê style inline em tempo linear` |
+| `0394d6b` | `fix(dom): exclui xmp, listing, plaintext e title fora do head` |
+| `37abba9` | `build: exige node 24.15 ou superior` |
+| `2ea5725` | `docs(decisions): ajusta adr-012 após revisão` |
+| (este commit) | `docs(progress): registra correções da revisão da coleta` |
 
 **O que foi feito:**
 
@@ -29,11 +36,21 @@
 - Vitest com projetos `unit` (Node) e `integration` (jsdom); `tsconfig.integration.json` no `typecheck`. `vitest.manual.config.ts` segue independente.
 - O commit de infraestrutura (`build(test)`) foi unido ao `feat(dom)`: com `tests/integration` vazio o `typecheck` falha (TS18003). Por isso a fixture veio antes.
 
+**Revisão:** reviewer e security aprovaram com ressalvas; todas aplicadas nos commits `eee5628`–`2ea5725`:
+
+- `visibility: hidden` inline deixou de podar (um filho com `visibility: visible` aparece); só `display: none` poda.
+- `designMode` `"on"` devolve `[]`; `isContentEditable === true` poda como defesa extra (stub nos testes, o jsdom não implementa).
+- Parse do `style` inline em tempo linear (as regex tinham backtracking quadrático: 500 estilos patológicos de 4096 caracteres levavam mais de 5 s, e um de 200 mil, 27 s; agora < 100 ms); `style` acima de 4096 caracteres não é analisado (visível).
+- Novas exclusões: `xmp`, `listing`, `plaintext` e `title` fora do `head`. Removidas da fixture as asserções de valores de atributo (`Search the archive`, `Type a name`), que nunca são nós `Text`.
+- `engines.node` `>=24.15` (exigência do jsdom 30); lockfile só no campo `engines` da raiz.
+- ADR-012 ajustada: limitações aceitas, `data-lerium-ui` só como exclusão e verificação futura de jsdom fora de `dist`.
+
 **Validações executadas:**
 
 - `npm run lint` e `typecheck` (4 tsconfigs) com código 0.
 - `npm test`: 831/831, 19 arquivos (eram 751): `unit` 751 (18 arquivos, inalterado) + `integration` 80 (1 arquivo novo).
 - `npm run test:manual` sem a variável: 6 *skipped*. `npm run build` com código 0; `npm run test:e2e`: 8/8.
+- Após a revisão: `npm test` 855/855, 19 arquivos (`unit` 751 + `integration` 104); lint e `typecheck` com código 0; `test:manual` 6 *skipped*; `build` com código 0, sem `jsdom` em `dist` (0 ocorrências, `dist` com 61 KB; conferido pelo orquestrador e novamente aqui); `test:e2e` 8/8. Testes de tempo falharam contra as regex antigas antes da correção.
 - Mutações manuais no coletor (poda trocada por *skip*, sem checagem de ancestrais, só a própria raiz, sem `!important`, sem comentário CSS, sem `plaintext-only`, `translate` e `contenteditable` sensíveis a maiúsculas, `localName` sem minúsculas): todas detectadas pelos testes.
 - `jsdom` 30.1.3 (MIT, devDependency); `npm audit`: 0 vulnerabilidades.
 - Sem `chrome`, `innerHTML`, `getComputedStyle` ou `console` em `src/content`.
