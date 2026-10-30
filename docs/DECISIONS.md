@@ -412,3 +412,82 @@ frase final e as três quebras de linha antes do texto coincidem com o
 formato do model card oficial do TranslateGemma. Com isso e a validação
 acima, a ADR passa a Aceita. O A/B com prompt literário (PLAN.md §9) segue
 como versão futura, sem alterar esta decisão.
+
+## ADR-012 — Coleta de texto do DOM e ambiente de teste
+
+**Status:** Aceita (29/10/2026)
+
+**Contexto.** O RF03 exige coletar só nós elegíveis e excluir `script`,
+`style`, `noscript`, `code`, `pre`, campos editáveis, inputs, textareas,
+conteúdo da extensão e elementos ocultos. É a primeira tarefa da Fase 4
+(PLAN.md, "Criar coleta com `TreeWalker` e regras de exclusão"). A estratégia
+de tradução de markup inline (ADR-003) ainda não foi decidida, e a coleta não
+pode antecipá-la. Os testes de DOM precisam de um ambiente DOM no Vitest, que
+até aqui só rodava no Node.
+
+**Decisão.** Implementada em `src/content/dom-collector.ts`.
+
+- `collectTextNodes(root: Document | Element): Text[]` devolve os nós `Text`
+  elegíveis em ordem de documento. Só lê o DOM: não altera nós, não loga e não
+  guarda referências entre chamadas. Nós só de espaço são incluídos; agrupar
+  por bloco e decidir o que traduzir é papel da segmentação. Devolver nós (e
+  não blocos) mantém a coleta neutra quanto à ADR-003.
+- Um único `TreeWalker` com `SHOW_ELEMENT | SHOW_TEXT`: elemento excluído →
+  `FILTER_REJECT` (poda a subárvore); outros elementos → `FILTER_SKIP`; texto →
+  `FILTER_ACCEPT`. Comentários ficam fora por construção. Comparação por
+  `nodeType` e `localName` em minúsculas (vale para HTML, SVG e MathML), sem
+  `instanceof`, para não depender do realm do documento.
+- Se a raiz, ou um ancestral dela, é excluída, o resultado é `[]`.
+
+| Exclusão (poda da subárvore) | Motivo |
+|---|---|
+| `head` | metadados (`title`, `style`, `script`), não é texto de leitura |
+| `script`, `style`, `noscript`, `template` | código, CSS, conteúdo alternativo ou inerte |
+| `code`, `pre`, `kbd`, `samp` | código e saída técnica perderiam sentido traduzidos |
+| `textarea`, `input`, `select`, `option`, `optgroup`, `datalist` | valores de formulário pertencem ao usuário ou ao site |
+| `svg`, `math` | texto posicionado ou semântico; traduzir quebra o desenho ou a fórmula |
+| `iframe`, `object`, `embed`, `canvas`, `video`, `audio` | outro documento ou conteúdo embutido |
+| `contenteditable` com `""`, `true` ou `plaintext-only` no próprio elemento | campo editável; alterar o texto interfere na edição |
+| `translate="no"` (sem diferenciar maiúsculas) e classe `notranslate` | opt-out explícito do autor (HTML e convenção comum) |
+| atributo `hidden` (qualquer valor, inclusive `until-found`) | elemento oculto |
+| `style` inline com `display: none` ou `visibility: hidden` | elemento oculto, detectável sem estilo computado |
+| `[data-lerium-ui]` (`LERIUM_UI_ATTRIBUTE`) | interface do próprio Lerium |
+
+- **Poda sem reativação:** um `translate="yes"` ou `contenteditable="false"`
+  dentro de uma área excluída continua fora. Simplifica a regra e erra para o
+  lado de não tocar no que o autor protegeu. Fora de área excluída,
+  `contenteditable="false"` é texto comum.
+- **Sem estilo computado:** o `style` inline é lido por um parser simples
+  (sem diferenciar maiúsculas, com espaços, comentários e `!important`; a
+  última declaração vence, salvo `!important` anterior). `getComputedStyle`
+  força cálculo de estilo em cada elemento, custa caro em capítulos longos e
+  não é necessário para a coleta. Consequência aceita: texto oculto por folha
+  de estilo (classe com `display: none`) é coletado; o refino por
+  visibilidade fica para a Fase 5, junto com a priorização por viewport.
+- `button` e `aria-hidden="true"` continuam traduzíveis: são texto visível
+  ao leitor (`aria-hidden` só o esconde da árvore de acessibilidade).
+- **Fora do escopo:** Shadow DOM (o `TreeWalker` não entra em shadow roots) e
+  iframes (dependem da política de injeção da ADR-002).
+
+**Ambiente de teste.** Vitest com dois projetos em `vite.config.ts`: `unit`
+(`tests/unit`, Node) e `integration` (`tests/integration`, jsdom 30.1.3,
+devDependency). `npm test` roda os dois; `tsconfig.integration.json` tipa os
+testes de integração com `DOM`.
+
+- **jsdom (escolhido):** implementação madura de `TreeWalker`, `DOMParser`,
+  `attachShadow` e atributos, integrada ao Vitest; não faz layout, o que é
+  coerente com uma coleta que não usa estilo computado.
+- **happy-dom:** em geral mais rápido, mas prioriza velocidade sobre
+  conformidade com o padrão; não foi avaliado aqui, e a velocidade não importa
+  no tamanho atual da suíte (os 80 testes de integração rodam em menos de 1 s).
+- **Só Playwright:** DOM real, porém lento e sem isolar a função; fica para
+  os E2E de tradução de página.
+
+**Consequências.**
+
+- A segmentação (`feat/dom-segmentation`) recebe `Text[]` e decide blocos,
+  espaços e a estratégia da ADR-003.
+- Páginas que escondem conteúdo só por CSS terão esse texto coletado até a
+  Fase 5.
+- Conteúdo em Shadow DOM ou iframes não é traduzido no MVP.
+- Uma dependência de desenvolvimento a mais (jsdom, MIT), fora do bundle.
