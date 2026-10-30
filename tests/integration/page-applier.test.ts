@@ -730,6 +730,86 @@ describe('restore e reapply', () => {
     expect(node.data).toBe('Site new text');
   });
 
+  it('um segundo reapply seguido conta tudo como pulado', () => {
+    const { document, applier } = translatedDocument();
+    applier.restore();
+    expect(applier.reapply()).toEqual({ reapplied: 5, skipped: 0 });
+    expect(applier.reapply()).toEqual({ reapplied: 0, skipped: 5 });
+    expect(htmlOf(document)).toBe(TRANSLATED);
+  });
+
+  it('nó desconectado sai do registro: o restore seguinte já não o conta', () => {
+    const { document, applier } = translatedDocument();
+    byId(document, 'b').remove();
+    expect(applier.restore()).toEqual({ restored: 2, skipped: 3 });
+    // Só os dois nós restantes continuam no registro.
+    expect(applier.restore()).toEqual({ restored: 0, skipped: 2 });
+    expect(applier.reapply()).toEqual({ reapplied: 2, skipped: 0 });
+    expect(htmlOf(document)).toBe('<p id="a">HELLO THERE.</p><p id="c">GOOD NIGHT.</p>');
+  });
+
+  it('reapply depois de nova tradução sobre nós traduzidos usa a última', () => {
+    const { document, applier } = translatedDocument();
+    const segment = segmentsOf(document)[0] as TranslationSegment;
+    const plan = planOf(applier, segment);
+    expect(plan.units[0]?.text).toBe('HELLO THERE.');
+    expect(
+      applier.apply(
+        segment.id,
+        resultsFor(plan, () => 'Olá de novo.'),
+      ),
+    ).toEqual({ ok: true });
+    const latest =
+      '<p id="a">Olá de novo.</p><p id="b">THE <em>RED</em> STONE.</p><p id="c">GOOD NIGHT.</p>';
+    expect(htmlOf(document)).toBe(latest);
+    expect(applier.restore()).toEqual({ restored: 5, skipped: 0 });
+    expect(htmlOf(document)).toBe(ORIGINAL);
+    expect(applier.reapply()).toEqual({ reapplied: 5, skipped: 0 });
+    expect(htmlOf(document)).toBe(latest);
+  });
+
+  it('apply com plano feito antes de um restore é node_changed', () => {
+    const { document, applier } = translatedDocument();
+    const segment = segmentsOf(document)[0] as TranslationSegment;
+    const plan = planOf(applier, segment);
+    expect(applier.restore()).toEqual({ restored: 5, skipped: 0 });
+    expect(
+      applier.apply(
+        segment.id,
+        resultsFor(plan, () => 'Olá de novo.'),
+      ),
+    ).toEqual({ ok: false, reason: 'node_changed' });
+    expect(htmlOf(document)).toBe(ORIGINAL);
+    // O registro segue com a tradução anterior.
+    expect(applier.reapply()).toEqual({ reapplied: 5, skipped: 0 });
+    expect(htmlOf(document)).toBe(TRANSLATED);
+  });
+
+  it('tradução igual ao original: nó pulado e fora do registro', () => {
+    const document = parse('<p id="a">Hello</p><p id="b">World</p>');
+    const applier = createPageApplier();
+    const [first, second] = segmentsOf(document) as [TranslationSegment, TranslationSegment];
+    const same = planOf(applier, first);
+    const other = planOf(applier, second);
+    expect(
+      applier.apply(
+        first.id,
+        resultsFor(same, () => 'Hello'),
+      ),
+    ).toEqual({ ok: true });
+    expect(
+      applier.apply(
+        second.id,
+        resultsFor(other, () => 'Mundo'),
+      ),
+    ).toEqual({ ok: true });
+    expect(htmlOf(document)).toBe('<p id="a">Hello</p><p id="b">Mundo</p>');
+    expect(applier.restore()).toEqual({ restored: 1, skipped: 0 });
+    expect(htmlOf(document)).toBe('<p id="a">Hello</p><p id="b">World</p>');
+    expect(applier.reapply()).toEqual({ reapplied: 1, skipped: 0 });
+    expect(htmlOf(document)).toBe('<p id="a">Hello</p><p id="b">Mundo</p>');
+  });
+
   it('clear esquece o registro sem escrever no DOM', () => {
     const { document, applier } = translatedDocument();
     applier.clear();

@@ -150,6 +150,43 @@ describe('ida e volta na fixture do capítulo', () => {
     expect(document.body.innerHTML).toBe(translatedBody);
   });
 
+  it('cobre plain, markers e per_node desde o plano, com ida e volta exatas', () => {
+    // `per_node` desde o plano: dois nós com conteúdo separados por
+    // comentário e aninhamento `<a><strong>` acima do limite inline.
+    const document = new DOMParser().parseFromString(
+      [
+        '<!doctype html><body>',
+        '<p>Plain paragraph here.</p>',
+        '<p>The <em class="x">red</em> stone.</p>',
+        '<p>Hello<!--x--> world</p>',
+        '<p>She <a href="#x">took <strong>the blade</strong></a> back.</p>',
+        '</body>',
+      ].join(''),
+      'text/html',
+    );
+    const originalBody = document.body.innerHTML;
+    const originalTexts = segmentTexts(document);
+    const applier = createPageApplier();
+    const run = translatePage(document, applier, upperCase);
+    expect(run).toEqual({
+      kinds: ['plain', 'markers', 'per_node', 'per_node'],
+      fallbacks: 0,
+      failures: 0,
+    });
+    expect(segmentTexts(document)).toEqual(originalTexts.map(upperCase));
+    const translatedBody = document.body.innerHTML;
+    expect(translatedBody).toBe(
+      '<p>PLAIN PARAGRAPH HERE.</p><p>THE <em class="x">RED</em> STONE.</p>' +
+        '<p>HELLO<!--x--> WORLD</p><p>SHE <a href="#x">TOOK <strong>THE BLADE</strong></a> BACK.</p>',
+    );
+
+    // 1 + 3 + 2 + 4 nós escritos.
+    expect(applier.restore()).toEqual({ restored: 10, skipped: 0 });
+    expect(document.body.innerHTML).toBe(originalBody);
+    expect(applier.reapply()).toEqual({ reapplied: 10, skipped: 0 });
+    expect(document.body.innerHTML).toBe(translatedBody);
+  });
+
   it('com marcadores perdidos, cai no nó a nó e chega ao mesmo resultado', () => {
     const reference = loadFixture();
     translatePage(reference, createPageApplier(), upperCase);
