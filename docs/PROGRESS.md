@@ -396,4 +396,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 4 — `feat/dom-collection`: coleta de texto com `TreeWalker` e regras de exclusão, com a fixture própria `tests/fixtures/novel-chapter.html`.
+Fase 4 — `feat/dom-segmentation`: segmentação por bloco (parágrafo, subtítulo, lista) sobre a lista de nós da coleta, preservando espaços e quebras, com identidade de segmento estável e decisão da ADR-003.
