@@ -1,10 +1,4 @@
-import {
-  firstActionButton,
-  focusFallback,
-  type PageButton,
-  type PageButtons,
-  type PageViewModel,
-} from './page-view';
+import { firstActionButton, focusFallback, type PageButton, type PageViewModel } from './page-view';
 
 /**
  * Aplica um `PageViewModel` ao DOM do popup. Sem `chrome`; só escreve texto
