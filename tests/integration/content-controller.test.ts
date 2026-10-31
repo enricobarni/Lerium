@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import {
   createContentController,
+  handlePageHide,
   toPageStateView,
   type ContentController,
 } from '../../src/content/controller';
@@ -440,6 +441,46 @@ describe('createContentController — pagehide', () => {
       state: { status: 'cancelled' },
     });
     expect(ports).toHaveLength(1);
+  });
+});
+
+describe('handlePageHide', () => {
+  const controllerWith = () => {
+    const { runner, calls } = fakeRunner(IDLE_STATE);
+    const controller = createContentController({
+      runner,
+      runtimeId: RUNTIME_ID,
+      extensionOrigin: ORIGIN,
+    });
+    return { controller, calls };
+  };
+
+  it('evento sintético da página (isTrusted=false) é ignorado', () => {
+    const { controller, calls } = controllerWith();
+    handlePageHide({ isTrusted: false, persisted: false }, controller);
+    handlePageHide({ isTrusted: false, persisted: true }, controller);
+    expect(calls).toEqual([]);
+  });
+
+  it('dispatchEvent real em jsdom gera isTrusted=false e não desativa', () => {
+    const { controller, calls } = controllerWith();
+    const listener = (event: PageTransitionEvent): void => handlePageHide(event, controller);
+    window.addEventListener('pagehide', listener);
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }));
+    window.removeEventListener('pagehide', listener);
+    expect(calls).toEqual([]);
+  });
+
+  it('evento confiável com persisted=false descarta o runner', () => {
+    const { controller, calls } = controllerWith();
+    handlePageHide({ isTrusted: true, persisted: false }, controller);
+    expect(calls).toEqual(['dispose']);
+  });
+
+  it('evento confiável com persisted=true só cancela', () => {
+    const { controller, calls } = controllerWith();
+    handlePageHide({ isTrusted: true, persisted: true }, controller);
+    expect(calls).toEqual(['cancel']);
   });
 });
 

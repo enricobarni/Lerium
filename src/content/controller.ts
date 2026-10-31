@@ -15,6 +15,9 @@
  * - `onPageHide(persisted)`: página indo para o bfcache (`persisted`) só
  *   cancela o job (a porta não sobrevive ao cache e o usuário pode reiniciar
  *   na volta); descarregamento definitivo descarta o runner (`dispose`).
+ * - Eventos DOM são compartilhados com a página: `handlePageHide` só repassa
+ *   `pagehide` confiável (`isTrusted`), gerado pelo navegador. Um evento
+ *   sintético (`dispatchEvent`) da página é ignorado e não desativa o Lerium.
  */
 
 import {
@@ -95,4 +98,22 @@ export function createContentController(deps: ContentControllerDeps): ContentCon
       else runner.dispose();
     },
   };
+}
+
+/** Subconjunto de `PageTransitionEvent` usado por `handlePageHide`. */
+export interface PageHideEventLike {
+  readonly isTrusted: boolean;
+  readonly persisted: boolean;
+}
+
+/**
+ * Ouvinte de `pagehide`: ignora eventos sintéticos da página
+ * (`isTrusted === false`) e repassa os do navegador a `onPageHide`.
+ */
+export function handlePageHide(
+  event: PageHideEventLike,
+  controller: Pick<ContentController, 'onPageHide'>,
+): void {
+  if (!event.isTrusted) return;
+  controller.onPageHide(event.persisted);
 }

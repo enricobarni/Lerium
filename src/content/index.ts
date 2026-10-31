@@ -5,7 +5,7 @@
  */
 
 import { PAGE_JOB_PORT_NAME } from '../shared/page-messages';
-import { createContentController } from './controller';
+import { createContentController, handlePageHide } from './controller';
 import { installOnce } from './install-once';
 import { createJobRunner } from './job-runner';
 
@@ -33,5 +33,5 @@ installOnce(globalThis, INSTALL_KEY, () => {
     return false;
   });
 
-  window.addEventListener('pagehide', (event) => controller.onPageHide(event.persisted));
+  window.addEventListener('pagehide', (event) => handlePageHide(event, controller));
 });
