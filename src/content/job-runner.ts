@@ -72,12 +72,7 @@
  *   sucesso; ausente se nenhum foi.
  * - `durationMs`: até o fim do job, qualquer que seja o término
  *   (`translated`, `cancelled` ou `error`); ausente durante `translating`.
- * - `visibleLatency`: para cada segmento promovido à classe 0 por entrar na
- *   tela, ms do `clock()` da promoção até a aplicação com sucesso (com
- *   fallback, até o fallback ser aplicado). Sair da tela enquanto ainda está
- *   na fila, ou falhar, descarta a medida. Resumo `{ count, medianMs, maxMs }`;
- *   ausente sem medida. Segmentos já visíveis no início não entram (são o
- *   `firstVisibleMs`).
+ * - `visibleLatency`: ver o JSDoc de `JobState.visibleLatency`.
  * Os três somem a cada `start`. Leitura não finita, negativa ou que lança é
  * descartada (o campo fica ausente); o relógio nunca derruba o job.
  *
@@ -111,6 +106,7 @@ import {
   parseWorkerToContent,
   type JobFatalErrorKind,
 } from '../shared/page-messages';
+import type { VisibleLatencyView } from '../shared/page-control';
 import type { PortLike } from '../shared/port-like';
 import { collectTextNodes } from './dom-collector';
 import { createPageApplier, type SegmentPlan, type TranslationUnit } from './page-applier';
@@ -145,18 +141,29 @@ export interface JobState {
   /** Ms do início ao fim do job; ausente até o job terminar. */
   durationMs?: number;
   /**
-   * Latência dos trechos promovidos pela rolagem: ms de quando o bloco entrou
-   * na tela até o segmento ser aplicado. Ausente enquanto não há medida.
+   * Latência dos trechos promovidos pela rolagem. Resumo
+   * `{ count, medianMs, maxMs }`; ausente enquanto não há medida.
+   *
+   * O que mede: do `clock()` lido no callback do observador que promoveu o
+   * segmento à classe 0 até o `apply` com sucesso. O callback do
+   * IntersectionObserver chega até ~1 quadro depois da entrada real na tela,
+   * então a medida pode ficar até ~1 quadro abaixo da latência percebida.
+   *
+   * O que entra: só segmentos promovidos à classe 0 enquanto ainda estavam na
+   * fila (um que já tinha saído dela não é movido nem medido). Segmentos
+   * visíveis desde o `start` não entram (são o `firstVisibleMs`). Sair da
+   * tela com o grupo ainda na fila, ou falhar, descarta a medida.
+   *
+   * Exceção: com `markers_invalid`, o fallback nó a nó não é observado de novo
+   * (o bloco deixa de ser observado quando o plano original é aplicado).
+   * Sair da tela com o fallback na fila NÃO descarta a medida; ela vai até o
+   * fallback ser aplicado.
    */
   visibleLatency?: VisibleLatency;
 }
 
-/** Resumo das latências medidas no job (só números). */
-export interface VisibleLatency {
-  readonly count: number;
-  readonly medianMs: number;
-  readonly maxMs: number;
-}
+/** Resumo das latências medidas no job (só números); formato de `VisibleLatencyView`. */
+export type VisibleLatency = Readonly<VisibleLatencyView>;
 
 export interface JobRunnerDeps {
   root: Document;

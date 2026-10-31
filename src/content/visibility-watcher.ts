@@ -33,7 +33,7 @@ export interface ObserverLike {
 }
 
 export type ObserverFactory = (
-  callback: (entries: readonly { target: Element; isIntersecting: boolean }[]) => void,
+  callback: (entries: readonly ObservedEntry[]) => void,
   options: { rootMargin: string; threshold: number },
 ) => ObserverLike;
 
