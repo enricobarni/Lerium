@@ -102,6 +102,38 @@ describe('classifySegments: periferia', () => {
     expect(priorityOf(html, 'Inner heading')).toBe(PRIORITY_VISIBLE_MAIN);
   });
 
+  it('header dentro de role=main não é periférico', () => {
+    const html =
+      '<body><div role="main"><header><h1>Role main title</h1></header><p>Body</p></div>' +
+      '<header><p>Site banner</p></header></body>';
+    expect(priorityOf(html, 'Role main title')).toBe(PRIORITY_VISIBLE_MAIN);
+    expect(priorityOf(html, 'Site banner')).toBe(PRIORITY_PERIPHERAL);
+  });
+
+  it.each(['article', 'region', 'Main extra'])(
+    'header/footer dentro de role=%s não é periférico',
+    (role) => {
+      const html =
+        `<body><div role="${role}"><header><h1>Scoped head</h1></header>` +
+        '<p>Body</p><footer><p>Scoped foot</p></footer></div></body>';
+      expect(priorityOf(html, 'Scoped head')).toBe(PRIORITY_VISIBLE_MAIN);
+      expect(priorityOf(html, 'Scoped foot')).toBe(PRIORITY_VISIBLE_MAIN);
+    },
+  );
+
+  it('header dentro de role=navigation/complementary é periférico pelo papel', () => {
+    const html =
+      '<body><div role="navigation"><header><p>Nav head</p></header></div>' +
+      '<div role="complementary"><footer><p>Side foot</p></footer></div></body>';
+    expect(priorityOf(html, 'Nav head')).toBe(PRIORITY_PERIPHERAL);
+    expect(priorityOf(html, 'Side foot')).toBe(PRIORITY_PERIPHERAL);
+  });
+
+  it('role não seccionante (ex.: presentation) não protege o header', () => {
+    const html = '<body><div role="presentation"><header><p>Still banner</p></header></div></body>';
+    expect(priorityOf(html, 'Still banner')).toBe(PRIORITY_PERIPHERAL);
+  });
+
   it('header dentro de div solta continua periférico', () => {
     const html = '<body><div id="wrap"><header><p>Page banner</p></header></div></body>';
     expect(priorityOf(html, 'Page banner')).toBe(PRIORITY_PERIPHERAL);
@@ -238,6 +270,45 @@ describe('classifySegments: ordem', () => {
       ['Site head', PRIORITY_PERIPHERAL],
       ['Nav link', PRIORITY_PERIPHERAL],
       ['Site foot', PRIORITY_PERIPHERAL],
+    ]);
+  });
+
+  it('bloco sem área vai para o grupo "abaixo" mesmo com bottom <= 0', () => {
+    // `getBoundingClientRect` de elemento sem caixa devolve tudo 0.
+    const html =
+      '<body><p id="above">Above</p><p id="collapsed">Collapsed</p>' +
+      '<p id="thin">Thin above</p><p id="seen">Seen</p><p id="below">Below</p></body>';
+    const deps = fakeDeps({
+      above: rect(-500),
+      collapsed: { top: 0, bottom: 0, width: 0, height: 0 },
+      thin: { top: -300, bottom: -300, width: 600, height: 0 },
+      seen: rect(100),
+      below: rect(VIEWPORT + 100),
+    });
+    expect(classify(html, deps)).toEqual([
+      ['Seen', PRIORITY_VISIBLE_MAIN],
+      ['Collapsed', PRIORITY_MAIN],
+      ['Thin above', PRIORITY_MAIN],
+      ['Below', PRIORITY_MAIN],
+      ['Above', PRIORITY_MAIN],
+    ]);
+  });
+
+  it('bloco 0x0 dentro da faixa fica no grupo "abaixo", em ordem de documento', () => {
+    const html =
+      '<body><p id="up">Up</p><p id="b1">Below first</p><p id="zero">Zero</p>' +
+      '<p id="b2">Below second</p></body>';
+    const deps = fakeDeps({
+      up: rect(-50),
+      b1: rect(VIEWPORT + 10),
+      zero: { top: 400, bottom: 400, width: 0, height: 0 },
+      b2: rect(VIEWPORT + 900),
+    });
+    expect(classify(html, deps).map(([text]) => text)).toEqual([
+      'Below first',
+      'Zero',
+      'Below second',
+      'Up',
     ]);
   });
 

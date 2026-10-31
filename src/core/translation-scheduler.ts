@@ -2,8 +2,9 @@
  * Peças puras do escalonador de tradução (Fase 5): fila com classes de
  * prioridade e janela de unidades em voo com limite.
  *
- * Sem timers, sem DOM, sem `chrome` e sem logs: só estruturas em memória. A
- * integração com o executor do job fica para outra etapa.
+ * Sem timers, sem DOM, sem `chrome` e sem logs: só estruturas em memória. O
+ * executor do job de página (`src/content/job-runner.ts`) as usa para
+ * ordenar os segmentos por prioridade e limitar as unidades em voo.
  *
  * Entradas inválidas (classe ou limite fora do domínio) lançam `RangeError`:
  * são erro de programação, não dado da página.

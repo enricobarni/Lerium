@@ -60,7 +60,7 @@ const PERIPHERAL_ROLES: ReadonlySet<string> = new Set([
 
 /**
  * `header`/`footer` só são `banner`/`contentinfo` (periféricos) quando não
- * estão dentro de um destes (regra de mapeamento ARIA do HTML).
+ * estão dentro de um destes elementos (regra de mapeamento ARIA do HTML)...
  */
 const SECTIONING_SCOPES: ReadonlySet<string> = new Set([
   'article',
@@ -68,6 +68,18 @@ const SECTIONING_SCOPES: ReadonlySet<string> = new Set([
   'section',
   'aside',
   'nav',
+]);
+
+/**
+ * ...nem dentro de um ancestral com um destes papéis (primeiro token de
+ * `role`), equivalentes aos elementos acima pelo HTML-AAM.
+ */
+const SECTIONING_ROLES: ReadonlySet<string> = new Set([
+  'main',
+  'article',
+  'region',
+  'complementary',
+  'navigation',
 ]);
 
 const ASCII_WHITESPACE = /[ \t\n\r\f]+/;
@@ -87,6 +99,7 @@ function firstRole(element: Element): string {
 function isInsideSectioningScope(element: Element): boolean {
   for (let current = element.parentElement; current !== null; current = current.parentElement) {
     if (SECTIONING_SCOPES.has(nameOf(current))) return true;
+    if (SECTIONING_ROLES.has(firstRole(current))) return true;
   }
   return false;
 }
@@ -102,9 +115,14 @@ function isPeripheral(block: Element): boolean {
   return false;
 }
 
+/** Tem área (largura e altura positivas; `NaN` não tem). */
+function hasArea(rect: BlockRect): boolean {
+  return rect.width > 0 && rect.height > 0;
+}
+
 /** Cruza a faixa vertical `(0, viewportHeight)` e tem área. */
 function isVisible(rect: BlockRect, viewportHeight: number): boolean {
-  return rect.width > 0 && rect.height > 0 && rect.top < viewportHeight && rect.bottom > 0;
+  return hasArea(rect) && rect.top < viewportHeight && rect.bottom > 0;
 }
 
 /** Segmento principal acima da viewport, com a borda inferior do bloco. */
@@ -119,11 +137,12 @@ interface AboveViewport {
  * Pré-condição: `segments` em ordem de documento, como devolve
  * `segmentTextNodes`. A saída tem os mesmos segmentos, ordenados assim:
  * 1. Classe 0 (visível), em ordem de documento.
- * 2. Classe 1 (principal fora da viewport): primeiro o que não está acima
- *    dela (`bottom > 0`; inclui blocos sem área dentro da faixa), em ordem
- *    de documento; depois o que está acima (`bottom <= 0`), do mais próximo
- *    da viewport para o mais distante (`bottom` decrescente; empate pela
- *    ordem de documento).
+ * 2. Classe 1 (principal fora da viewport): primeiro o grupo "abaixo", em
+ *    ordem de documento: blocos sem área (largura ou altura 0, onde quer que
+ *    estejam) e blocos que não estão acima da viewport (`bottom > 0`);
+ *    depois o que está acima (`bottom <= 0`, com área), do mais próximo da
+ *    viewport para o mais distante (`bottom` decrescente; empate pela ordem
+ *    de documento).
  * 3. Classe 2 (periférico), em ordem de documento.
  *
  * Medida com valor não finito (`NaN`) não é visível e conta como "não acima".
@@ -161,7 +180,7 @@ export function classifySegments(
       return;
     }
     const item: ClassifiedSegment = { segment, priority: PRIORITY_MAIN, order };
-    if (rect.bottom <= 0) {
+    if (hasArea(rect) && rect.bottom <= 0) {
       above.push({ item, bottom: rect.bottom });
     } else {
       below.push(item);
