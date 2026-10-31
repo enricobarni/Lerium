@@ -39,7 +39,34 @@ e clientes de API duplicados.
 
 ## ADR-002 — Política de injeção e permissões
 
-**Status:** Proposta
+**Status:** Aceita (30/10/2026), Opção 1
+
+**Decisão.** `activeTab` + `scripting`, com injeção sob demanda e só no
+frame principal. O manifesto declara `permissions: ["activeTab", "scripting",
+"storage"]` e `minimum_chrome_version: "114"`, sem `content_scripts`,
+`web_accessible_resources`, `externally_connectable`, `tabs` nem
+`<all_urls>`; `scripts/verify-dist.mjs` falha o build se isso mudar.
+
+- O popup pede `page:inject` ao service worker, que confere a URL da aba
+  (só `http(s)`), as configurações e a permissão da porta do Ollama, injeta
+  `content.js` (IIFE) com `chrome.scripting.executeScript` e registra o
+  `documentId` devolvido; a Port do job só é aceita desse documento
+  (ADR-010).
+- Páginas internas do Chrome, a Web Store, PDFs e outras extensões são
+  recusadas como `page_unsupported`.
+
+**Consequências.**
+
+- Sem acesso permanente a sites: o Lerium só lê uma página depois do clique
+  do usuário. Tradução automática ao navegar (Opção 2) fica para a Fase 7.
+- Pela documentação do Chrome, `activeTab` e `scripting` não geram aviso de
+  permissão na instalação; confirmar no smoke manual da atualização.
+- A permissão opcional `http://localhost/*` (sem porta), se concedida, vale
+  para qualquer porta local; o Lerium sempre pede a origem exata com porta,
+  mas o trade-off fica registrado.
+- O service worker consegue injetar sem gesto do usuário em
+  `localhost:11434`/`127.0.0.1:11434`, por causa das host permissions do
+  Ollama; isso só é usado nos testes E2E, que servem a fixture nessa origem.
 
 **Contexto.** A referência usa `<all_urls>` em `host_permissions` e
 `content_scripts`. O Lerium deve seguir menor privilégio
@@ -166,8 +193,8 @@ necessário para a Fase 4:
   não é o pendente; os ids de unidade carregam o token do plano (ADR-014).
 - Sem `chrome.storage.session` por enquanto: não há o que reidratar, porque
   o job morre com a Port.
-- Prender a Port ao `documentId` registrado na injeção fica para a branch
-  que injeta o content script; SPA e reidratação, para a Fase 7.
+- A Port fica presa ao `documentId` registrado na injeção (ADR-002, ADR-010);
+  SPA e reidratação ficam para a Fase 7.
 
 ## ADR-005 — UX da tradução de seleção
 
@@ -731,9 +758,18 @@ comando (`src/shared/page-messages.ts`, `src/background/page-job.ts`,
 - Precisa ser medido no Chrome real: se uma resposta do Ollama que demora
   mais de 30 s para começar (modelo frio) encerra o worker mesmo com ping.
   Mitigações previstas: aquecer o modelo antes ou repetir uma vez a primeira
-  unidade interrompida. `minimum_chrome_version` entra com as demais mudanças
-  do manifesto.
-- Porta personalizada do Ollama sem permissão opcional aparece como falha do
-  provedor; o popup confere a permissão antes de injetar o content script.
-- Avaliar `chrome.storage.local.setAccessLevel` para impedir que um content
-  script comprometido regrave as configurações.
+  unidade interrompida. `minimum_chrome_version: "114"` já está no manifesto.
+- A Port só é aceita do documento registrado na injeção (`documentId`) e
+  com `documentLifecycle === 'active'`. O registro vive em memória: se o
+  worker reiniciar, a Port é recusada e o job vira `interrupted`. Por isso o
+  popup envia `page:inject` antes de todo `start`; a reinjeção é idempotente
+  e devolve o mesmo `documentId`.
+- `network` encerra o job (`job:fatal`): com o Ollama desligado, insistir
+  segmento a segmento só acumularia requisições perdidas. `timeout` não é
+  fatal, porque pode ser um segmento longo num modelo lento.
+- A permissão de porta personalizada é conferida no `page:inject`, antes de
+  injetar (`permission_required`).
+- `chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' })`
+  é chamado no início do worker, para que um content script não leia nem
+  regrave as configurações; o efeito em `storage.local` precisa de
+  confirmação no smoke manual.

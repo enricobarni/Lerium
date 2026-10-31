@@ -25,6 +25,17 @@ Lerium é uma extensão para Chrome que traduzirá páginas e seleções de text
 
 Após cada novo `npm run build`, clique no botão de recarregar da extensão em `chrome://extensions` para aplicar as mudanças.
 
+## Permissões
+
+| Permissão | Para quê |
+|---|---|
+| `activeTab` | Ler a aba atual **só depois** que você clica em **Traduzir página** no popup. O Lerium não tem acesso permanente a nenhum site. |
+| `scripting` | Injetar o script de tradução nessa aba, sob demanda. |
+| `storage` | Guardar suas configurações (endereço do Ollama, modelo, idiomas) no seu computador. |
+| `localhost:11434` / `127.0.0.1:11434` | Falar com o Ollama local ([ADR-009](docs/DECISIONS.md)). |
+
+O texto da página vai apenas para o Ollama no seu computador. Nada é enviado a terceiros nem gravado em log ([ADR-002](docs/DECISIONS.md), [ADR-010](docs/DECISIONS.md)).
+
 ## Conectar ao Ollama
 
 O Lerium fala com o Ollama somente pelo seu service worker e somente no seu computador. Por isso, ao carregar a extensão, o Chrome informa que ela pode acessar `localhost:11434` e `127.0.0.1:11434` (a porta padrão do Ollama). Se você configurar outra porta, o Lerium pede permissão para essa porta exata ao clicar em **Testar conexão** ou **Salvar** ([ADR-009](docs/DECISIONS.md)).
