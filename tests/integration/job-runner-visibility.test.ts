@@ -322,7 +322,7 @@ describe('createJobRunner — reordenação por visibilidade', () => {
     expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-2', 'seg-3', 'seg-4']);
   });
 
-  it('near leva ao fim da classe 1; near sem ter saído de visible não rebaixa', () => {
+  it('near leva ao fim da classe 1', () => {
     const document = parse(page(3));
     const { runner, port, watcher } = setup(document);
     runner.start();
@@ -330,14 +330,56 @@ describe('createJobRunner — reordenação por visibilidade', () => {
     watcher().emit(changes(document, [3, 'near']));
     runToEnd(fake);
     expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-3', 'seg-1', 'seg-2']);
+  });
 
-    const other = parse('<p>One.</p><p>Two.</p><p data-pos="below">Three.</p>');
-    const second = setup(other);
-    second.runner.start();
-    // `near` antes de `visible` na observação inicial: segue na classe 0.
-    second.watcher().emit(changes(other, [1, 'near']));
-    runToEnd(second.port());
-    expect(segmentsSent(second.port())).toEqual(['seg-0', 'seg-1', 'seg-2']);
+  describe('segmento inicial que o observador vê fora da tela', () => {
+    // seg-0..seg-2 medidos na tela (classe 0); seg-3 abaixo (classe 2).
+    const html = '<p>One.</p><p>Two.</p><p>Three.</p><p data-pos="below">Four.</p><p>Five.</p>';
+
+    it('primeira zona near: frente da classe 1, atrás dos de fato visíveis', () => {
+      const document = parse(html);
+      const { runner, port, watcher } = setup(document);
+      runner.start();
+      const fake = port();
+      // Rolou entre a medição e o primeiro callback: seg-1 desceu para perto.
+      watcher().emit(changes(document, [1, 'near'], [2, 'visible'], [4, 'visible']));
+      runToEnd(fake);
+      expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-2', 'seg-4', 'seg-1', 'seg-3']);
+    });
+
+    it('primeira zona out: fim da classe 2', () => {
+      const document = parse(html);
+      const { runner, port, watcher } = setup(document);
+      runner.start();
+      const fake = port();
+      watcher().emit(changes(document, [1, 'out'], [2, 'visible']));
+      runToEnd(fake);
+      expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-2', 'seg-4', 'seg-3', 'seg-1']);
+    });
+
+    it('só a primeira zona é tratada assim; depois valem as regras normais', () => {
+      const document = parse(html);
+      const { runner, port, watcher } = setup(document);
+      runner.start();
+      const fake = port();
+      // seg-1 confirmado na tela; seg-2 e seg-4 também.
+      watcher().emit(changes(document, [1, 'visible'], [2, 'visible'], [4, 'visible']));
+      // seg-2 rolou para perto: rebaixado; seg-1 e seg-4 seguem na classe 0.
+      watcher().emit(changes(document, [2, 'near']));
+      runToEnd(fake);
+      expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-4', 'seg-2', 'seg-3']);
+    });
+
+    it('segmento inicialmente fora da tela não é afetado pela primeira zona', () => {
+      const document = parse(html);
+      const { runner, port, watcher } = setup(document);
+      runner.start();
+      const fake = port();
+      // seg-3 (classe 2) com primeira zona out: nada muda.
+      watcher().emit(changes(document, [3, 'out']));
+      runToEnd(fake);
+      expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-2', 'seg-4', 'seg-3']);
+    });
   });
 
   it('o lote é aplicado em ordem de documento, qualquer que seja a ordem das entradas', () => {

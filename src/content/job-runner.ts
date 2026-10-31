@@ -20,6 +20,11 @@
  * - sair de `visible` para `near` (rolou para cima) → frente da classe 1;
  * - sair de `visible` para `out` (passou pelo topo) → fim da classe 2;
  * - sair de `near` para `out` estando na classe 1 → fim da classe 2.
+ * Segmento que começou na classe 0 pela medição do `start`: se a primeira
+ * zona que o observador informa para ele não é `visible` (a página rolou
+ * entre a medição e o primeiro callback), ela conta como saída de `visible`
+ * (`near` → frente da classe 1; `out` → fim da classe 2), para que ele não
+ * fique na classe 0 à frente dos que estão de fato na tela.
  * Dentro de um lote, os movimentos são feitos em ordem de documento; os que
  * vão para a frente da classe 1, do último para o primeiro, para que a
  * frente fique em ordem de documento. O callback só reordena: nunca envia
@@ -225,6 +230,11 @@ interface TrackedSegment {
   priority: SegmentPriority;
   /** Última zona informada pelo observador (começa em `out`, como ele). */
   zone: VisibilityZone;
+  /**
+   * Começou na classe 0 pela medição e o observador ainda não informou zona
+   * nenhuma: a primeira que vier é comparada com `visible`, não com `zone`.
+   */
+  awaitingFirstZone: boolean;
   /** Ainda observado: o grupo do segmento está na fila. */
   observed: boolean;
   /** `clock()` de quando foi promovido por entrar na tela; some se sair dela. */
@@ -405,7 +415,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     const toBack: { segmentId: string; segment: TrackedSegment; placement: Placement }[] = [];
     const toFront: typeof toBack = [];
     for (const { segmentId, segment, zone } of touched) {
-      const from = segment.zone;
+      // Antes da primeira zona do observador, vale o que a medição viu.
+      const from = segment.awaitingFirstZone ? 'visible' : segment.zone;
+      segment.awaitingFirstZone = false;
       const placement = job.queue.has(segmentId)
         ? placementFor(segment.priority, from, zone)
         : undefined;
@@ -619,6 +631,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
           order,
           priority,
           zone: 'out',
+          awaitingFirstZone: priority === PRIORITY_VISIBLE_MAIN,
           observed: true,
         });
         const ids = blocks.get(segment.block);
