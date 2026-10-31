@@ -270,6 +270,57 @@ describe('createContentController — comandos', () => {
     expect(calls).toEqual([method]);
   });
 
+  it('start com job em andamento não reinicia e responde o estado atual', () => {
+    const translating: JobState = {
+      ...IDLE_STATE,
+      status: 'translating',
+      view: 'translation',
+      total: 3,
+      done: 1,
+    };
+    const { runner, calls } = fakeRunner(translating);
+    const controller = createContentController({
+      runner,
+      runtimeId: RUNTIME_ID,
+      extensionOrigin: ORIGIN,
+    });
+    expect(controller.handleMessage(command('start'), POPUP)).toEqual({
+      ok: true,
+      state: translating,
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it.each(['translated', 'cancelled', 'error'] as const)(
+    'start com status %s reinicia o job',
+    (status) => {
+      const { runner, calls } = fakeRunner({ ...IDLE_STATE, status });
+      const controller = createContentController({
+        runner,
+        runtimeId: RUNTIME_ID,
+        extensionOrigin: ORIGIN,
+      });
+      controller.handleMessage(command('start'), POPUP);
+      expect(calls).toEqual(['start']);
+    },
+  );
+
+  it('runner real: segundo start durante o job mantém porta e progresso', () => {
+    const { controller, ports, port } = setup();
+    controller.handleMessage(command('start'), POPUP);
+    expect(controller.handleMessage(command('start'), POPUP)).toMatchObject({
+      ok: true,
+      state: { status: 'translating', total: 2, done: 0 },
+    });
+    expect(ports).toHaveLength(1);
+    expect(port().disconnected()).toBe(false);
+    port().runToEnd(upperCase);
+    expect(controller.handleMessage(command('get-state'), POPUP)).toMatchObject({
+      state: { status: 'translated', done: 2 },
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('get-state não chama nenhum comando', () => {
     const { runner, calls } = fakeRunner(IDLE_STATE);
     const controller = createContentController({

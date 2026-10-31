@@ -10,6 +10,8 @@
  *   extensões. Remetente não confiável não recebe resposta (`undefined`).
  * - Mensagem de remetente confiável passa por `parsePageCommand`; inválida →
  *   `{ ok: false, error: 'invalid_request' }`.
+ * - `start` com o job em andamento (`translating`) não reinicia; só responde
+ *   o estado atual.
  * - Todo comando responde de forma síncrona com o estado atual, mapeado
  *   campo a campo para `PageStateView` (só contagens e códigos, sem texto).
  * - `onPageHide(persisted)`: página indo para o bfcache (`persisted`) só
@@ -76,7 +78,9 @@ export function createContentController(deps: ContentControllerDeps): ContentCon
       if (command === null) return { ok: false, error: 'invalid_request' };
       switch (command.command) {
         case 'start':
-          runner.start();
+          // Um job em andamento não é reiniciado: o popup reenvia `start`
+          // (precedido de `page:inject`) e não deve perder o progresso.
+          if (runner.getState().status !== 'translating') runner.start();
           break;
         case 'cancel':
           runner.cancel();

@@ -23,6 +23,17 @@ export const MAX_DOCUMENT_ID_CHARS = 128;
 // ---------------------------------------------------------------------------
 // popup → service worker
 
+/**
+ * Pedido de injeção do content script na aba `tabId`.
+ *
+ * Contrato com o popup: o popup envia `page:inject` imediatamente antes de
+ * todo `start` (ver `PageCommand`), e não só na primeira vez. O registro de
+ * documentos injetados do service worker vive em memória e some se o worker
+ * reiniciar; sem a reinjeção, a port do job seria recusada. A reinjeção é
+ * idempotente (`installOnce` no content script: não instala ouvintes nem
+ * runner de novo) e devolve o mesmo `documentId` enquanto o documento for o
+ * mesmo.
+ */
 export interface PageInjectRequest {
   type: typeof PAGE_INJECT_MESSAGE_TYPE;
   tabId: number;
@@ -51,6 +62,12 @@ export type PageInjectResponse =
 export type PageCommandName =
   'get-state' | 'start' | 'cancel' | 'show-original' | 'show-translation';
 
+/**
+ * Comando do popup ao content script. `start` deve ser precedido de
+ * `page:inject` (ver `PageInjectRequest`), para que o service worker conheça
+ * o documento mesmo após reiniciar. `start` com o job em andamento
+ * (`translating`) não reinicia: só devolve o estado atual.
+ */
 export interface PageCommand {
   type: typeof PAGE_COMMAND_MESSAGE_TYPE;
   command: PageCommandName;
