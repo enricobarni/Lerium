@@ -586,6 +586,31 @@ describe('createJobRunner — falhas de unidade e fallback', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('unitId já em voo não é reenviado: vira null e o primeiro segue', () => {
+    let firstId: string | undefined;
+    planHook.transform = (plan) => {
+      if (firstId === undefined) {
+        firstId = plan.units[0]?.unitId;
+        return plan;
+      }
+      return { ...plan, units: plan.units.map((unit) => ({ ...unit, unitId: firstId ?? '' })) };
+    };
+    const document = parse('<p>First line.</p><p>Second line.</p>');
+    const { runner, port } = setup(document, undefined, { maxInFlight: 2 });
+    runner.start();
+    const fake = port();
+
+    // Só o primeiro sai: o duplicado é resolvido como null sem envio.
+    expect(unitsOf(fake).map((unit) => unit.unitId)).toEqual([firstId]);
+    expect(runner.getState()).toMatchObject({ status: 'translating', failed: 1, done: 0 });
+    fake.runToEnd(upperCase);
+
+    expect(bodyHtml(document)).toBe('<p>FIRST LINE.</p><p>Second line.</p>');
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 1, failed: 1 });
+    expect(fake.disconnected()).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('conta segment_too_long em skipped sem enviar o texto', () => {
     const long = 'palavra '.repeat(800).trim();
     const document = parse(`<p>${long}</p><p>Short line.</p>`);

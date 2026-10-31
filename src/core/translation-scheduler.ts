@@ -27,15 +27,24 @@ export interface PriorityQueue<T> {
   readonly size: number;
 }
 
-export interface InFlightWindow {
+/**
+ * Janela de ids em voo. Cada id pode levar um valor `T` (ex.: o plano a que a
+ * unidade pertence), para que quem usa a janela não precise de um segundo
+ * mapa sincronizado com ela. Sem valor, `T` é `void` e o argumento some.
+ */
+export interface InFlightWindow<T = void> {
   /**
-   * Marca `id` como em voo. `false` se a janela está cheia ou se `id` já está
-   * em voo (sem duplicar).
+   * Marca `id` como em voo com `value`. `false` se a janela está cheia ou se
+   * `id` já está em voo (sem duplicar nem trocar o valor).
    */
-  tryAcquire(id: string): boolean;
+  tryAcquire(id: string, value: T): boolean;
   /** Libera `id`; `false` se ele não estava em voo. */
   release(id: string): boolean;
   has(id: string): boolean;
+  /** Valor de `id` em voo; `undefined` se ele não está em voo. */
+  get(id: string): T | undefined;
+  /** Libera todos os ids. */
+  clear(): void;
   /** Ids em voo. */
   readonly size: number;
   /** Vagas livres: `limit - size`. */
@@ -129,13 +138,13 @@ export function createPriorityQueue<T>(classCount: number): PriorityQueue<T> {
 }
 
 /** Janela de ids em voo com no máximo `limit` ao mesmo tempo (`limit` inteiro >= 1). */
-export function createInFlightWindow(limit: number): InFlightWindow {
+export function createInFlightWindow<T = void>(limit: number): InFlightWindow<T> {
   assertPositiveInteger(limit, 'limit');
-  const inFlight = new Set<string>();
+  const inFlight = new Map<string, T>();
   return {
-    tryAcquire(id) {
+    tryAcquire(id, value) {
       if (inFlight.size >= limit || inFlight.has(id)) return false;
-      inFlight.add(id);
+      inFlight.set(id, value);
       return true;
     },
     release(id) {
@@ -143,6 +152,12 @@ export function createInFlightWindow(limit: number): InFlightWindow {
     },
     has(id) {
       return inFlight.has(id);
+    },
+    get(id) {
+      return inFlight.get(id);
+    },
+    clear() {
+      inFlight.clear();
     },
     get size() {
       return inFlight.size;

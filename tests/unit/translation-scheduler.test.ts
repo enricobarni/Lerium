@@ -198,6 +198,35 @@ describe('createInFlightWindow', () => {
     expect(flight.has('a')).toBe(true);
   });
 
+  it('guarda o valor de cada id em voo; get de id fora da janela é undefined', () => {
+    const flight = createInFlightWindow<{ name: string }>(2);
+    const first = { name: 'first' };
+    expect(flight.get('a')).toBeUndefined();
+    expect(flight.tryAcquire('a', first)).toBe(true);
+    expect(flight.get('a')).toBe(first);
+    // Recusa por duplicado não troca o valor.
+    expect(flight.tryAcquire('a', { name: 'other' })).toBe(false);
+    expect(flight.get('a')).toBe(first);
+    flight.tryAcquire('b', { name: 'b' });
+    // Recusa por janela cheia não registra o valor.
+    expect(flight.tryAcquire('c', { name: 'c' })).toBe(false);
+    expect(flight.get('c')).toBeUndefined();
+    flight.release('a');
+    expect(flight.get('a')).toBeUndefined();
+  });
+
+  it('clear libera todos os ids e devolve todas as vagas', () => {
+    const flight = createInFlightWindow<number>(3);
+    flight.tryAcquire('a', 1);
+    flight.tryAcquire('b', 2);
+    flight.clear();
+    expect(flight.size).toBe(0);
+    expect(flight.available).toBe(3);
+    expect(flight.has('a')).toBe(false);
+    expect(flight.get('b')).toBeUndefined();
+    expect(flight.tryAcquire('a', 3)).toBe(true);
+  });
+
   it.each([0, -1, 2.5, Number.NaN, Number.POSITIVE_INFINITY])('recusa limite %s', (limit) => {
     expect(() => createInFlightWindow(limit)).toThrow(RangeError);
   });

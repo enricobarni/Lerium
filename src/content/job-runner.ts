@@ -33,6 +33,11 @@
  *   timer é limpo em todo caminho de término.
  * - Cancelamento, fatal, interrupção e `dispose` esvaziam fila e janela;
  *   nada do job é aplicado depois.
+ * - A janela (`InFlightWindow<SegmentTask>`) é o único registro do que está
+ *   em voo. Unidade cujo `unitId` já está em voo vira resultado `null` sem
+ *   envio (a resposta do primeiro seria a única). Se `tryAcquire` recusar
+ *   mesmo com vaga e id novo, é erro de programação: o job falha com
+ *   `interrupted` (não lança dentro de um ouvinte da porta).
  *
  * Tempos (`deps.clock`, em ms, relativos ao início de `start`): o executor
  * só lê o relógio e guarda os tempos no próprio estado. Não usa
@@ -66,6 +71,7 @@
 import {
   createInFlightWindow,
   createPriorityQueue,
+  type InFlightWindow,
   type PriorityQueue,
 } from '../core/translation-scheduler';
 import {
@@ -164,9 +170,8 @@ interface ActiveJob {
   readonly jobId: string;
   readonly port: PortLike;
   readonly queue: PriorityQueue<QueuedUnit>;
-  readonly window: ReturnType<typeof createInFlightWindow>;
-  /** `unitId` em voo → plano a que pertence. */
-  readonly inFlight: Map<string, SegmentTask>;
+  /** Única fonte do que está em voo: `unitId` → plano a que pertence. */
+  readonly window: InFlightWindow<SegmentTask>;
   timer: unknown;
   readonly onMessage: (message: unknown) => void;
   readonly onDisconnect: () => void;
@@ -263,8 +268,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
   const teardown = (job: ActiveJob): void => {
     if (active === job) active = null;
     job.queue.clear();
-    for (const unitId of job.inFlight.keys()) job.window.release(unitId);
-    job.inFlight.clear();
+    job.window.clear();
     if (job.timer !== undefined) deps.clearInterval(job.timer);
     job.timer = undefined;
     job.port.onMessage.removeListener(job.onMessage);
@@ -322,13 +326,25 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         applyTask(job, task);
         continue;
       }
-      if (!isSendableUnit(unit) || !job.window.tryAcquire(unit.unitId)) {
-        // O service worker descartaria em silêncio e não haveria resposta;
-        // id repetido em voo também nunca teria resposta própria.
+      if (!isSendableUnit(unit)) {
+        // O service worker descartaria em silêncio e não haveria resposta.
         settle(job, task, unit.unitId, null);
         continue;
       }
-      job.inFlight.set(unit.unitId, task);
+      if (job.window.has(unit.unitId)) {
+        // Id repetido em voo nunca teria resposta própria: a resposta do
+        // primeiro seria a única. Vira `null` sem envio.
+        settle(job, task, unit.unitId, null);
+        continue;
+      }
+      if (!job.window.tryAcquire(unit.unitId, task)) {
+        // Inalcançável: há vaga (checado acima) e o id não está em voo. Se
+        // acontecer, é erro de programação; falhar o job como `interrupted`
+        // encerra tudo (porta, timer) em vez de lançar dentro de um ouvinte
+        // da porta e deixar o job preso em `translating`.
+        fail(job, INTERRUPTED);
+        return;
+      }
       try {
         job.port.postMessage({
           type: 'job:unit',
@@ -352,9 +368,8 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       return;
     }
     if (message.type !== 'job:result') return;
-    const task = job.inFlight.get(message.unitId);
+    const task = job.window.get(message.unitId);
     if (task === undefined) return;
-    job.inFlight.delete(message.unitId);
     job.window.release(message.unitId);
     settle(job, task, message.unitId, message.ok ? message.text : null);
     pump(job);
@@ -416,8 +431,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         jobId: deps.randomUUID(),
         port,
         queue,
-        window: createInFlightWindow(maxInFlight),
-        inFlight: new Map(),
+        window: createInFlightWindow<SegmentTask>(maxInFlight),
         timer: undefined,
         onMessage: (message) => handleMessage(job, message),
         onDisconnect: () => {
