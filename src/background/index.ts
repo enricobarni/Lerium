@@ -25,6 +25,10 @@ const permissionsContains = (originPattern: string): Promise<boolean> =>
 // Documentos em que o Lerium injetou o content script (ADR-010).
 const injectionRegistry = createInjectionRegistry();
 chrome.tabs.onRemoved.addListener((tabId) => injectionRegistry.forget(tabId));
+// Prerender/instant: a aba `removed` foi trocada por `added` sem `onRemoved`.
+chrome.tabs.onReplaced.addListener((_addedTabId, removedTabId) =>
+  injectionRegistry.forget(removedTabId),
+);
 
 const injectPage = createInjectHandler({
   // `url` só vem preenchida com acesso à aba: o grant de `activeTab` (clique
