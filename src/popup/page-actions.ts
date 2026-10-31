@@ -138,10 +138,11 @@ export function createPopupController(deps: PopupDeps): PopupController {
       // Sem content script: página nova, recarregada ou nunca injetada.
       return { kind: 'not_injected' };
     }
-    if (raw === TIMED_OUT) return { kind: 'inject_error', error: 'invalid_request' };
+    // Há quem responda, mas a resposta não serve (ou não veio): falha de
+    // comando, não de preparo da página.
+    if (raw === TIMED_OUT) return { kind: 'command_error' };
     const response = parsePageCommandResponse(raw);
-    if (response === null || !response.ok)
-      return { kind: 'inject_error', error: 'invalid_request' };
+    if (response === null || !response.ok) return { kind: 'command_error' };
     return { kind: 'state', state: response.state };
   }
 

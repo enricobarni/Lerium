@@ -10,6 +10,8 @@ export type PageViewInput =
   | { kind: 'unsupported' }
   | { kind: 'not_injected' }
   | { kind: 'inject_error'; error: PageInjectErrorKind }
+  /** O content script existe, mas respondeu mal ou não respondeu a tempo. */
+  | { kind: 'command_error' }
   | { kind: 'state'; state: PageStateView }
   | { kind: 'busy' };
 
@@ -52,6 +54,8 @@ export const UNSUPPORTED_MESSAGE =
   'outras extensões não são suportados.';
 export const PREPARE_FAILED_MESSAGE =
   'Não foi possível preparar a página. Recarregue e tente de novo.';
+export const COMMAND_FAILED_MESSAGE =
+  'Não foi possível falar com a página. Recarregue a página e tente de novo.';
 export const INVALID_CONFIG_MESSAGE = 'Configuração inválida. Revise as configurações.';
 
 const STATE_ERROR_MESSAGES: Readonly<Record<PageStateError, string>> = Object.freeze({
@@ -185,6 +189,9 @@ export function describePage(input: PageViewInput): PageViewModel {
       return view(READY_MESSAGE, 'info', { translate: true });
     case 'busy':
       return view(BUSY_MESSAGE, 'info', {});
+    case 'command_error':
+      // Traduzir injeta de novo antes do `start`: é a única saída sem recarregar.
+      return view(COMMAND_FAILED_MESSAGE, 'error', { translate: true });
     case 'inject_error': {
       const { error } = input;
       return view(

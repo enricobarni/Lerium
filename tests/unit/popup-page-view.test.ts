@@ -9,6 +9,7 @@ import type {
 import {
   BUSY_MESSAGE,
   CANCELLED_MESSAGE,
+  COMMAND_FAILED_MESSAGE,
   INVALID_CONFIG_MESSAGE,
   NO_TEXT_MESSAGE,
   NOTHING_TRANSLATED_MESSAGE,
@@ -90,6 +91,22 @@ describe('describePage: fora do job', () => {
     const view = describePage({ kind: 'busy' });
     expect(view).toMatchObject({ message: BUSY_MESSAGE, tone: 'info', buttons: buttons({}) });
     expect(view.progress).toBeUndefined();
+  });
+});
+
+describe('describePage: falha de comando', () => {
+  it('erro próprio, distinto do preparo, com Traduzir e configurações', () => {
+    expect(describePage({ kind: 'command_error' })).toEqual({
+      message: COMMAND_FAILED_MESSAGE,
+      tone: 'error',
+      buttons: buttons({ translate: true }),
+      highlightOptions: false,
+      announce: COMMAND_FAILED_MESSAGE,
+    });
+    expect(COMMAND_FAILED_MESSAGE).toBe(
+      'Não foi possível falar com a página. Recarregue a página e tente de novo.',
+    );
+    expect(COMMAND_FAILED_MESSAGE).not.toBe(PREPARE_FAILED_MESSAGE);
   });
 });
 
@@ -376,6 +393,7 @@ describe('describePage: nunca reflete texto do estado', () => {
       { kind: 'unsupported' },
       { kind: 'not_injected' },
       { kind: 'busy' },
+      { kind: 'command_error' },
       ...INJECT_ERRORS.map((error) => ({ kind: 'inject_error', error }) as const),
       ...STATE_ERRORS.map((error) => state({ status: 'error', error })),
     ];

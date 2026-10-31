@@ -17,6 +17,7 @@ import {
 import {
   BUSY_MESSAGE,
   CANCELLED_MESSAGE,
+  COMMAND_FAILED_MESSAGE,
   INVALID_CONFIG_MESSAGE,
   PREPARE_FAILED_MESSAGE,
   READY_MESSAGE,
@@ -257,11 +258,12 @@ describe('popup: abrir', () => {
     ['forma estranha', { ok: true, state: { status: 'feito' } }],
     ['recusa', { ok: false, error: 'invalid_request' }],
     ['texto', 'página'],
-  ])('resposta inválida (%s): mensagem de preparo', async (_name, response) => {
+  ])('resposta inválida (%s): falha de comando', async (_name, response) => {
     const h = setUp();
     h.respond(() => response);
     await h.controller.open();
-    expect(h.elements.message.textContent).toBe(PREPARE_FAILED_MESSAGE);
+    expect(h.elements.message.textContent).toBe(COMMAND_FAILED_MESSAGE);
+    expect(h.elements.message.dataset.tone).toBe('error');
     expect(visibleButtons(h.elements)).toEqual(['translate', 'openOptions']);
   });
 
@@ -362,6 +364,17 @@ describe('popup: traduzir', () => {
     h.respond(() => NO_RECEIVER());
     await h.controller.translate();
     expect(h.elements.message.textContent).toBe(PREPARE_FAILED_MESSAGE);
+  });
+
+  it('start com resposta inválida: falha de comando, não de preparo', async () => {
+    const h = setUp();
+    await h.controller.open();
+    h.respond((command) =>
+      command === 'start' ? { ok: false, error: 'invalid_request' } : ok(pageState()),
+    );
+    await h.controller.translate();
+    expect(h.calls).toEqual(['get-state:7', 'inject:7', 'start:7']);
+    expect(h.elements.message.textContent).toBe(COMMAND_FAILED_MESSAGE);
   });
 
   it('erros de configuração do job destacam "Abrir configurações"', async () => {
@@ -540,7 +553,7 @@ describe('popup: prazo de resposta', () => {
     const pending = h.controller.open();
     await vi.advanceTimersByTimeAsync(RESPONSE_TIMEOUT_MS);
     await pending;
-    expect(h.elements.message.textContent).toBe(PREPARE_FAILED_MESSAGE);
+    expect(h.elements.message.textContent).toBe(COMMAND_FAILED_MESSAGE);
     expect(vi.getTimerCount()).toBe(0);
     const renders = h.render.mock.calls.length;
     release(ok(pageState({ status: 'translated', total: 1, done: 1 })));
@@ -560,7 +573,7 @@ describe('popup: prazo de resposta', () => {
     // A consulta pendente não é duplicada enquanto espera o prazo.
     expect(h.calls.filter((call) => call === 'get-state:7')).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(RESPONSE_TIMEOUT_MS);
-    expect(h.elements.message.textContent).toBe(PREPARE_FAILED_MESSAGE);
+    expect(h.elements.message.textContent).toBe(COMMAND_FAILED_MESSAGE);
     expect(h.intervals.active.size).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -597,6 +610,62 @@ describe('popup: prazo de resposta', () => {
     expect(vi.getTimerCount()).toBe(1);
     h.controller.dispose();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('popup: falha de comando', () => {
+  const failures: Array<[string, unknown]> = [
+    ['recusa', { ok: false, error: 'invalid_request' }],
+    ['forma estranha', { ok: true, state: { status: 'feito' } }],
+    ['undefined', undefined],
+  ];
+  const translated = ok(pageState({ status: 'translated', total: 2, done: 2 }));
+  const translating = ok(pageState({ status: 'translating', total: 2 }));
+
+  const actions: Array<[PageCommandName, (c: PopupController) => Promise<void>, unknown]> = [
+    ['cancel', (c) => c.cancel(), translating],
+    ['show-original', (c) => c.showOriginal(), translated],
+    ['show-translation', (c) => c.showTranslation(), translated],
+  ];
+
+  for (const [command, run, before] of actions) {
+    it.each(failures)(`"${command}" com resposta %s: falha de comando`, async (_name, failure) => {
+      const h = setUp();
+      h.respond(() => before);
+      await h.controller.open();
+      h.respond((sent) => (sent === command ? failure : before));
+      await run(h.controller);
+      expect(h.calls.at(-1)).toBe(`${command}:7`);
+      expect(h.elements.message.textContent).toBe(COMMAND_FAILED_MESSAGE);
+      expect(h.elements.message.dataset.tone).toBe('error');
+      expect(visibleButtons(h.elements)).toEqual(['translate', 'openOptions']);
+      expect(h.intervals.active.size).toBe(0);
+    });
+  }
+
+  it.each(failures)(
+    'get-state do polling com resposta %s: falha de comando',
+    async (_n, failure) => {
+      const h = setUp();
+      await h.controller.open();
+      h.respond(() => translating);
+      await h.controller.translate();
+      h.respond(() => failure);
+      h.intervals.tick();
+      await settle();
+      expect(h.elements.message.textContent).toBe(COMMAND_FAILED_MESSAGE);
+      expect(h.intervals.active.size).toBe(0);
+    },
+  );
+
+  it('Traduzir depois da falha injeta de novo e recupera', async () => {
+    const h = setUp();
+    h.respond(() => ({ ok: false, error: 'invalid_request' }));
+    await h.controller.open();
+    h.respond(() => translating);
+    await h.controller.translate();
+    expect(h.calls).toEqual(['get-state:7', 'inject:7', 'start:7']);
+    expect(h.elements.message.textContent).toBe('Traduzindo… 0 de 2 trechos.');
   });
 });
 
