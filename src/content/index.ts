@@ -18,6 +18,12 @@ installOnce(globalThis, INSTALL_KEY, () => {
     randomUUID: () => crypto.randomUUID(),
     setInterval: (fn, ms) => setInterval(fn, ms),
     clearInterval: (id) => clearInterval(id as number),
+    measure: (block) => block.getBoundingClientRect(),
+    viewportHeight: () => window.innerHeight,
+    now: () => performance.now(),
+    mark: (name) => {
+      performance.mark(name);
+    },
   });
 
   const controller = createContentController({

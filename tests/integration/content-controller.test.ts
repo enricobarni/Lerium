@@ -106,6 +106,9 @@ function setup(body = '<p>Plain sentence here.</p><p>Second line.</p>'): Harness
     randomUUID: () => JOB_ID,
     setInterval: (fn, ms) => setInterval(fn, ms),
     clearInterval: (id) => clearInterval(id as Parameters<typeof clearInterval>[0]),
+    // Geometria falsa: todo bloco visível, ordem de documento.
+    measure: () => ({ top: 0, bottom: 20, width: 100, height: 20 }),
+    viewportHeight: () => 600,
   });
   const controller = createContentController({
     runner,

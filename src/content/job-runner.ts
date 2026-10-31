@@ -1,31 +1,43 @@
 /**
- * Executor do job de tradução da página, no content script (Fase 4, ADR-004).
+ * Executor do job de tradução da página, no content script (Fases 4 e 5,
+ * ADR-004).
  *
- * Coleta → segmenta → planeja (ADR-013, ADR-014) e manda as unidades ao
- * service worker por uma `PortLike`, **uma por vez**: a próxima só sai
- * depois do `job:result` da anterior. Quando todas as unidades de um plano
- * chegaram, o segmento é aplicado; um `markers_invalid` com fallback põe as
- * unidades nó a nó do mesmo segmento logo em seguida na fila.
+ * Coleta → segmenta → classifica por prioridade (`classifySegments`, uma vez
+ * por job) → planeja (ADR-013, ADR-014). Cada unidade entra numa fila com a
+ * classe do seu segmento (unidades de um segmento em ordem) e sai para o
+ * service worker por uma `PortLike`, com no máximo `maxInFlight` unidades em
+ * voo (padrão `MAX_UNITS_IN_FLIGHT`). Cada `job:result` libera uma vaga; quando
+ * todas as unidades de um plano chegaram (em qualquer ordem), o segmento é
+ * aplicado. Um `markers_invalid` com fallback põe as unidades nó a nó do
+ * segmento no início da sua classe, em ordem.
  *
- * Sem `chrome`: a porta, o UUID e os timers são injetados. Sem logs e sem
- * texto no estado emitido (só contagens e códigos de erro).
+ * Sem `chrome`: a porta, o UUID, a geometria, os timers e as marcas de
+ * desempenho são injetados. Sem logs e sem texto no estado emitido nem nas
+ * marcas (só nomes fixos, contagens e códigos de erro).
  *
  * Regras:
  * - Toda mensagem recebida passa por `parseWorkerToContent`; é descartada se
- *   o `jobId` não é o do job atual ou se o `unitId` não é o da unidade em voo.
+ *   o `jobId` não é o do job atual ou se o `unitId` não está em voo.
  * - Unidade que o service worker recusaria (texto acima de `MAX_UNIT_CHARS`
- *   ou `unitId` inválido) não é enviada: vira resultado `null` na hora.
+ *   ou `unitId` inválido) não é enviada: vira resultado `null` quando sai da
+ *   fila.
  * - `ok: false` vira resultado `null` para a unidade; o applier decide
  *   (`translation_failed`, o segmento fica no original). `busy` segue a
- *   mesma regra: a concorrência no service worker é por porta, e `busy` só
- *   ocorre se a mesma porta enviar duas unidades ao mesmo tempo — o que este
- *   runner não faz; se acontecer, é falha, e reenviar só esconderia o erro.
+ *   mesma regra: a janela daqui nunca passa do limite combinado com o service
+ *   worker; se acontecer, é falha, e reenviar só esconderia o erro.
  * - `job:fatal` → `error` com o código; desconecta; segmentos ainda não
  *   aplicados ficam no original.
  * - Desconexão não pedida com trabalho pendente → `error` `interrupted`; o
  *   que já foi aplicado continua restaurável.
  * - `job:ping` a cada `PING_INTERVAL_MS` enquanto houver unidade em voo; o
  *   timer é limpo em todo caminho de término.
+ * - Cancelamento, fatal, interrupção e `dispose` esvaziam fila e janela;
+ *   nada do job é aplicado depois.
+ *
+ * Marcas (`deps.mark`, só o nome): `lerium:job-start` no início de `start`;
+ * `lerium:first-visible-applied` no primeiro segmento de prioridade 0
+ * aplicado com sucesso; `lerium:job-done` quando o job termina em
+ * `translated`. Cancelamento e erro não marcam `job-done`.
  *
  * Contagens: `total` é o número de segmentos; `skipped` os acima de
  * `MAX_SEGMENT_CHARS`; `done` os aplicados; `failed` os que o applier
@@ -45,14 +57,27 @@
  */
 
 import {
+  createInFlightWindow,
+  createPriorityQueue,
+  type PriorityQueue,
+} from '../core/translation-scheduler';
+import {
   isUnitId,
   MAX_UNIT_CHARS,
+  MAX_UNITS_IN_FLIGHT,
   parseWorkerToContent,
   type JobFatalErrorKind,
 } from '../shared/page-messages';
 import type { PortLike } from '../shared/port-like';
 import { collectTextNodes } from './dom-collector';
 import { createPageApplier, type SegmentPlan, type TranslationUnit } from './page-applier';
+import {
+  classifySegments,
+  PRIORITY_CLASSES,
+  PRIORITY_VISIBLE_MAIN,
+  type BlockRect,
+  type SegmentPriority,
+} from './segment-priority';
 import { segmentTextNodes } from './segmenter';
 
 export type JobStatus = 'idle' | 'translating' | 'translated' | 'cancelled' | 'error';
@@ -77,6 +102,19 @@ export interface JobRunnerDeps {
   randomUUID(): string;
   setInterval: (fn: () => void, ms: number) => unknown;
   clearInterval: (id: unknown) => void;
+  /** Geometria do bloco (no content real: `getBoundingClientRect`). */
+  measure(block: Element): BlockRect;
+  /** Altura da viewport (no content real: `window.innerHeight`). */
+  viewportHeight(): number;
+  /**
+   * Relógio monotônico (no content real: `performance.now`). Reservado para
+   * medições de duração; as marcas atuais levam o próprio carimbo de tempo.
+   */
+  now?: () => number;
+  /** Marca de desempenho (no content real: `performance.mark`); só nomes fixos. */
+  mark?: (name: string) => void;
+  /** Limite da janela; só para teste. Padrão `MAX_UNITS_IN_FLIGHT`. */
+  maxInFlight?: number;
   onState?(state: JobState): void;
 }
 
@@ -98,19 +136,33 @@ export const INTERRUPTED = 'interrupted' as const;
 /** Código de erro do job: falha fatal do service worker ou porta perdida. */
 export type JobErrorKind = JobFatalErrorKind | typeof INTERRUPTED;
 
-interface CurrentPlan {
+export const MARK_JOB_START = 'lerium:job-start';
+export const MARK_FIRST_VISIBLE_APPLIED = 'lerium:first-visible-applied';
+export const MARK_JOB_DONE = 'lerium:job-done';
+
+/** Um plano em andamento: resultados chegam em qualquer ordem. */
+interface SegmentTask {
   readonly plan: SegmentPlan;
-  index: number;
+  readonly priority: SegmentPriority;
   readonly results: Map<string, string | null>;
+  /** Unidades do plano ainda sem resultado. */
+  remaining: number;
+}
+
+/** Item da fila; `unit` `null` = plano sem unidades, aplicado ao sair da fila. */
+interface QueuedUnit {
+  readonly task: SegmentTask;
+  readonly unit: TranslationUnit | null;
 }
 
 interface ActiveJob {
   readonly jobId: string;
   readonly port: PortLike;
-  readonly queue: SegmentPlan[];
-  current: CurrentPlan | null;
-  /** `unitId` da unidade em voo; `null` entre unidades. */
-  pendingUnitId: string | null;
+  readonly queue: PriorityQueue<QueuedUnit>;
+  readonly window: ReturnType<typeof createInFlightWindow>;
+  /** `unitId` em voo → plano a que pertence. */
+  readonly inFlight: Map<string, SegmentTask>;
+  firstVisibleMarked: boolean;
   timer: unknown;
   readonly onMessage: (message: unknown) => void;
   readonly onDisconnect: () => void;
@@ -135,8 +187,37 @@ const IDLE: JobState = {
   skipped: 0,
 };
 
+function createTask(plan: SegmentPlan, priority: SegmentPriority): SegmentTask {
+  return { plan, priority, results: new Map(), remaining: plan.units.length };
+}
+
+/** Enfileira as unidades do plano no fim da classe, em ordem. */
+function pushTask(queue: PriorityQueue<QueuedUnit>, task: SegmentTask): void {
+  if (task.plan.units.length === 0) {
+    queue.push({ task, unit: null }, task.priority);
+    return;
+  }
+  for (const unit of task.plan.units) queue.push({ task, unit }, task.priority);
+}
+
+/**
+ * Enfileira as unidades do plano no início da classe, em ordem: `pushFront`
+ * é LIFO dentro da classe, então vai do último para o primeiro.
+ */
+function pushTaskFront(queue: PriorityQueue<QueuedUnit>, task: SegmentTask): void {
+  const { units } = task.plan;
+  if (units.length === 0) {
+    queue.pushFront({ task, unit: null }, task.priority);
+    return;
+  }
+  for (let index = units.length - 1; index >= 0; index -= 1) {
+    queue.pushFront({ task, unit: units[index] as TranslationUnit }, task.priority);
+  }
+}
+
 export function createJobRunner(deps: JobRunnerDeps): JobRunner {
   const applier = createPageApplier();
+  const maxInFlight = deps.maxInFlight ?? MAX_UNITS_IN_FLIGHT;
   let state: JobState = { ...IDLE };
   let active: ActiveJob | null = null;
   let disposed = false;
@@ -146,10 +227,20 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     if (!disposed) deps.onState?.({ ...state });
   };
 
-  /** Encerra o job: timer, ouvintes e porta. Nada do job é aplicado depois. */
+  const mark = (name: string): void => {
+    try {
+      deps.mark?.(name);
+    } catch {
+      // Marca de desempenho é diagnóstico: nunca derruba o job.
+    }
+  };
+
+  /** Encerra o job: fila, janela, timer, ouvintes e porta. Nada do job é aplicado depois. */
   const teardown = (job: ActiveJob): void => {
     if (active === job) active = null;
-    job.pendingUnitId = null;
+    job.queue.clear();
+    for (const unitId of job.inFlight.keys()) job.window.release(unitId);
+    job.inFlight.clear();
     if (job.timer !== undefined) deps.clearInterval(job.timer);
     job.timer = undefined;
     job.port.onMessage.removeListener(job.onMessage);
@@ -166,48 +257,64 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     emit({ ...state, status: 'error', error });
   };
 
-  /** Envia a próxima unidade ou aplica o plano completo, até esperar resposta. */
-  const advance = (job: ActiveJob): void => {
-    while (active === job) {
-      if (job.current === null) {
-        const plan = job.queue.shift();
-        if (plan === undefined) {
-          teardown(job);
-          emit({ ...state, status: 'translated' });
-          return;
-        }
-        job.current = { plan, index: 0, results: new Map() };
+  /** Aplica o plano completo; fallback volta à frente da própria classe. */
+  const applyTask = (job: ActiveJob, task: SegmentTask): void => {
+    const result = applier.apply(task.plan.segmentId, task.results);
+    if (result.ok) {
+      if (task.priority === PRIORITY_VISIBLE_MAIN && !job.firstVisibleMarked) {
+        job.firstVisibleMarked = true;
+        mark(MARK_FIRST_VISIBLE_APPLIED);
       }
-      const current = job.current;
-      const unit = current.plan.units[current.index];
-      if (unit !== undefined) {
-        if (!isSendableUnit(unit)) {
-          // O service worker descartaria em silêncio e não haveria resposta.
-          current.results.set(unit.unitId, null);
-          current.index += 1;
-          continue;
-        }
-        job.pendingUnitId = unit.unitId;
-        try {
-          job.port.postMessage({
-            type: 'job:unit',
-            jobId: job.jobId,
-            unitId: unit.unitId,
-            text: unit.text,
-          });
-        } catch {
-          if (active === job) fail(job, INTERRUPTED);
+      emit({ ...state, done: state.done + 1 });
+    } else if (result.fallback !== undefined) {
+      pushTaskFront(job.queue, createTask(result.fallback, task.priority));
+    } else {
+      emit({ ...state, failed: state.failed + 1 });
+    }
+  };
+
+  /** Registra o resultado de uma unidade e aplica o plano se ele completou. */
+  const settle = (job: ActiveJob, task: SegmentTask, unitId: string, text: string | null): void => {
+    task.results.set(unitId, text);
+    task.remaining -= 1;
+    if (task.remaining === 0) applyTask(job, task);
+  };
+
+  /** Envia enquanto houver vaga e fila; termina o job quando não resta nada. */
+  const pump = (job: ActiveJob): void => {
+    while (active === job) {
+      if (job.window.available === 0) return;
+      const item = job.queue.next();
+      if (item === undefined) {
+        if (job.window.size === 0) {
+          teardown(job);
+          mark(MARK_JOB_DONE);
+          emit({ ...state, status: 'translated' });
         }
         return;
       }
-      job.current = null;
-      const result = applier.apply(current.plan.segmentId, current.results);
-      if (result.ok) {
-        emit({ ...state, done: state.done + 1 });
-      } else if (result.fallback !== undefined) {
-        job.queue.unshift(result.fallback);
-      } else {
-        emit({ ...state, failed: state.failed + 1 });
+      const { task, unit } = item;
+      if (unit === null) {
+        applyTask(job, task);
+        continue;
+      }
+      if (!isSendableUnit(unit) || !job.window.tryAcquire(unit.unitId)) {
+        // O service worker descartaria em silêncio e não haveria resposta;
+        // id repetido em voo também nunca teria resposta própria.
+        settle(job, task, unit.unitId, null);
+        continue;
+      }
+      job.inFlight.set(unit.unitId, task);
+      try {
+        job.port.postMessage({
+          type: 'job:unit',
+          jobId: job.jobId,
+          unitId: unit.unitId,
+          text: unit.text,
+        });
+      } catch {
+        if (active === job) fail(job, INTERRUPTED);
+        return;
       }
     }
   };
@@ -221,14 +328,12 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       return;
     }
     if (message.type !== 'job:result') return;
-    const current = job.current;
-    if (current === null || job.pendingUnitId === null || message.unitId !== job.pendingUnitId) {
-      return;
-    }
-    job.pendingUnitId = null;
-    current.results.set(message.unitId, message.ok ? message.text : null);
-    current.index += 1;
-    advance(job);
+    const task = job.inFlight.get(message.unitId);
+    if (task === undefined) return;
+    job.inFlight.delete(message.unitId);
+    job.window.release(message.unitId);
+    settle(job, task, message.unitId, message.ok ? message.text : null);
+    pump(job);
   };
 
   const stopActive = (): boolean => {
@@ -246,16 +351,21 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     start() {
       if (disposed) return;
       stopActive();
+      mark(MARK_JOB_START);
       applier.restore();
       applier.clear();
 
       const segments = segmentTextNodes(collectTextNodes(deps.root));
-      const queue: SegmentPlan[] = [];
+      const classified = classifySegments(segments, {
+        measure: (block) => deps.measure(block),
+        viewportHeight: deps.viewportHeight(),
+      });
+      const queue = createPriorityQueue<QueuedUnit>(PRIORITY_CLASSES);
       let skipped = 0;
-      for (const segment of segments) {
+      for (const { segment, priority } of classified) {
         const plan = applier.plan(segment);
         if ('skipped' in plan) skipped += 1;
-        else queue.push(plan);
+        else pushTask(queue, createTask(plan, priority));
       }
       const base: JobState = {
         status: 'translating',
@@ -265,7 +375,8 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         failed: 0,
         skipped,
       };
-      if (queue.length === 0) {
+      if (queue.size === 0) {
+        mark(MARK_JOB_DONE);
         emit({ ...base, status: 'translated' });
         return;
       }
@@ -282,8 +393,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         jobId: deps.randomUUID(),
         port,
         queue,
-        current: null,
-        pendingUnitId: null,
+        window: createInFlightWindow(maxInFlight),
+        inFlight: new Map(),
+        firstVisibleMarked: false,
         timer: undefined,
         onMessage: (message) => handleMessage(job, message),
         onDisconnect: () => {
@@ -294,7 +406,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       port.onMessage.addListener(job.onMessage);
       port.onDisconnect.addListener(job.onDisconnect);
       job.timer = deps.setInterval(() => {
-        if (active !== job || job.pendingUnitId === null) return;
+        if (active !== job || job.window.size === 0) return;
         try {
           job.port.postMessage({ type: 'job:ping', jobId: job.jobId });
         } catch {
@@ -302,7 +414,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         }
       }, PING_INTERVAL_MS);
       emit(base);
-      advance(job);
+      pump(job);
     },
 
     cancel,
