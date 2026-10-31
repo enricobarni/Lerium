@@ -51,6 +51,8 @@ if (elements) {
       ),
     setInterval: (fn, ms) => window.setInterval(fn, ms),
     clearInterval: (id) => window.clearInterval(id as number),
+    setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+    clearTimeout: (id) => window.clearTimeout(id as number),
     render: createPopupRenderer(elements, (callback) => requestAnimationFrame(callback)),
   });
 

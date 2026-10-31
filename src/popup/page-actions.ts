@@ -14,6 +14,15 @@ import { describePage, type PageViewInput, type PageViewModel } from './page-vie
 
 export const POLL_INTERVAL_MS = 1000;
 
+/**
+ * Prazo para o service worker ou o content script responderem. Sem ele, uma
+ * mensagem que nunca volta deixaria o popup preso em "Preparando a página…".
+ */
+export const RESPONSE_TIMEOUT_MS = 10_000;
+
+/** Resultado de uma espera que estourou o prazo. */
+const TIMED_OUT: unique symbol = Symbol('timed-out');
+
 export interface ActiveTab {
   id: number;
   url?: string;
@@ -28,6 +37,9 @@ export interface PopupDeps {
   sendCommand(tabId: number, command: PageCommandName): Promise<unknown>;
   setInterval(fn: () => void, ms: number): unknown;
   clearInterval(id: unknown): void;
+  /** Prazo das respostas (`RESPONSE_TIMEOUT_MS`); injetado para os testes. */
+  setTimeout(fn: () => void, ms: number): unknown;
+  clearTimeout(id: unknown): void;
   render(view: PageViewModel): void;
 }
 
@@ -64,11 +76,49 @@ export function createPopupController(deps: PopupDeps): PopupController {
   let pollInFlight = false;
   /** Cada ação invalida consultas anteriores ainda pendentes. */
   let generation = 0;
+  /** Prazos em andamento; o `dispose` limpa os que sobrarem. */
+  const deadlines = new Set<unknown>();
 
   function stopPolling(): void {
     if (polling === null) return;
     deps.clearInterval(polling);
     polling = null;
+  }
+
+  /**
+   * Espera `request` por até `RESPONSE_TIMEOUT_MS`. Estourado o prazo, resolve
+   * com `TIMED_OUT`; a resposta tardia é ignorada. O timer é limpo em todo
+   * caminho (resposta, rejeição, exceção síncrona ou prazo).
+   */
+  function withDeadline<T>(request: () => Promise<T>): Promise<T | typeof TIMED_OUT> {
+    return new Promise((resolve, reject) => {
+      const timer = deps.setTimeout(() => {
+        deadlines.delete(timer);
+        resolve(TIMED_OUT);
+      }, RESPONSE_TIMEOUT_MS);
+      deadlines.add(timer);
+      const release = (): void => {
+        if (deadlines.delete(timer)) deps.clearTimeout(timer);
+      };
+      let pending: Promise<T>;
+      try {
+        pending = request();
+      } catch (error) {
+        release();
+        reject(error);
+        return;
+      }
+      pending.then(
+        (value) => {
+          release();
+          resolve(value);
+        },
+        (error: unknown) => {
+          release();
+          reject(error);
+        },
+      );
+    });
   }
 
   function show(input: PageViewInput): void {
@@ -83,11 +133,12 @@ export function createPopupController(deps: PopupDeps): PopupController {
   async function runCommand(id: number, command: PageCommandName): Promise<PageViewInput> {
     let raw: unknown;
     try {
-      raw = await deps.sendCommand(id, command);
+      raw = await withDeadline(() => deps.sendCommand(id, command));
     } catch {
       // Sem content script: página nova, recarregada ou nunca injetada.
       return { kind: 'not_injected' };
     }
+    if (raw === TIMED_OUT) return { kind: 'inject_error', error: 'invalid_request' };
     const response = parsePageCommandResponse(raw);
     if (response === null || !response.ok)
       return { kind: 'inject_error', error: 'invalid_request' };
@@ -121,10 +172,11 @@ export function createPopupController(deps: PopupDeps): PopupController {
   async function inject(id: number): Promise<PageViewInput | null> {
     let raw: unknown;
     try {
-      raw = await deps.sendInject(id);
+      raw = await withDeadline(() => deps.sendInject(id));
     } catch {
       return { kind: 'inject_error', error: 'injection_failed' };
     }
+    if (raw === TIMED_OUT) return { kind: 'inject_error', error: 'injection_failed' };
     const response = parsePageInjectResponse(raw);
     if (response === null) return { kind: 'inject_error', error: 'invalid_request' };
     if (!response.ok) return { kind: 'inject_error', error: response.error };
@@ -169,6 +221,8 @@ export function createPopupController(deps: PopupDeps): PopupController {
     dispose() {
       disposed = true;
       stopPolling();
+      for (const timer of deadlines) deps.clearTimeout(timer);
+      deadlines.clear();
     },
   };
 }

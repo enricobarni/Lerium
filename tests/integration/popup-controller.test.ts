@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   POLL_INTERVAL_MS,
+  RESPONSE_TIMEOUT_MS,
   createPopupController,
   type ActiveTab,
   type PopupController,
@@ -125,7 +126,8 @@ function setUp(
 
   const controller = createPopupController({
     getActiveTab: typeof tab === 'function' ? tab : async () => tab,
-    sendInject: async (tabId) => {
+    // Sem `async`: um `injectWith` que lança simula a exceção síncrona do `chrome`.
+    sendInject: (tabId) => {
       calls.push(`inject:${tabId}`);
       return injectResponse();
     },
@@ -137,6 +139,9 @@ function setUp(
     },
     setInterval: intervals.setInterval,
     clearInterval: intervals.clearInterval,
+    // Resolvidos na hora da chamada, para valerem os fake timers do teste.
+    setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
+    clearTimeout: (id) => globalThis.clearTimeout(id as ReturnType<typeof setTimeout>),
     render,
   });
 
@@ -170,6 +175,10 @@ function visibleButtons(elements: PopupElements): PageButton[] {
 
 beforeEach(() => {
   document.body.replaceChildren();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('popup: HTML', () => {
@@ -497,6 +506,97 @@ describe('popup: polling', () => {
     expect(h.render.mock.calls.length).toBe(renders);
     await h.controller.translate();
     expect(h.render.mock.calls.length).toBe(renders);
+  });
+});
+
+describe('popup: prazo de resposta', () => {
+  const never = () => new Promise<never>(() => undefined);
+
+  it('prazo de 10 s', () => {
+    expect(RESPONSE_TIMEOUT_MS).toBe(10_000);
+  });
+
+  it('inject sem resposta: falha de preparo no prazo, sem start, timer limpo', async () => {
+    vi.useFakeTimers();
+    const h = setUp();
+    await h.controller.open();
+    h.injectWith(never);
+    const pending = h.controller.translate();
+    await vi.advanceTimersByTimeAsync(RESPONSE_TIMEOUT_MS - 1);
+    expect(h.elements.message.textContent).toBe(BUSY_MESSAGE);
+    await vi.advanceTimersByTimeAsync(1);
+    await pending;
+    expect(h.calls).toEqual(['get-state:7', 'inject:7']);
+    expect(h.elements.message.textContent).toBe(PREPARE_FAILED_MESSAGE);
+    expect(visibleButtons(h.elements)).toEqual(['translate', 'openOptions']);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('comando sem resposta: sai do estado de espera no prazo e ignora a resposta tardia', async () => {
+    vi.useFakeTimers();
+    const h = setUp();
+    let release: (value: unknown) => void = () => undefined;
+    h.respond(() => new Promise((resolve) => (release = resolve)));
+    const pending = h.controller.open();
+    await vi.advanceTimersByTimeAsync(RESPONSE_TIMEOUT_MS);
+    await pending;
+    expect(h.elements.message.textContent).toBe(PREPARE_FAILED_MESSAGE);
+    expect(vi.getTimerCount()).toBe(0);
+    const renders = h.render.mock.calls.length;
+    release(ok(pageState({ status: 'translated', total: 1, done: 1 })));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.render.mock.calls.length).toBe(renders);
+  });
+
+  it('consulta do polling sem resposta: mostra a falha e para o polling', async () => {
+    vi.useFakeTimers();
+    const h = setUp();
+    await h.controller.open();
+    h.respond(() => ok(pageState({ status: 'translating', total: 4 })));
+    await h.controller.translate();
+    h.respond(never);
+    h.intervals.tick();
+    h.intervals.tick();
+    // A consulta pendente não é duplicada enquanto espera o prazo.
+    expect(h.calls.filter((call) => call === 'get-state:7')).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(RESPONSE_TIMEOUT_MS);
+    expect(h.elements.message.textContent).toBe(PREPARE_FAILED_MESSAGE);
+    expect(h.intervals.active.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('respostas, rejeições e exceções síncronas limpam o timer', async () => {
+    vi.useFakeTimers();
+    for (const response of [
+      async () => ({ ok: true, documentId: 'DOC-1' }),
+      () => Promise.reject(new Error('worker')),
+      () => {
+        throw new Error('síncrono');
+      },
+    ]) {
+      const h = setUp();
+      await h.controller.open();
+      h.injectWith(response);
+      await h.controller.translate();
+      expect(vi.getTimerCount()).toBe(0);
+    }
+    const h = setUp();
+    h.respond(() => NO_RECEIVER());
+    await h.controller.open();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('dispose limpa o prazo de uma consulta pendente', async () => {
+    vi.useFakeTimers();
+    const h = setUp();
+    await h.controller.open();
+    h.respond(() => ok(pageState({ status: 'translating', total: 4 })));
+    await h.controller.translate();
+    h.respond(never);
+    h.intervals.tick();
+    expect(vi.getTimerCount()).toBe(1);
+    h.controller.dispose();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
