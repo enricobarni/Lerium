@@ -785,6 +785,39 @@ describe('popup: foco', () => {
     expect(document.activeElement).toBe(h.elements.buttons.openOptions);
   });
 
+  it.each([
+    ['erro do job', () => ok(pageState({ status: 'error', error: 'forbidden' })), null],
+    ['erro de injeção', () => ok(pageState()), 'permission_required' as const],
+  ])('%s com correção nas configurações: foco em "Abrir configurações"', async (_n, r, error) => {
+    const h = setUp();
+    await h.controller.open();
+    h.elements.buttons.translate.focus();
+    let releaseInject: (value: unknown) => void = () => undefined;
+    h.injectWith(() => new Promise((resolve) => (releaseInject = resolve)));
+    h.respond(r);
+    const pending = h.controller.translate();
+    await settle();
+    expect(document.activeElement).toBe(h.elements.focusHolder);
+    releaseInject(error === null ? { ok: true, documentId: 'DOC-1' } : { ok: false, error });
+    await pending;
+    expect(h.elements.buttons.translate.hidden).toBe(false);
+    expect(document.activeElement).toBe(h.elements.buttons.openOptions);
+  });
+
+  it('erro sem correção nas configurações: foco volta a Traduzir', async () => {
+    const h = setUp();
+    await h.controller.open();
+    h.elements.buttons.translate.focus();
+    let releaseInject: (value: unknown) => void = () => undefined;
+    h.injectWith(() => new Promise((resolve) => (releaseInject = resolve)));
+    h.respond(() => ok(pageState({ status: 'error', error: 'network' })));
+    const pending = h.controller.translate();
+    await settle();
+    releaseInject({ ok: true, documentId: 'DOC-1' });
+    await pending;
+    expect(document.activeElement).toBe(h.elements.buttons.translate);
+  });
+
   it('sem foco em botão, a renderização não move o foco', async () => {
     const h = setUp();
     h.respond(() => ok(pageState({ status: 'translated', total: 2, done: 2 })));

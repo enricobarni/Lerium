@@ -118,7 +118,11 @@ button {
     color 150ms ease-in-out;
 }
 
-/* `display` explícito em .actions anularia [hidden]; reforça o atributo. */
+/*
+ * O [hidden] do navegador perde para qualquer regra de autor que defina
+ * `display` no botão; reforça o atributo para que um `display` futuro aqui
+ * (ex.: inline-flex) não mostre botões ocultos.
+ */
 button[hidden] {
   display: none;
 }

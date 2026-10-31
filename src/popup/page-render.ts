@@ -15,7 +15,8 @@ import {
  * - Botões que não se aplicam ficam `hidden` (não `disabled`).
  * - Foco: se o botão focado some, o foco vai para o equivalente visível
  *   (`focusFallback`). Sem equivalente (ação em andamento), o foco espera no
- *   título e passa ao primeiro botão de ação quando ele voltar.
+ *   título e passa ao primeiro botão de ação quando ele voltar, ou a "Abrir
+ *   configurações" quando a correção estiver lá (`highlightOptions`).
  */
 
 export interface PopupElements {
@@ -71,7 +72,8 @@ export function createPopupRenderer(
     return BUTTON_NAMES.find((name) => buttons[name] === active) ?? null;
   }
 
-  function moveFocus(previous: PageButton | null, visible: PageButtons): void {
+  function moveFocus(previous: PageButton | null, view: PageViewModel): void {
+    const visible = view.buttons;
     const active = doc.activeElement;
     if (previous !== null && !visible[previous]) {
       const next = focusFallback(previous, visible);
@@ -90,7 +92,9 @@ export function createPopupRenderer(
       focusPending = false;
       return;
     }
-    const first = firstActionButton(visible);
+    // A ação em destaque recebe o foco: com erro de configuração, é ela.
+    const first =
+      view.highlightOptions && visible.openOptions ? 'openOptions' : firstActionButton(visible);
     if (first !== null) {
       buttons[first].focus();
       focusPending = false;
@@ -127,7 +131,7 @@ export function createPopupRenderer(
     buttons.openOptions.classList.toggle('secondary', !view.highlightOptions);
     buttons.translate.classList.toggle('primary', !view.highlightOptions);
     buttons.translate.classList.toggle('secondary', view.highlightOptions);
-    moveFocus(previous, view.buttons);
+    moveFocus(previous, view);
 
     announce(view.announce);
   };
