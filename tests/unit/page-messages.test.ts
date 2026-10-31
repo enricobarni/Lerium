@@ -30,7 +30,13 @@ const UNIT_ERRORS = [
   'busy',
 ] as const;
 
-const FATAL_ERRORS = ['invalid_config', 'model_missing', 'forbidden', 'settings_unavailable'];
+const FATAL_ERRORS = [
+  'invalid_config',
+  'model_missing',
+  'forbidden',
+  'network',
+  'settings_unavailable',
+];
 
 const INVALID_JOB_IDS: unknown[] = [
   '3F2B8C1E-9A4D-4E7F-8B21-0C5D6E7F8A9B', // maiúsculas
@@ -314,7 +320,7 @@ describe('parseWorkerToContent', () => {
   });
 
   it('recusa fatal com error desconhecido ou de unidade', () => {
-    for (const error of ['busy', 'network', 'timeout', 'unknown', 'constructor', undefined]) {
+    for (const error of ['busy', 'timeout', 'truncated', 'unknown', 'constructor', undefined]) {
       expect(parseWorkerToContent({ type: 'job:fatal', jobId: JOB, error })).toBeNull();
     }
   });

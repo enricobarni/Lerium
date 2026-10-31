@@ -26,6 +26,7 @@ const ALLOWED_KEYS = [
   'icons',
   'key',
   'manifest_version',
+  'minimum_chrome_version',
   'name',
   'optional_host_permissions',
   'options_ui',
@@ -48,11 +49,25 @@ describe('manifest.json', () => {
     expect(Object.keys(manifest).sort()).toEqual(ALLOWED_KEYS);
   });
 
-  it('solicita apenas a permissão storage, sem content scripts nem <all_urls>', () => {
-    // storage: preferências em chrome.storage.local (ADR-008).
-    expect(manifest.permissions).toEqual(['storage']);
+  it('solicita só activeTab, scripting e storage', () => {
+    // activeTab + scripting: injeção sob demanda na aba ativa, após gesto do
+    // usuário (ADR-010); storage: preferências em chrome.storage.local (ADR-008).
+    expect(manifest.permissions).toEqual(['activeTab', 'scripting', 'storage']);
+    expect(manifest.permissions).not.toContain('tabs');
+  });
+
+  it('não injeta nem expõe nada de forma estática, sem <all_urls>', () => {
     expect(manifest).not.toHaveProperty('content_scripts');
+    expect(manifest).not.toHaveProperty('web_accessible_resources');
+    expect(manifest).not.toHaveProperty('externally_connectable');
     expect(rawManifest).not.toContain('<all_urls>');
+  });
+
+  it('exige Chrome 114 ou superior', () => {
+    // 114: mensagens de Port renovam o timer de ociosidade do service worker;
+    // documentId/documentLifecycle no sender existem desde o 106.
+    expect(manifest.minimum_chrome_version).toBe('114');
+    expect(manifest.minimum_chrome_version).toMatch(CHROME_VERSION);
   });
 
   it('acessa só o Ollama em loopback na porta padrão (ADR-009)', () => {

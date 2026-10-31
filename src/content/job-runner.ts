@@ -31,6 +31,17 @@
  * `MAX_SEGMENT_CHARS`; `done` os aplicados; `failed` os que o applier
  * recusou (depois do fallback, se houve). Um segmento com fallback conta uma
  * vez só, pelo resultado final.
+ *
+ * Visualização (`view`): o que o DOM mostra. Começa em `original` (nada foi
+ * aplicado); `start` passa a `translation`; `showOriginal` cancela o job em
+ * andamento, restaura e passa a `original`; `showTranslation` reaplica e passa
+ * a `translation`, exceto em `idle` (não há tradução a mostrar: no-op). Durante
+ * `translating` a visualização é sempre `translation`. Mudança de `view` emite
+ * estado; comando que não muda nada não emite.
+ *
+ * `dispose()`: encerra o job sem emitir, esquece o registro do applier (o DOM
+ * fica como está) e transforma todo comando seguinte em no-op. `getState`
+ * continua respondendo o último estado.
  */
 
 import {
@@ -46,8 +57,11 @@ import { segmentTextNodes } from './segmenter';
 
 export type JobStatus = 'idle' | 'translating' | 'translated' | 'cancelled' | 'error';
 
+export type JobView = 'original' | 'translation';
+
 export interface JobState {
   status: JobStatus;
+  view: JobView;
   total: number;
   done: number;
   failed: number;
@@ -72,6 +86,8 @@ export interface JobRunner {
   showOriginal(): void;
   showTranslation(): void;
   getState(): JobState;
+  /** Encerra de vez: cancela sem emitir, limpa o registro; comandos viram no-op. */
+  dispose(): void;
 }
 
 export const PING_INTERVAL_MS = 20_000;
@@ -110,16 +126,24 @@ export function isSendableUnit(unit: TranslationUnit): boolean {
   return unit.text.length <= MAX_UNIT_CHARS && isUnitId(unit.unitId);
 }
 
-const IDLE: JobState = { status: 'idle', total: 0, done: 0, failed: 0, skipped: 0 };
+const IDLE: JobState = {
+  status: 'idle',
+  view: 'original',
+  total: 0,
+  done: 0,
+  failed: 0,
+  skipped: 0,
+};
 
 export function createJobRunner(deps: JobRunnerDeps): JobRunner {
   const applier = createPageApplier();
   let state: JobState = { ...IDLE };
   let active: ActiveJob | null = null;
+  let disposed = false;
 
   const emit = (next: JobState): void => {
     state = next;
-    deps.onState?.({ ...state });
+    if (!disposed) deps.onState?.({ ...state });
   };
 
   /** Encerra o job: timer, ouvintes e porta. Nada do job é aplicado depois. */
@@ -214,11 +238,13 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
   };
 
   const cancel = (): void => {
+    if (disposed) return;
     if (stopActive()) emit({ ...state, status: 'cancelled' });
   };
 
   return {
     start() {
+      if (disposed) return;
       stopActive();
       applier.restore();
       applier.clear();
@@ -233,6 +259,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       }
       const base: JobState = {
         status: 'translating',
+        view: 'translation',
         total: segments.length,
         done: 0,
         failed: 0,
@@ -281,16 +308,28 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     cancel,
 
     showOriginal() {
-      cancel();
+      if (disposed) return;
+      const wasActive = stopActive();
       applier.restore();
+      if (!wasActive && state.view === 'original') return;
+      emit({ ...state, status: wasActive ? 'cancelled' : state.status, view: 'original' });
     },
 
     showTranslation() {
+      if (disposed || state.status === 'idle') return;
       applier.reapply();
+      if (state.view !== 'translation') emit({ ...state, view: 'translation' });
     },
 
     getState() {
       return { ...state };
+    },
+
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      if (stopActive()) state = { ...state, status: 'cancelled' };
+      applier.clear();
     },
   };
 }

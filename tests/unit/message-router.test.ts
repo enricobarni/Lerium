@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createMessageHandler, isHandledMessage } from '../../src/background/message-router';
+import type { PageInjectResponse } from '../../src/shared/page-control';
 
 const RUNTIME_ID = 'mjkoppimccgajnabfeheglepjapkchlk';
 const SENDER = { id: RUNTIME_ID, url: `chrome-extension://${RUNTIME_ID}/options/index.html` };
@@ -23,17 +24,34 @@ const ollamaFetch = (showStatus = 200) =>
     throw new Error(`rota inesperada: ${path}`);
   });
 
+const INJECT_MESSAGE = { type: 'page:inject', tabId: 7 };
+
+const unusedInject = vi.fn(async (): Promise<PageInjectResponse> => {
+  throw new Error('injeção inesperada');
+});
+
 const setup = (options: { granted?: boolean; showStatus?: number } = {}) => {
   const fetchFn = ollamaFetch(options.showStatus);
   const permissionsContains = vi.fn(async () => options.granted ?? true);
-  const handle = createMessageHandler({ runtimeId: RUNTIME_ID, permissionsContains, fetchFn });
-  return { fetchFn, permissionsContains, handle };
+  const injectPage = vi.fn(async (): Promise<PageInjectResponse> => ({
+    ok: true,
+    documentId: 'DOC1',
+  }));
+  const handle = createMessageHandler({
+    runtimeId: RUNTIME_ID,
+    permissionsContains,
+    fetchFn,
+    injectPage,
+  });
+  return { fetchFn, permissionsContains, injectPage, handle };
 };
 
 describe('isHandledMessage', () => {
-  it('reconhece apenas o tipo de teste de conexão', () => {
+  it('reconhece apenas o teste de conexão e a injeção na aba', () => {
     expect(isHandledMessage(MESSAGE)).toBe(true);
     expect(isHandledMessage({ type: 'ollama:test-connection' })).toBe(true);
+    expect(isHandledMessage(INJECT_MESSAGE)).toBe(true);
+    expect(isHandledMessage({ type: 'page:command', command: 'start' })).toBe(false);
     expect(isHandledMessage({ type: 'outro' })).toBe(false);
     expect(isHandledMessage(null)).toBe(false);
     expect(isHandledMessage('ollama:test-connection')).toBe(false);
@@ -123,6 +141,7 @@ describe('createMessageHandler: permissão de host', () => {
         throw new Error('x');
       },
       fetchFn,
+      injectPage: unusedInject,
     });
 
     await expect(handle(MESSAGE, SENDER)).resolves.toEqual({
@@ -184,6 +203,7 @@ describe('createMessageHandler: encaminhamento', () => {
         permissionsContains: async () => true,
         fetchFn,
         timeoutMs: 50,
+        injectPage: unusedInject,
       });
 
       const pending = handle(MESSAGE, SENDER);
@@ -193,5 +213,54 @@ describe('createMessageHandler: encaminhamento', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('createMessageHandler: injeção na aba', () => {
+  it('encaminha a requisição validada e devolve a resposta', async () => {
+    const { fetchFn, permissionsContains, injectPage, handle } = setup();
+
+    await expect(handle({ ...INJECT_MESSAGE, extra: 'x' }, SENDER)).resolves.toEqual({
+      ok: true,
+      documentId: 'DOC1',
+    });
+    expect(injectPage).toHaveBeenCalledExactlyOnceWith({ type: 'page:inject', tabId: 7 });
+    // A regra de permissão da injeção fica no handler injetado.
+    expect(permissionsContains).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['sem tabId', { type: 'page:inject' }],
+    ['tabId negativo', { type: 'page:inject', tabId: -1 }],
+    ['tabId fracionário', { type: 'page:inject', tabId: 1.5 }],
+    ['tabId texto', { type: 'page:inject', tabId: '7' }],
+  ])('%s vira invalid_request sem injetar', async (_label, message) => {
+    const { injectPage, handle } = setup();
+
+    await expect(handle(message, SENDER)).resolves.toEqual({
+      ok: false,
+      error: 'invalid_request',
+    });
+    expect(injectPage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['content script (página web)', { id: RUNTIME_ID, url: 'https://example.com/' }],
+    ['outra extensão', { id: 'abcdefghijklmnopabcdefghijklmnop', url: SENDER.url }],
+    ['sem url', { id: RUNTIME_ID }],
+  ])('ignora %s sem injetar', async (_label, sender) => {
+    const { injectPage, handle } = setup();
+
+    await expect(handle(INJECT_MESSAGE, sender)).resolves.toBeUndefined();
+    expect(injectPage).not.toHaveBeenCalled();
+  });
+
+  it('aceita o popup como remetente', async () => {
+    const { injectPage, handle } = setup();
+    const popup = { id: RUNTIME_ID, url: `chrome-extension://${RUNTIME_ID}/popup/index.html` };
+
+    await expect(handle(INJECT_MESSAGE, popup)).resolves.toEqual({ ok: true, documentId: 'DOC1' });
+    expect(injectPage).toHaveBeenCalledOnce();
   });
 });

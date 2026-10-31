@@ -43,9 +43,12 @@ export type ContentToWorkerMessage = JobUnitMessage | JobPingMessage;
 /** `busy`: o service worker recusou a unidade por já estar ocupado. */
 export type JobUnitErrorKind = TranslationErrorKind | 'busy';
 
-/** Falhas que encerram o job inteiro, não só uma unidade. */
+/**
+ * Falhas que encerram o job inteiro, não só uma unidade. `network`: o Ollama
+ * está inacessível, então insistir nas próximas unidades seria inútil.
+ */
 export type JobFatalErrorKind =
-  'invalid_config' | 'model_missing' | 'forbidden' | 'settings_unavailable';
+  'invalid_config' | 'model_missing' | 'forbidden' | 'network' | 'settings_unavailable';
 
 export type JobResultMessage =
   | { type: 'job:result'; jobId: string; unitId: string; ok: true; text: string }
@@ -100,6 +103,7 @@ const FATAL_ERROR_KINDS: Readonly<Record<JobFatalErrorKind, true>> = Object.free
   invalid_config: true,
   model_missing: true,
   forbidden: true,
+  network: true,
   settings_unavailable: true,
 });
 

@@ -26,6 +26,8 @@ import type { PortLike, PortSenderLike } from '../shared/port-like';
 export interface PageJobDeps {
   /** `chrome.runtime.id`. */
   runtimeId: string;
+  /** O Lerium injetou o content script neste documento da aba? */
+  isInjectedDocument(tabId: number, documentId: string): boolean;
   /** Lê as configurações; `null` (ou rejeição) = indisponíveis. */
   loadSettings(): Promise<TranslationSettings | null>;
   createProvider(settings: TranslationSettings): TranslationProvider;
@@ -36,11 +38,18 @@ export interface PageJobDeps {
 /** Intervalo mínimo entre dois `job:progress` da mesma unidade. */
 export const PROGRESS_INTERVAL_MS = 5_000;
 
-/** Erros de tradução que tornam inútil continuar o job. */
+/**
+ * Erros de tradução que tornam inútil continuar o job. `network` (Ollama
+ * desligado ou porta fechada) entra aqui: as próximas unidades falhariam do
+ * mesmo jeito, e o usuário precisa agir. `timeout` fica de fora de propósito:
+ * pode ser só um modelo lento num segmento longo, e as demais unidades ainda
+ * podem passar.
+ */
 const FATAL_TRANSLATION_ERRORS: ReadonlySet<string> = new Set<JobFatalErrorKind>([
   'invalid_config',
   'model_missing',
   'forbidden',
+  'network',
 ]);
 
 const isFatalTranslationError = (error: string): error is JobFatalErrorKind =>
@@ -59,20 +68,25 @@ function isHttpUrl(url: unknown): boolean {
 /**
  * Só o frame principal de uma aba web, vindo do próprio content script do
  * Lerium, abre um job: o `id` barra outras extensões; `tab`/`frameId`/`url`
- * barram páginas da extensão, iframes e esquemas não web. Documento em
- * prerender ou no bfcache (`documentLifecycle` diferente de `'active'`) também
- * é recusado; campo ausente (Chrome antigo) é aceito. Devolve o id da aba, ou
- * `null` se a port não é confiável.
+ * barram páginas da extensão, iframes e esquemas não web. O `documentId` tem
+ * de ser o do documento em que o worker injetou o script naquela aba, o que
+ * barra documentos antigos e de outra aba. `documentLifecycle` é obrigatório
+ * e tem de ser `'active'` (o Chrome 114+, mínimo do Lerium, sempre o envia):
+ * prerender e bfcache são recusados. Devolve o id da aba, ou `null` se a port
+ * não é confiável.
  */
-function trustedTabId(port: PortLike, runtimeId: string): number | null {
+function trustedTabId(port: PortLike, deps: PageJobDeps): number | null {
   if (port.name !== PAGE_JOB_PORT_NAME) return null;
   const sender: PortSenderLike | undefined = port.sender;
-  if (!sender || sender.id !== runtimeId) return null;
+  if (!sender || sender.id !== deps.runtimeId) return null;
   const tabId = sender.tab?.id;
   if (typeof tabId !== 'number') return null;
   if (sender.frameId !== 0) return null;
-  if (sender.documentLifecycle !== undefined && sender.documentLifecycle !== 'active') return null;
-  return isHttpUrl(sender.url) ? tabId : null;
+  if (sender.documentLifecycle !== 'active') return null;
+  if (!isHttpUrl(sender.url)) return null;
+  const { documentId } = sender;
+  if (typeof documentId !== 'string') return null;
+  return deps.isInjectedDocument(tabId, documentId) ? tabId : null;
 }
 
 function safeDisconnect(port: PortLike): void {
@@ -92,7 +106,7 @@ export function createPageJobHandler(deps: PageJobDeps): (port: PortLike) => voi
   const jobsByTab = new Map<number, { port: PortLike; stop: () => void }>();
 
   return (port) => {
-    const tabId = trustedTabId(port, deps.runtimeId);
+    const tabId = trustedTabId(port, deps);
     if (tabId === null) {
       safeDisconnect(port);
       return;

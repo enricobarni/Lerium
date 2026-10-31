@@ -6,12 +6,53 @@
 ## Estado atual
 
 - **Fase:** 4 — DOM e tradução de página (em andamento)
-- **Tarefa:** `feat/page-job-protocol` (mensagens do job, Port entre página e service worker, executor sequencial)
+- **Tarefa:** `feat/page-injection` (injeção sob demanda, build do content script, manifesto e E2E de tradução de página)
 - **Fase 3:** concluída — PRs #13–#16 mesclados; gate cumprido (18/18 execuções com o modelo real); ADR-011 aceita após conferência do model card pelo responsável
 - **Versão:** `0.1.0` (esqueleto + conexão com o Ollama, PLAN.md §5.4; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.1.0` em `ab06507` (validado: lint, typecheck, 398 testes, build, 8 E2E) e release [Lerium 0.1.0](https://github.com/enricobarni/Lerium/releases/tag/v0.1.0) publicadas pelo responsável.
 - **Fase 2:** concluída — PRs #9 e #10 mesclados; aceite manual do responsável no Chrome estável (conexão, modelos listados, Ollama fechado)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
+
+## Fase 4 — `feat/page-injection`
+
+| Commit | Mensagem |
+|---|---|
+| `da81866` | `feat(shared): define mensagens de controle da página` |
+| `3686dc2` | `feat(content): expõe visualização e dispose no executor` |
+| `3e985b9` | `feat(content): adiciona entrada idempotente com comandos validados` |
+| `33de5e4` | `build(extension): empacota content script em iife e verifica dist` |
+| `f7ec247` | `feat(manifest): solicita activeTab e scripting e exige chrome 114` |
+| `f7226a0` | `feat(background): injeta content script e registra documentId` |
+| `2521fe1` | `fix(background): prende port do job ao documento injetado` |
+| `ec1538a` | `fix(background): encerra job quando o ollama está inacessível` |
+| `d9bbd24` | `feat(storage): restringe storage local a contextos confiáveis` |
+| `ae7fe71` | `test(e2e): serve fixture e /api/chat ndjson no mock` |
+| `7f6b18c` | `test(e2e): cobre ida e volta, ollama fora e cancelamento` |
+| `78cc507` | `fix(content): ignora pagehide disparado pela página` |
+| `6741911` | `fix(content): mantém tradução em andamento ao receber start` |
+| `857a91a` | `fix(background): esquece aba substituída no registro de injeção` |
+| `71306d5` | `build(extension): amplia verificação do pacote` |
+| (este commit) | `docs: aceita adr-002 e registra a injeção sob demanda` |
+
+Primeira de duas branches que fecham a Fase 4 (a segunda é `feat/page-translation`, com o popup e o smoke manual).
+
+**O que foi feito:**
+
+- `src/shared/page-control.ts`: mensagens `page:inject` (popup → service worker) e `page:command` (popup → content), validadas.
+- `src/background/injection.ts`: injeção sob demanda de `content.js` e registro do `documentId`; a Port do job só é aceita desse documento.
+- `src/content/{index,controller,install-once}.ts`: entrada idempotente, comandos só de páginas da extensão, `pagehide` só de eventos confiáveis, `start` ignorado durante a tradução.
+- `vite.content.config.ts` + `scripts/verify-dist.mjs`: `content.js` em IIFE (18 KB) e verificação do pacote no build (script clássico, tokens proibidos, manifesto, sem sourcemaps, sem jsdom).
+- Manifesto: `activeTab`, `scripting`, `storage` e `minimum_chrome_version: "114"` (ADR-002 aceita).
+- `network` encerra o job; `storage.local` restrito a contextos confiáveis.
+- E2E: o mock do Ollama serve a fixture e `/api/chat` em NDJSON (ROT13 fora dos marcadores, UTF-8 cortado entre pacotes).
+
+**Revisão:** security e reviewer aprovaram com ressalvas, sem achado crítico ou alto. Aplicadas: `pagehide` sintético ignorado, `verify-dist` ampliado (provado com 8 pacotes adulterados), `start` sem reiniciar, aba substituída esquecida, contrato "inject antes de todo start".
+
+**Trabalho paralelo:** contrato primeiro; depois content (checkout), service worker (worktree) e build/manifesto (checkout, arquivos disjuntos) em paralelo; E2E e revisões em paralelo; correções em worktree. Integração por `cherry-pick`, sem conflitos.
+
+**Validações executadas:** `npm run lint`, `typecheck`, `test` (1378/1378; eram 1263), `build` (`verify-dist` ok) e `test:e2e` (14/14; 3 rodadas seguidas entre 17 e 19 s, sem flaky). Nenhuma dependência nova.
+
+**Pendências para `feat/page-translation`:** popup (Traduzir, Cancelar, Mostrar original/tradução, mensagens em PT-BR e acessibilidade) seguindo o contrato "inject antes de todo start"; smoke manual no Chrome real (aviso de permissão, páginas proibidas, modelo frio, `setAccessLevel`, `tabs.get` com `activeTab`).
 
 ## Fase 4 — `feat/page-job-protocol`
 
@@ -501,4 +542,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 4 — `feat/page-translation`: entrada do content script em build IIFE, permissões `activeTab` + `scripting` (ADR-002), popup com “Traduzir página” e “Mostrar original”, E2E com o mock do Ollama e smoke manual no Chrome real. Fecha o Gate da Fase 4.
+Fase 4 — `feat/page-translation`: popup com Traduzir, Cancelar e Mostrar original/tradução, mensagens em PT-BR e acessibilidade, seguindo o contrato “inject antes de todo start”, e smoke manual no Chrome real. Fecha o Gate da Fase 4.

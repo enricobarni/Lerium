@@ -28,10 +28,20 @@ const SETTINGS: TranslationSettings = {
   targetLanguage: 'pt-BR',
 };
 
+/** Documento em que o worker injetou o content script, por aba. */
+const INJECTED_DOCUMENTS = new Map([
+  [7, 'DOC-7'],
+  [8, 'DOC-8'],
+]);
+const isInjectedDocument = (tabId: number, documentId: string): boolean =>
+  INJECTED_DOCUMENTS.get(tabId) === documentId;
+
 const VALID_SENDER: PortSenderLike = {
   id: RUNTIME_ID,
   url: 'https://example.com/novel/chapter-1',
   frameId: 0,
+  documentId: 'DOC-7',
+  documentLifecycle: 'active',
   tab: { id: 7 },
 };
 
@@ -106,6 +116,7 @@ function setup(overrides: Partial<PageJobDeps> = {}) {
   const loadSettings = vi.fn(async () => SETTINGS);
   const handler = createPageJobHandler({
     runtimeId: RUNTIME_ID,
+    isInjectedDocument,
     loadSettings,
     createProvider,
     ...overrides,
@@ -143,12 +154,18 @@ describe('createPageJobHandler — remetente', () => {
     ['documento em prerender', { ...VALID_SENDER, documentLifecycle: 'prerender' }],
     ['documento no bfcache', { ...VALID_SENDER, documentLifecycle: 'cached' }],
     ['documento pendente de exclusão', { ...VALID_SENDER, documentLifecycle: 'pending_deletion' }],
+    ['documentLifecycle ausente', { ...VALID_SENDER, documentLifecycle: undefined }],
+    ['documentId ausente', { ...VALID_SENDER, documentId: undefined }],
+    ['documentId não registrado', { ...VALID_SENDER, documentId: 'DOC-OUTRO' }],
+    ['documentId de outra aba', { ...VALID_SENDER, documentId: 'DOC-8' }],
+    ['aba sem injeção registrada', { ...VALID_SENDER, tab: { id: 9 }, documentId: 'DOC-7' }],
   ];
 
   it.each(cases)('recusa %s sem responder', async (_label, sender, name) => {
     const loadSettings = vi.fn(async () => SETTINGS);
     const handler = createPageJobHandler({
       runtimeId: RUNTIME_ID,
+      isInjectedDocument,
       loadSettings,
       createProvider: () => createFakeProvider().provider,
     });
@@ -165,6 +182,7 @@ describe('createPageJobHandler — remetente', () => {
   it('aceita frame principal http', () => {
     const handler = createPageJobHandler({
       runtimeId: RUNTIME_ID,
+      isInjectedDocument,
       loadSettings: async () => SETTINGS,
       createProvider: () => createFakeProvider().provider,
     });
@@ -177,6 +195,7 @@ describe('createPageJobHandler — remetente', () => {
   it('aceita documento ativo', () => {
     const handler = createPageJobHandler({
       runtimeId: RUNTIME_ID,
+      isInjectedDocument,
       loadSettings: async () => SETTINGS,
       createProvider: () => createFakeProvider().provider,
     });
@@ -254,6 +273,31 @@ describe('createPageJobHandler — tradução', () => {
     expect(port.disconnect).not.toHaveBeenCalled();
   });
 
+  it('network (Ollama inacessível) → job:result, job:fatal e disconnect', async () => {
+    const { port, calls } = setup();
+    port.emit(unit());
+    await flush();
+    calls[0]!.resolve({ ok: false, error: 'network', retryable: true });
+    await flush();
+    expect(port.sent).toEqual([
+      {
+        type: 'job:result',
+        jobId: JOB_ID,
+        unitId: 'seg-0#text@1',
+        ok: false,
+        error: 'network',
+        retryable: true,
+      },
+      { type: 'job:fatal', jobId: JOB_ID, error: 'network' },
+    ]);
+    expect(port.disconnect).toHaveBeenCalledTimes(1);
+    expect(port.listenerCount()).toBe(0);
+    // Nada sai depois do desligamento.
+    port.emit(unit('seg-1#text@1'));
+    await flush();
+    expect(calls).toHaveLength(1);
+  });
+
   it.each(['invalid_config', 'model_missing', 'forbidden'] as const)(
     '%s → job:result, job:fatal e disconnect',
     async (error) => {
@@ -281,6 +325,7 @@ describe('createPageJobHandler — tradução', () => {
   it('provedor que rejeita vira internal_error', async () => {
     const handler = createPageJobHandler({
       runtimeId: RUNTIME_ID,
+      isInjectedDocument,
       loadSettings: async () => SETTINGS,
       createProvider: () => ({ translate: () => Promise.reject(new Error('boom')) }),
     });
@@ -513,7 +558,7 @@ describe('createPageJobHandler — progresso', () => {
 });
 
 describe('createPageJobHandler — uma port por aba', () => {
-  const otherTab: PortSenderLike = { ...VALID_SENDER, tab: { id: 8 } };
+  const otherTab: PortSenderLike = { ...VALID_SENDER, tab: { id: 8 }, documentId: 'DOC-8' };
 
   it('nova port da mesma aba derruba a anterior e aborta a unidade em voo', async () => {
     const { handler, port: first, calls } = setup();

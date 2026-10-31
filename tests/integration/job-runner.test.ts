@@ -270,6 +270,7 @@ describe('createJobRunner — fluxo completo', () => {
     runner.start();
     expect(runner.getState()).toEqual({
       status: 'translating',
+      view: 'translation',
       total: 3,
       done: 0,
       failed: 0,
@@ -293,6 +294,7 @@ describe('createJobRunner — fluxo completo', () => {
     );
     expect(runner.getState()).toEqual({
       status: 'translated',
+      view: 'translation',
       total: 3,
       done: 3,
       failed: 0,
@@ -325,7 +327,7 @@ describe('createJobRunner — fluxo completo', () => {
     runner.start();
     port().runToEnd(upperCase);
     const keys = new Set(states.flatMap((state) => Object.keys(state)));
-    expect([...keys].sort()).toEqual(['done', 'failed', 'skipped', 'status', 'total']);
+    expect([...keys].sort()).toEqual(['done', 'failed', 'skipped', 'status', 'total', 'view']);
     expect(JSON.stringify(states)).not.toMatch(/hello|plain|world/i);
   });
 
@@ -336,6 +338,7 @@ describe('createJobRunner — fluxo completo', () => {
     expect(ports).toHaveLength(0);
     expect(runner.getState()).toEqual({
       status: 'translated',
+      view: 'translation',
       total: 0,
       done: 0,
       failed: 0,
@@ -434,6 +437,7 @@ describe('createJobRunner — validação de mensagens', () => {
     current.runToEnd(upperCase);
     expect(runner.getState()).toEqual({
       status: 'translated',
+      view: 'translation',
       total: 3,
       done: 3,
       failed: 0,
@@ -462,6 +466,7 @@ describe('createJobRunner — falhas de unidade e fallback', () => {
     expect(bodyHtml(document)).toBe('<p>HELLO <b>BOLD</b> WORLD.</p><p>LAST LINE.</p>');
     expect(runner.getState()).toEqual({
       status: 'translated',
+      view: 'translation',
       total: 2,
       done: 2,
       failed: 0,
@@ -485,6 +490,7 @@ describe('createJobRunner — falhas de unidade e fallback', () => {
     );
     expect(runner.getState()).toEqual({
       status: 'translated',
+      view: 'translation',
       total: 3,
       done: 1,
       failed: 2,
@@ -524,6 +530,7 @@ describe('createJobRunner — falhas de unidade e fallback', () => {
     expect(bodyHtml(document)).toBe('<p>First line.</p><p>SECOND LINE.</p>');
     expect(runner.getState()).toEqual({
       status: 'translated',
+      view: 'translation',
       total: 2,
       done: 1,
       failed: 1,
@@ -546,6 +553,7 @@ describe('createJobRunner — falhas de unidade e fallback', () => {
     expect(serialize(document)).toBe(before);
     expect(runner.getState()).toEqual({
       status: 'translated',
+      view: 'translation',
       total: 1,
       done: 0,
       failed: 1,
@@ -563,6 +571,7 @@ describe('createJobRunner — falhas de unidade e fallback', () => {
     const fake = port();
     expect(runner.getState()).toEqual({
       status: 'translating',
+      view: 'translation',
       total: 2,
       done: 0,
       failed: 0,
@@ -573,6 +582,7 @@ describe('createJobRunner — falhas de unidade e fallback', () => {
     expect(unitsOf(fake)[0]?.text).toBe('Short line.');
     expect(runner.getState()).toEqual({
       status: 'translated',
+      view: 'translation',
       total: 2,
       done: 1,
       failed: 0,
@@ -599,6 +609,7 @@ describe('createJobRunner — término anormal', () => {
 
     expect(runner.getState()).toEqual({
       status: 'error',
+      view: 'translation',
       error: 'model_missing',
       total: 3,
       done: 1,
@@ -654,6 +665,7 @@ describe('createJobRunner — término anormal', () => {
     expect(fake.listenerCount()).toBe(0);
     expect(runner.getState()).toEqual({
       status: 'cancelled',
+      view: 'translation',
       total: 3,
       done: 1,
       failed: 0,
@@ -711,6 +723,147 @@ describe('createJobRunner — original e tradução', () => {
   });
 });
 
+describe('createJobRunner — visualização', () => {
+  it('começa em original; start passa a translation', () => {
+    const document = parse(MIXED_PAGE);
+    const { runner, states } = setup(document);
+    expect(runner.getState()).toEqual({
+      status: 'idle',
+      view: 'original',
+      total: 0,
+      done: 0,
+      failed: 0,
+      skipped: 0,
+    });
+    runner.start();
+    expect(states[0]).toMatchObject({ status: 'translating', view: 'translation' });
+  });
+
+  it('showOriginal e showTranslation emitem só quando a visualização muda', () => {
+    const document = parse(MIXED_PAGE);
+    const { runner, port, states } = setup(document);
+    runner.start();
+    port().runToEnd(upperCase);
+    const count = states.length;
+
+    runner.showOriginal();
+    expect(states).toHaveLength(count + 1);
+    expect(states[count]).toMatchObject({ status: 'translated', view: 'original', done: 3 });
+    runner.showOriginal();
+    expect(states).toHaveLength(count + 1);
+
+    runner.showTranslation();
+    expect(states).toHaveLength(count + 2);
+    expect(states[count + 1]).toMatchObject({ status: 'translated', view: 'translation' });
+    runner.showTranslation();
+    expect(states).toHaveLength(count + 2);
+    expect(runner.getState().view).toBe('translation');
+  });
+
+  it('showOriginal durante o job emite um único estado cancelled/original', () => {
+    const document = parse(MIXED_PAGE);
+    const { runner, port, states } = setup(document);
+    runner.start();
+    port().reply(upperCase);
+    const count = states.length;
+    runner.showOriginal();
+    expect(states.slice(count)).toEqual([
+      { status: 'cancelled', view: 'original', total: 3, done: 1, failed: 0, skipped: 0 },
+    ]);
+  });
+
+  it('showTranslation em idle não faz nada', () => {
+    const document = parse(MIXED_PAGE);
+    const before = serialize(document);
+    const { runner, states } = setup(document);
+    runner.showTranslation();
+    runner.showOriginal();
+    expect(states).toHaveLength(0);
+    expect(runner.getState()).toMatchObject({ status: 'idle', view: 'original' });
+    expect(serialize(document)).toBe(before);
+  });
+
+  it('start a partir de original volta a translation e retraduz do original', () => {
+    const document = parse('<p>Only line.</p>');
+    const { runner, ports } = setup(document);
+    runner.start();
+    (ports[0] as FakePort).runToEnd(upperCase);
+    runner.showOriginal();
+    runner.start();
+    expect(runner.getState()).toMatchObject({ status: 'translating', view: 'translation' });
+    (ports[1] as FakePort).runToEnd(upperCase);
+    expect(bodyHtml(document)).toBe('<p>ONLY LINE.</p>');
+  });
+});
+
+describe('createJobRunner — dispose', () => {
+  it('encerra o job sem emitir e limpa porta e timer', () => {
+    const document = parse(MIXED_PAGE);
+    const { runner, port, states } = setup(document);
+    runner.start();
+    const fake = port();
+    fake.reply(upperCase);
+    const pending = fake.inFlight[0] as JobUnitMessage;
+    const afterFirst = serialize(document);
+    const count = states.length;
+
+    runner.dispose();
+    expect(states).toHaveLength(count);
+    expect(fake.disconnected()).toBe(true);
+    expect(fake.listenerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(runner.getState()).toMatchObject({ status: 'cancelled', done: 1 });
+
+    fake.emitQueued({
+      type: 'job:result',
+      jobId: pending.jobId,
+      unitId: pending.unitId,
+      ok: true,
+      text: 'X',
+    });
+    expect(serialize(document)).toBe(afterFirst);
+    expect(states).toHaveLength(count);
+  });
+
+  it('depois do dispose todo comando é no-op e o DOM fica como está', () => {
+    const document = parse(MIXED_PAGE);
+    const { runner, ports, states } = setup(document);
+    runner.start();
+    (ports[0] as FakePort).runToEnd(upperCase);
+    const translated = serialize(document);
+    const count = states.length;
+    const last = runner.getState();
+
+    runner.dispose();
+    runner.showOriginal();
+    runner.showTranslation();
+    runner.cancel();
+    runner.start();
+    runner.dispose();
+
+    expect(ports).toHaveLength(1);
+    expect(states).toHaveLength(count);
+    expect(serialize(document)).toBe(translated);
+    expect(runner.getState()).toEqual(last);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('dispose dentro do onState para o job sem exceção', () => {
+    const document = parse(MIXED_PAGE);
+    const { runner, port, states } = setup(document, (state, self) => {
+      if (state.done === 1) self.dispose();
+    });
+    runner.start();
+    const fake = port();
+    expect(() => fake.reply(upperCase)).not.toThrow();
+    expect(unitsOf(fake)).toHaveLength(1);
+    expect(fake.disconnected()).toBe(true);
+    expect(states[states.length - 1]).toMatchObject({ status: 'translating', done: 1 });
+    expect(runner.getState().status).toBe('cancelled');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
 describe('createJobRunner — ping', () => {
   it('envia job:ping a cada 20 s com unidade em voo e limpa o timer ao fim', () => {
     const document = parse(MIXED_PAGE);
@@ -759,6 +912,7 @@ describe('createJobRunner — sequências reais do service worker', () => {
 
     expect(runner.getState()).toEqual({
       status: 'error',
+      view: 'translation',
       error: 'model_missing',
       total: 3,
       done: 1,
@@ -788,6 +942,7 @@ describe('createJobRunner — sequências reais do service worker', () => {
     fake.emit({ type: 'job:fatal', jobId: JOB_IDS[0], error: 'settings_unavailable' });
     expect(runner.getState()).toEqual({
       status: 'error',
+      view: 'translation',
       error: 'settings_unavailable',
       total: 3,
       done: 0,
@@ -830,6 +985,7 @@ describe('createJobRunner — sequências reais do service worker', () => {
     expect(unitsOf(current)).toHaveLength(1);
     expect(runner.getState()).toEqual({
       status: 'translating',
+      view: 'translation',
       total: 3,
       done: 0,
       failed: 0,
@@ -852,6 +1008,7 @@ describe('createJobRunner — sequências reais do service worker', () => {
 
     expect(runner.getState()).toEqual({
       status: 'cancelled',
+      view: 'translation',
       total: 3,
       done: 1,
       failed: 0,
@@ -899,6 +1056,7 @@ describe('createJobRunner — sequências reais do service worker', () => {
     expect(current.inFlight).toHaveLength(1);
     expect(runner.getState()).toEqual({
       status: 'translating',
+      view: 'translation',
       total: 3,
       done: 0,
       failed: 0,
@@ -916,6 +1074,7 @@ describe('createJobRunner — sequências reais do service worker', () => {
     );
     expect(runner.getState()).toEqual({
       status: 'translated',
+      view: 'translation',
       total: 3,
       done: 3,
       failed: 0,
