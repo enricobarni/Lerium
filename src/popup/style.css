@@ -1,21 +1,38 @@
+/*
+ * Tokens alinhados às opções (src/options/style.css). Contrastes medidos (WCAG):
+ * claro (fundo #ffffff): texto #1f2937 14,7:1; erro #b91c1c 6,47:1;
+ *   barra de aviso #6b7280 4,83:1; marca/foco #4f46e5 6,29:1.
+ * escuro (fundo #111827): texto #f3f4f6 16,1:1; erro #fca5a5 9,35:1;
+ *   barra de aviso #9ca3af 6,99:1; foco/secundário #a5b4fc 8,90:1.
+ */
 :root {
   color-scheme: light dark;
   --color-text: #1f2937;
   --color-background: #ffffff;
+  --color-error: #b91c1c;
+  --color-bar: #6b7280;
   --color-brand: #4f46e5;
   --color-brand-hover: #4338ca;
   --color-on-brand: #ffffff;
   --color-focus: #4f46e5;
   --color-button-border: transparent;
+  --color-secondary-text: #4f46e5;
+  --color-secondary-hover-text: #4338ca;
+  --color-secondary-hover-bg: #eef2ff;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --color-text: #f3f4f6;
     --color-background: #111827;
+    --color-error: #fca5a5;
+    --color-bar: #9ca3af;
     --color-focus: #a5b4fc;
     /* Botão #4f46e5 tem só 2,8:1 sobre o fundo escuro; a borda (8,9:1) delimita o controle. */
     --color-button-border: #a5b4fc;
+    --color-secondary-text: #a5b4fc;
+    --color-secondary-hover-text: #c7d2fe;
+    --color-secondary-hover-bg: #1e1b4b;
   }
 }
 
@@ -45,7 +62,39 @@ h1 {
 }
 
 p {
-  margin: 0 0 1rem;
+  margin: 0;
+}
+
+#page-message {
+  margin-bottom: 0.75rem;
+}
+
+/* O tom reforça o texto, que já diz o resultado; não é o único sinal. */
+#page-message[data-tone='error'] {
+  font-weight: 600;
+  color: var(--color-error);
+}
+
+#page-message[data-tone='warning'] {
+  padding-left: 0.5rem;
+  border-left: 4px solid var(--color-bar);
+  font-weight: 600;
+}
+
+/* Sem regra de display com [hidden] presente: o atributo precisa esconder a barra. */
+#page-progress:not([hidden]) {
+  display: block;
+  width: 100%;
+  height: 0.5rem;
+  margin: 0 0 0.75rem;
+  /* Foco, não marca: no tema escuro a marca teria só 2,8:1 sobre o fundo. */
+  accent-color: var(--color-focus);
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
 #feedback {
@@ -60,23 +109,61 @@ button {
   width: 100%;
   min-height: 2.25rem;
   padding: 0.5rem 1rem;
-  border: 1px solid var(--color-button-border);
   border-radius: 0.375rem;
   font: inherit;
   font-weight: 600;
-  color: var(--color-on-brand);
-  background-color: var(--color-brand);
   cursor: pointer;
-  transition: background-color 150ms ease-in-out;
+  transition:
+    background-color 150ms ease-in-out,
+    color 150ms ease-in-out;
 }
 
-button:hover {
+/*
+ * O [hidden] do navegador perde para qualquer regra de autor que defina
+ * `display` no botão; reforça o atributo para que um `display` futuro aqui
+ * (ex.: inline-flex) não mostre botões ocultos.
+ */
+button[hidden] {
+  display: none;
+}
+
+.primary {
+  border: 1px solid var(--color-button-border);
+  color: var(--color-on-brand);
+  background-color: var(--color-brand);
+}
+
+.primary:hover {
   background-color: var(--color-brand-hover);
 }
 
-button:focus-visible {
+.secondary {
+  border: 1px solid var(--color-secondary-text);
+  color: var(--color-secondary-text);
+  background-color: transparent;
+}
+
+.secondary:hover {
+  color: var(--color-secondary-hover-text);
+  background-color: var(--color-secondary-hover-bg);
+}
+
+button:focus-visible,
+[tabindex='-1']:focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
