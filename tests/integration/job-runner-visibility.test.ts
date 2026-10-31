@@ -1,0 +1,486 @@
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { createJobRunner, type JobRunner, type JobState } from '../../src/content/job-runner';
+import type { BlockRect } from '../../src/content/segment-priority';
+import type { VisibilityChange, VisibilityZone } from '../../src/content/visibility-watcher';
+import { PAGE_JOB_PORT_NAME, type JobUnitMessage } from '../../src/shared/page-messages';
+import type { PortLike } from '../../src/shared/port-like';
+
+/**
+ * Reordenação por visibilidade no executor: o observador é falso e só emite
+ * quando o teste manda, como o IntersectionObserver real (assíncrono).
+ */
+
+const JOB_IDS = ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'];
+
+const VIEWPORT_HEIGHT = 600;
+const VISIBLE_RECT: BlockRect = { top: 0, bottom: 20, width: 100, height: 20 };
+const BELOW_RECT: BlockRect = { top: 1000, bottom: 1020, width: 100, height: 20 };
+
+/** Bloco com `data-pos="below"` fica abaixo da viewport; o resto é visível. */
+const byPosition = (block: Element): BlockRect =>
+  block.getAttribute('data-pos') === 'below' ? BELOW_RECT : VISIBLE_RECT;
+
+const upperCase = (text: string): string =>
+  text.replace(/<\/?g\d+>|\p{L}+/gu, (match) =>
+    match.startsWith('<') ? match : match.toUpperCase(),
+  );
+
+const dropMarkers = (text: string): string => upperCase(text.replace(/<\/?g\d+>/gu, ''));
+
+function parse(body: string): Document {
+  return new DOMParser().parseFromString(
+    `<!doctype html><html><body>${body}</body></html>`,
+    'text/html',
+  );
+}
+
+interface FakePort {
+  readonly port: PortLike;
+  readonly sent: JobUnitMessage[];
+  readonly inFlight: JobUnitMessage[];
+  emit(message: unknown): void;
+  reply(translate: (text: string) => string): void;
+  drop(): void;
+}
+
+function createFakePort(): FakePort {
+  const messageListeners = new Set<(message: unknown) => void>();
+  const disconnectListeners = new Set<() => void>();
+  const sent: JobUnitMessage[] = [];
+  const inFlight: JobUnitMessage[] = [];
+  let disconnected = false;
+  const emit = (message: unknown): void => {
+    for (const listener of [...messageListeners]) listener(message);
+  };
+  return {
+    port: {
+      name: PAGE_JOB_PORT_NAME,
+      postMessage(message) {
+        if (disconnected) throw new Error('Attempting to use a disconnected port object');
+        const unit = message as JobUnitMessage;
+        if (unit.type !== 'job:unit') return;
+        sent.push(unit);
+        inFlight.push(unit);
+      },
+      disconnect() {
+        disconnected = true;
+      },
+      onMessage: {
+        addListener: (listener) => messageListeners.add(listener),
+        removeListener: (listener) => messageListeners.delete(listener),
+      },
+      onDisconnect: {
+        addListener: (listener) => disconnectListeners.add(listener),
+        removeListener: (listener) => disconnectListeners.delete(listener),
+      },
+    },
+    sent,
+    inFlight,
+    emit,
+    reply(translate) {
+      const unit = inFlight.shift();
+      if (unit === undefined) throw new Error('nenhuma unidade em voo');
+      emit({
+        type: 'job:result',
+        jobId: unit.jobId,
+        unitId: unit.unitId,
+        ok: true,
+        text: translate(unit.text),
+      });
+    },
+    drop() {
+      disconnected = true;
+      for (const listener of [...disconnectListeners]) listener();
+    },
+  };
+}
+
+interface FakeWatcher {
+  /** Blocos observados agora. */
+  readonly observed: Set<Element>;
+  /** Todo bloco que já foi observado, em ordem. */
+  readonly everObserved: Element[];
+  readonly unobserved: Element[];
+  disconnects: number;
+  /** Entrega um lote ao executor, mesmo depois de `disconnect` (evento atrasado). */
+  emit(changes: readonly VisibilityChange[]): void;
+}
+
+interface Harness {
+  readonly runner: JobRunner;
+  readonly ports: FakePort[];
+  readonly watchers: FakeWatcher[];
+  readonly states: JobState[];
+  readonly measured: () => number;
+  readonly port: () => FakePort;
+  readonly watcher: () => FakeWatcher;
+}
+
+interface SetupOptions {
+  maxInFlight?: number;
+  withWatcher?: boolean;
+}
+
+function setup(document: Document, options: SetupOptions = {}): Harness {
+  const ports: FakePort[] = [];
+  const watchers: FakeWatcher[] = [];
+  const states: JobState[] = [];
+  let measured = 0;
+  let nextId = 0;
+  const runner = createJobRunner({
+    root: document,
+    connect: () => {
+      const fake = createFakePort();
+      ports.push(fake);
+      return fake.port;
+    },
+    randomUUID: () => JOB_IDS[nextId++] as string,
+    setInterval: (fn, ms) => setInterval(fn, ms),
+    clearInterval: (id) => clearInterval(id as Parameters<typeof clearInterval>[0]),
+    measure: (block) => {
+      measured += 1;
+      return byPosition(block);
+    },
+    viewportHeight: () => VIEWPORT_HEIGHT,
+    clock: () => Number.NaN,
+    maxInFlight: options.maxInFlight ?? 1,
+    ...(options.withWatcher === false
+      ? {}
+      : {
+          createVisibilityWatcher: (onChange: (changes: readonly VisibilityChange[]) => void) => {
+            const fake: FakeWatcher = {
+              observed: new Set(),
+              everObserved: [],
+              unobserved: [],
+              disconnects: 0,
+              emit: (changes) => onChange(changes),
+            };
+            watchers.push(fake);
+            return {
+              observe(block: Element) {
+                fake.observed.add(block);
+                fake.everObserved.push(block);
+              },
+              unobserve(block: Element) {
+                fake.observed.delete(block);
+                fake.unobserved.push(block);
+              },
+              disconnect() {
+                fake.observed.clear();
+                fake.disconnects += 1;
+              },
+            };
+          },
+        }),
+    onState: (state) => states.push(state),
+  });
+  const last = <T>(items: T[], what: string): T => {
+    const item = items[items.length - 1];
+    if (item === undefined) throw new Error(`nenhum ${what}`);
+    return item;
+  };
+  return {
+    runner,
+    ports,
+    watchers,
+    states,
+    measured: () => measured,
+    port: () => last(ports, 'porta'),
+    watcher: () => last(watchers, 'observador'),
+  };
+}
+
+/** `seg-0#text@7` → `seg-0#text`. */
+const labelOf = (unit: JobUnitMessage): string => unit.unitId.replace(/@\d+$/u, '');
+const labels = (fake: FakePort): string[] => fake.sent.map(labelOf);
+const segmentsSent = (fake: FakePort): string[] =>
+  labels(fake).map((label) => label.replace(/#.*$/u, ''));
+
+const blocks = (document: Document): Element[] => [...document.querySelectorAll('p')];
+
+/** Lote com o bloco `index` (entre os `<p>`) na zona dada. */
+function changes(document: Document, ...pairs: [number, VisibilityZone][]): VisibilityChange[] {
+  const all = blocks(document);
+  return pairs.map(([index, zone]) => {
+    const block = all[index];
+    if (block === undefined) throw new Error(`bloco ${String(index)} não existe`);
+    return { block, zone };
+  });
+}
+
+/** Responde uma unidade por vez até o fim (janela 1). */
+function runToEnd(fake: FakePort, translate = upperCase): void {
+  while (fake.inFlight.length > 0) fake.reply(translate);
+}
+
+/** Um visível no topo e `count` parágrafos abaixo da viewport. */
+const page = (count: number): string =>
+  '<p>Top line.</p>' +
+  Array.from(
+    { length: count },
+    (_, index) => `<p data-pos="below">Line ${String(index + 1)}.</p>`,
+  ).join('');
+
+const consoleMethods = ['log', 'info', 'warn', 'error', 'debug'] as const;
+let consoleSpies: MockInstance[] = [];
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  consoleSpies = consoleMethods.map((method) =>
+    vi.spyOn(console, method).mockImplementation(() => undefined),
+  );
+});
+
+afterEach(() => {
+  for (const spy of consoleSpies) {
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  }
+  expect(vi.getTimerCount()).toBe(0);
+  vi.useRealTimers();
+});
+
+describe('createJobRunner — reordenação por visibilidade', () => {
+  it('bloco que entra em visible é o próximo enviado', () => {
+    const document = parse(page(3));
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    expect(segmentsSent(fake)).toEqual(['seg-0']);
+
+    watcher().emit(changes(document, [3, 'visible']));
+    fake.reply(upperCase);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-3']);
+    runToEnd(fake);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-3', 'seg-1', 'seg-2']);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4, failed: 0 });
+  });
+
+  it('sair de visible (para near ou out) rebaixa para a frente da classe 1', () => {
+    const document = parse(
+      '<p>One.</p><p>Two.</p><p>Three.</p><p>Four.</p><p data-pos="below">Five.</p>',
+    );
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    // Observação inicial: os quatro estão na tela.
+    watcher().emit(changes(document, [1, 'visible'], [2, 'visible'], [3, 'visible']));
+    watcher().emit(changes(document, [1, 'near']));
+    watcher().emit(changes(document, [2, 'out']));
+    runToEnd(fake);
+    // seg-2 rebaixado por último fica à frente de seg-1; ambos antes de seg-4.
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-3', 'seg-2', 'seg-1', 'seg-4']);
+  });
+
+  it('near promove para a frente da classe 1; near sem ter saído de visible não rebaixa', () => {
+    const document = parse(page(3));
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    watcher().emit(changes(document, [3, 'near']));
+    runToEnd(fake);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-3', 'seg-1', 'seg-2']);
+
+    const other = parse('<p>One.</p><p>Two.</p><p data-pos="below">Three.</p>');
+    const second = setup(other);
+    second.runner.start();
+    // `near` antes de `visible` na observação inicial: segue na classe 0.
+    second.watcher().emit(changes(other, [1, 'near']));
+    runToEnd(second.port());
+    expect(segmentsSent(second.port())).toEqual(['seg-0', 'seg-1', 'seg-2']);
+  });
+
+  it('o lote é aplicado em ordem de documento, qualquer que seja a ordem das entradas', () => {
+    const toVisible = parse(page(4));
+    const first = setup(toVisible);
+    first.runner.start();
+    first.watcher().emit(changes(toVisible, [4, 'visible'], [2, 'visible']));
+    runToEnd(first.port());
+    expect(segmentsSent(first.port())).toEqual(['seg-0', 'seg-2', 'seg-4', 'seg-1', 'seg-3']);
+
+    const toNear = parse(page(4));
+    const second = setup(toNear);
+    second.runner.start();
+    second.watcher().emit(changes(toNear, [4, 'near'], [3, 'near']));
+    runToEnd(second.port());
+    expect(segmentsSent(second.port())).toEqual(['seg-0', 'seg-3', 'seg-4', 'seg-1', 'seg-2']);
+  });
+
+  it('periféricos nunca são observados nem movidos', () => {
+    const document = parse(
+      '<nav><p>Menu.</p></nav><p data-pos="below">Far.</p><p>Seen.</p><footer><p>Foot.</p></footer>',
+    );
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const all = blocks(document);
+    // Ordem da classificação (visível primeiro); nada de nav nem footer.
+    expect(watcher().everObserved).toHaveLength(2);
+    expect(watcher().everObserved[0]).toBe(all[2]);
+    expect(watcher().everObserved[1]).toBe(all[1]);
+    // Evento para um bloco não observado não muda nada.
+    watcher().emit(changes(document, [0, 'visible'], [3, 'visible']));
+    runToEnd(port());
+    expect(segmentsSent(port())).toEqual(['seg-2', 'seg-1', 'seg-0', 'seg-3']);
+  });
+
+  it('o callback só reordena: não envia, não aplica e não mede', () => {
+    const document = parse(page(3));
+    const before = new XMLSerializer().serializeToString(document);
+    const { runner, port, watcher, states, measured } = setup(document, { maxInFlight: 2 });
+    runner.start();
+    const fake = port();
+    const sentBefore = fake.sent.length;
+    const statesBefore = states.length;
+    const measuredBefore = measured();
+
+    watcher().emit(changes(document, [3, 'visible'], [1, 'near']));
+    watcher().emit(changes(document, [3, 'out']));
+
+    expect(fake.sent).toHaveLength(sentBefore);
+    expect(states).toHaveLength(statesBefore);
+    expect(measured()).toBe(measuredBefore);
+    expect(new XMLSerializer().serializeToString(document)).toBe(before);
+    runToEnd(fake);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4 });
+  });
+
+  it('unobserve só quando a última unidade do grupo sai da fila', () => {
+    const document = parse('<p>Top.</p><p data-pos="below">Hello<!--x--> world</p>');
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    const [top, perNode] = blocks(document) as [Element, Element];
+    expect(watcher().unobserved).toEqual([top]);
+
+    fake.reply(upperCase);
+    expect(labels(fake)).toEqual(['seg-0#text', 'seg-1#node-0']);
+    // Uma unidade do grupo ainda na fila: continua observado e movível.
+    expect(watcher().observed.has(perNode)).toBe(true);
+    fake.reply(upperCase);
+    expect(labels(fake)).toEqual(['seg-0#text', 'seg-1#node-0', 'seg-1#node-1']);
+    expect(watcher().unobserved).toEqual([top, perNode]);
+    expect(watcher().observed.size).toBe(0);
+    fake.reply(upperCase);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 2 });
+  });
+
+  it('bloco com dois segmentos sai só quando os dois saem da fila', () => {
+    const document = parse('<p>Top.</p><p data-pos="below">First half.<br>Second half.</p>');
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    const shared = blocks(document)[1] as Element;
+    fake.reply(upperCase);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1']);
+    expect(watcher().observed.has(shared)).toBe(true);
+    fake.reply(upperCase);
+    expect(watcher().observed.has(shared)).toBe(false);
+    runToEnd(fake);
+  });
+
+  describe('disconnect em todo término; eventos depois são ignorados', () => {
+    const terminations: [string, (harness: Harness) => void][] = [
+      ['cancel', ({ runner }) => runner.cancel()],
+      [
+        'job:fatal',
+        ({ port }) => port().emit({ type: 'job:fatal', jobId: JOB_IDS[0], error: 'network' }),
+      ],
+      ['interrupted', ({ port }) => port().drop()],
+      ['translated', ({ port }) => runToEnd(port())],
+      ['dispose', ({ runner }) => runner.dispose()],
+      ['showOriginal', ({ runner }) => runner.showOriginal()],
+      ['restart', ({ runner }) => runner.start()],
+    ];
+
+    it.each(terminations)('%s', (_, terminate) => {
+      const document = parse(page(3));
+      const harness = setup(document);
+      harness.runner.start();
+      const old = harness.watcher();
+      const oldPort = harness.port();
+      terminate(harness);
+
+      expect(old.disconnects).toBe(1);
+      expect(old.observed.size).toBe(0);
+      const sent = oldPort.sent.length;
+      const state = harness.runner.getState();
+      expect(() => old.emit(changes(document, [3, 'visible'], [1, 'near']))).not.toThrow();
+      expect(oldPort.sent).toHaveLength(sent);
+      expect(harness.runner.getState()).toEqual(state);
+      // Restart: o job novo segue a ordem própria, sem efeito do evento velho.
+      if (harness.watchers.length === 2) {
+        runToEnd(harness.port());
+        expect(segmentsSent(harness.port())).toEqual(['seg-0', 'seg-1', 'seg-2', 'seg-3']);
+      }
+    });
+  });
+
+  it('fallback nó a nó herda a classe atual do segmento promovido', () => {
+    const document = parse(
+      '<p>Top.</p><p data-pos="below">One.</p><p data-pos="below">Two.</p>' +
+        '<p data-pos="below">Far <i>away</i> text.</p><p data-pos="below">Four.</p>',
+    );
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    watcher().emit(changes(document, [3, 'visible'], [4, 'visible']));
+    fake.reply(upperCase);
+    expect(labels(fake)).toEqual(['seg-0#text', 'seg-3#markers']);
+    fake.reply(dropMarkers);
+    runToEnd(fake);
+    // Na classe 0 (atual), à frente de seg-4; na inicial (1) sairia depois dele.
+    expect(labels(fake)).toEqual([
+      'seg-0#text',
+      'seg-3#markers',
+      'seg-3#node-0',
+      'seg-3#node-1',
+      'seg-3#node-2',
+      'seg-4#text',
+      'seg-1#text',
+      'seg-2#text',
+    ]);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 5, failed: 0 });
+  });
+
+  it('fila finita: com rolagem contínua os periféricos ainda saem (sem aging)', () => {
+    const document = parse(
+      '<nav><p>Menu.</p></nav>' +
+        Array.from({ length: 6 }, (_, i) => `<p data-pos="below">Line ${String(i)}.</p>`).join(''),
+    );
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    const zones: VisibilityZone[] = ['visible', 'near', 'out'];
+    let tick = 0;
+    while (fake.inFlight.length > 0) {
+      const index = 1 + (tick % 6);
+      watcher().emit(changes(document, [index, zones[tick % 3] as VisibilityZone]));
+      tick += 1;
+      fake.reply(upperCase);
+    }
+    const sent = segmentsSent(fake);
+    expect(sent).toHaveLength(7);
+    expect(new Set(sent).size).toBe(7);
+    expect(sent[sent.length - 1]).toBe('seg-0');
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 7 });
+    expect(watcher().disconnects).toBe(1);
+  });
+
+  it('sem a dependência a ordem é a da classificação inicial', () => {
+    const document = parse(page(3));
+    const { runner, port, watchers } = setup(document, { withWatcher: false });
+    runner.start();
+    runToEnd(port());
+    expect(watchers).toHaveLength(0);
+    expect(segmentsSent(port())).toEqual(['seg-0', 'seg-1', 'seg-2', 'seg-3']);
+  });
+
+  it('página só com periféricos não cria observador', () => {
+    const document = parse('<nav><p>Menu.</p></nav>');
+    const { runner, port, watchers } = setup(document);
+    runner.start();
+    expect(watchers).toHaveLength(0);
+    runToEnd(port());
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 1 });
+  });
+});

@@ -20,7 +20,7 @@ import type { TranslationSegment } from './segmenter';
 export const PRIORITY_VISIBLE_MAIN = 0;
 export const PRIORITY_MAIN = 1;
 export const PRIORITY_PERIPHERAL = 2;
-/** Número de classes, para `createPriorityQueue(PRIORITY_CLASSES)`. */
+/** Número de classes, para `createGroupedPriorityQueue(PRIORITY_CLASSES)`. */
 export const PRIORITY_CLASSES = 3;
 
 export type SegmentPriority =

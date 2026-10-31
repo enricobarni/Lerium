@@ -3,13 +3,24 @@
  * ADR-004).
  *
  * Coleta → segmenta → classifica por prioridade (`classifySegments`, uma vez
- * por job) → planeja (ADR-013, ADR-014). Cada unidade entra numa fila com a
- * classe do seu segmento (unidades de um segmento em ordem) e sai para o
- * service worker por uma `PortLike`, com no máximo `maxInFlight` unidades em
- * voo (padrão `MAX_UNITS_IN_FLIGHT`). Cada `job:result` libera uma vaga; quando
- * todas as unidades de um plano chegaram (em qualquer ordem), o segmento é
- * aplicado. Um `markers_invalid` com fallback põe as unidades nó a nó do
- * segmento no início da sua classe, em ordem.
+ * por job) → planeja (ADR-013, ADR-014). As unidades de cada segmento formam
+ * um grupo (chave `segmentId`, em ordem) na fila, na classe do segmento, e
+ * saem para o service worker por uma `PortLike`, com no máximo `maxInFlight`
+ * unidades em voo (padrão `MAX_UNITS_IN_FLIGHT`). Cada `job:result` libera uma
+ * vaga; quando todas as unidades de um plano chegaram (em qualquer ordem), o
+ * segmento é aplicado. Um `markers_invalid` com fallback põe as unidades nó a
+ * nó do segmento no início da classe atual dele, em ordem.
+ *
+ * Rolagem (`deps.createVisibilityWatcher`, opcional): os blocos dos segmentos
+ * não periféricos em fila são observados. Entrar em `visible` leva o grupo ao
+ * fim da classe 0; sair de `visible` estando na classe 0, ou entrar em `near`
+ * estando na classe 1, leva-o à frente da classe 1. Cada lote é aplicado em
+ * ordem de documento. O callback só reordena: nunca envia nem chama `pump`;
+ * a ordem nova vale na próxima vaga. O bloco deixa de ser observado quando o
+ * grupo sai da fila (última unidade enviada) ou é aplicado, e o observador é
+ * desconectado em todo término; eventos depois disso são ignorados. Sem a
+ * dependência, a ordem é a da classificação inicial. Periféricos nunca são
+ * observados e a fila é finita, então eles sempre saem (sem aging).
  *
  * Sem `chrome`: a porta, o UUID, a geometria, os timers e o relógio são
  * injetados. Sem logs e sem texto no estado emitido (só contagens, tempos e
@@ -69,10 +80,10 @@
  */
 
 import {
+  createGroupedPriorityQueue,
   createInFlightWindow,
-  createPriorityQueue,
+  type GroupedPriorityQueue,
   type InFlightWindow,
-  type PriorityQueue,
 } from '../core/translation-scheduler';
 import {
   isUnitId,
@@ -87,11 +98,14 @@ import { createPageApplier, type SegmentPlan, type TranslationUnit } from './pag
 import {
   classifySegments,
   PRIORITY_CLASSES,
+  PRIORITY_MAIN,
+  PRIORITY_PERIPHERAL,
   PRIORITY_VISIBLE_MAIN,
   type BlockRect,
   type SegmentPriority,
 } from './segment-priority';
 import { segmentTextNodes } from './segmenter';
+import type { VisibilityChange, VisibilityWatcher, VisibilityZone } from './visibility-watcher';
 
 export type JobStatus = 'idle' | 'translating' | 'translated' | 'cancelled' | 'error';
 
@@ -128,6 +142,14 @@ export interface JobRunnerDeps {
    * lido: ler não cria entrada visível à página.
    */
   clock(): number;
+  /**
+   * Cria o observador de visibilidade de um job (no content real:
+   * `createVisibilityWatcher` com `IntersectionObserver`). Opcional: sem ele
+   * a ordem é a da classificação inicial (ADR-015).
+   */
+  createVisibilityWatcher?: (
+    onChange: (changes: readonly VisibilityChange[]) => void,
+  ) => VisibilityWatcher;
   /** Limite da janela; só para teste. Padrão `MAX_UNITS_IN_FLIGHT`. */
   maxInFlight?: number;
   onState?(state: JobState): void;
@@ -154,6 +176,7 @@ export type JobErrorKind = JobFatalErrorKind | typeof INTERRUPTED;
 /** Um plano em andamento: resultados chegam em qualquer ordem. */
 interface SegmentTask {
   readonly plan: SegmentPlan;
+  /** Classe da classificação inicial (base do `firstVisibleMs`). */
   readonly priority: SegmentPriority;
   readonly results: Map<string, string | null>;
   /** Unidades do plano ainda sem resultado. */
@@ -166,10 +189,29 @@ interface QueuedUnit {
   readonly unit: TranslationUnit | null;
 }
 
+/** Segmento não periférico acompanhado pelo observador de visibilidade. */
+interface TrackedSegment {
+  readonly block: Element;
+  /** Índice na ordem de documento. */
+  readonly order: number;
+  /** Classe atual na fila (muda com a rolagem); o fallback herda esta. */
+  priority: SegmentPriority;
+  /** Última zona informada pelo observador (começa em `out`, como ele). */
+  zone: VisibilityZone;
+  /** Ainda observado: o grupo do segmento está na fila. */
+  observed: boolean;
+}
+
 interface ActiveJob {
   readonly jobId: string;
   readonly port: PortLike;
-  readonly queue: PriorityQueue<QueuedUnit>;
+  /** Grupos por `segmentId`: as unidades de um segmento andam juntas. */
+  readonly queue: GroupedPriorityQueue<string, QueuedUnit>;
+  /** `segmentId` → acompanhamento; só segmentos não periféricos. */
+  readonly tracked: Map<string, TrackedSegment>;
+  /** Bloco observado → segmentos dele ainda observados. */
+  readonly blocks: Map<Element, Set<string>>;
+  watcher: VisibilityWatcher | undefined;
   /** Única fonte do que está em voo: `unitId` → plano a que pertence. */
   readonly window: InFlightWindow<SegmentTask>;
   timer: unknown;
@@ -200,28 +242,36 @@ function createTask(plan: SegmentPlan, priority: SegmentPriority): SegmentTask {
   return { plan, priority, results: new Map(), remaining: plan.units.length };
 }
 
-/** Enfileira as unidades do plano no fim da classe, em ordem. */
-function pushTask(queue: PriorityQueue<QueuedUnit>, task: SegmentTask): void {
-  if (task.plan.units.length === 0) {
-    queue.push({ task, unit: null }, task.priority);
-    return;
-  }
-  for (const unit of task.plan.units) queue.push({ task, unit }, task.priority);
+/** Itens do grupo do plano, em ordem; plano sem unidades vira um item `null`. */
+function itemsOf(task: SegmentTask): QueuedUnit[] {
+  if (task.plan.units.length === 0) return [{ task, unit: null }];
+  return task.plan.units.map((unit) => ({ task, unit }));
+}
+
+/** Destino de um segmento na fila depois de uma mudança de zona. */
+interface Placement {
+  readonly priority: SegmentPriority;
+  readonly position: 'front' | 'back';
 }
 
 /**
- * Enfileira as unidades do plano no início da classe, em ordem: `pushFront`
- * é LIFO dentro da classe, então vai do último para o primeiro.
+ * Para onde vai um segmento que passou de `segment.zone` para `zone`, ou
+ * `undefined` se fica onde está:
+ * - entrou em `visible` fora da classe 0 → fim da classe 0;
+ * - saiu de `visible` estando na classe 0 → frente da classe 1;
+ * - entrou em `near` estando na classe 1 → frente da classe 1.
  */
-function pushTaskFront(queue: PriorityQueue<QueuedUnit>, task: SegmentTask): void {
-  const { units } = task.plan;
-  if (units.length === 0) {
-    queue.pushFront({ task, unit: null }, task.priority);
-    return;
+function placementFor(segment: TrackedSegment, zone: VisibilityZone): Placement | undefined {
+  if (zone === 'visible') {
+    return segment.priority === PRIORITY_VISIBLE_MAIN
+      ? undefined
+      : { priority: PRIORITY_VISIBLE_MAIN, position: 'back' };
   }
-  for (let index = units.length - 1; index >= 0; index -= 1) {
-    queue.pushFront({ task, unit: units[index] as TranslationUnit }, task.priority);
+  const leftVisible = segment.zone === 'visible' && segment.priority === PRIORITY_VISIBLE_MAIN;
+  if (leftVisible || (zone === 'near' && segment.priority === PRIORITY_MAIN)) {
+    return { priority: PRIORITY_MAIN, position: 'front' };
   }
+  return undefined;
 }
 
 export function createJobRunner(deps: JobRunnerDeps): JobRunner {
@@ -264,9 +314,59 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     return durationMs === undefined ? next : { ...next, durationMs };
   };
 
+  /** Para de observar o segmento; o bloco sai quando não resta segmento dele. */
+  const unobserve = (job: ActiveJob, segmentId: string): void => {
+    const segment = job.tracked.get(segmentId);
+    if (segment === undefined || !segment.observed) return;
+    segment.observed = false;
+    const ids = job.blocks.get(segment.block);
+    if (ids === undefined) return;
+    ids.delete(segmentId);
+    if (ids.size > 0) return;
+    job.blocks.delete(segment.block);
+    job.watcher?.unobserve(segment.block);
+  };
+
+  /**
+   * Reordena a fila conforme as zonas novas. Só mexe na fila: não envia, não
+   * aplica e não chama `pump` (a próxima vaga que abrir já pega a ordem nova).
+   */
+  const handleVisibility = (job: ActiveJob, changes: readonly VisibilityChange[]): void => {
+    if (active !== job) return;
+    const touched: { segmentId: string; segment: TrackedSegment; zone: VisibilityZone }[] = [];
+    for (const { block, zone } of changes) {
+      const ids = job.blocks.get(block);
+      if (ids === undefined) continue;
+      for (const segmentId of ids) {
+        const segment = job.tracked.get(segmentId);
+        if (segment?.observed === true) touched.push({ segmentId, segment, zone });
+      }
+    }
+    touched.sort((a, b) => a.segment.order - b.segment.order);
+
+    const toBack: { segmentId: string; segment: TrackedSegment; placement: Placement }[] = [];
+    const toFront: typeof toBack = [];
+    for (const { segmentId, segment, zone } of touched) {
+      const placement = job.queue.has(segmentId) ? placementFor(segment, zone) : undefined;
+      segment.zone = zone;
+      if (placement === undefined) continue;
+      (placement.position === 'back' ? toBack : toFront).push({ segmentId, segment, placement });
+    }
+    // Fim da classe 0 em ordem de documento; frente da classe 1 do último para
+    // o primeiro, para que a frente fique em ordem de documento.
+    for (const { segmentId, segment, placement } of [...toBack, ...toFront.reverse()]) {
+      job.queue.move(segmentId, placement.priority, placement.position);
+      segment.priority = placement.priority;
+    }
+  };
+
   /** Encerra o job: fila, janela, timer, ouvintes e porta. Nada do job é aplicado depois. */
   const teardown = (job: ActiveJob): void => {
     if (active === job) active = null;
+    job.watcher?.disconnect();
+    job.watcher = undefined;
+    job.blocks.clear();
+    job.tracked.clear();
     job.queue.clear();
     job.window.clear();
     if (job.timer !== undefined) deps.clearInterval(job.timer);
@@ -285,9 +385,11 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     emit(finished({ ...state, status: 'error', error }));
   };
 
-  /** Aplica o plano completo; fallback volta à frente da própria classe. */
+  /** Aplica o plano completo; fallback volta à frente da classe atual do segmento. */
   const applyTask = (job: ActiveJob, task: SegmentTask): void => {
-    const result = applier.apply(task.plan.segmentId, task.results);
+    const { segmentId } = task.plan;
+    unobserve(job, segmentId);
+    const result = applier.apply(segmentId, task.results);
     if (result.ok) {
       const next: JobState = { ...state, done: state.done + 1 };
       if (task.priority === PRIORITY_VISIBLE_MAIN && state.firstVisibleMs === undefined) {
@@ -296,7 +398,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       }
       emit(next);
     } else if (result.fallback !== undefined) {
-      pushTaskFront(job.queue, createTask(result.fallback, task.priority));
+      // O fallback não é observado de novo: já sai à frente da classe atual.
+      const priority = job.tracked.get(segmentId)?.priority ?? task.priority;
+      job.queue.pushFront(segmentId, itemsOf(createTask(result.fallback, task.priority)), priority);
     } else {
       emit({ ...state, failed: state.failed + 1 });
     }
@@ -322,6 +426,8 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         return;
       }
       const { task, unit } = item;
+      // Grupo esvaziado: a posição dele não muda mais, então para de observar.
+      if (!job.queue.has(task.plan.segmentId)) unobserve(job, task.plan.segmentId);
       if (unit === null) {
         applyTask(job, task);
         continue;
@@ -399,12 +505,29 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         measure: (block) => deps.measure(block),
         viewportHeight: deps.viewportHeight(),
       });
-      const queue = createPriorityQueue<QueuedUnit>(PRIORITY_CLASSES);
+      const queue = createGroupedPriorityQueue<string, QueuedUnit>(PRIORITY_CLASSES);
+      const tracked = new Map<string, TrackedSegment>();
+      const blocks = new Map<Element, Set<string>>();
       let skipped = 0;
-      for (const { segment, priority } of classified) {
+      for (const { segment, priority, order } of classified) {
         const plan = applier.plan(segment);
-        if ('skipped' in plan) skipped += 1;
-        else pushTask(queue, createTask(plan, priority));
+        if ('skipped' in plan) {
+          skipped += 1;
+          continue;
+        }
+        queue.push(plan.segmentId, itemsOf(createTask(plan, priority)), priority);
+        // Periférico não é observado: a classe dele não depende da posição.
+        if (priority === PRIORITY_PERIPHERAL) continue;
+        tracked.set(plan.segmentId, {
+          block: segment.block,
+          order,
+          priority,
+          zone: 'out',
+          observed: true,
+        });
+        const ids = blocks.get(segment.block);
+        if (ids === undefined) blocks.set(segment.block, new Set([plan.segmentId]));
+        else ids.add(plan.segmentId);
       }
       const base: JobState = {
         status: 'translating',
@@ -431,6 +554,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         jobId: deps.randomUUID(),
         port,
         queue,
+        tracked,
+        blocks,
+        watcher: undefined,
         window: createInFlightWindow<SegmentTask>(maxInFlight),
         timer: undefined,
         onMessage: (message) => handleMessage(job, message),
@@ -449,6 +575,11 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
           if (active === job) fail(job, INTERRUPTED);
         }
       }, PING_INTERVAL_MS);
+      if (deps.createVisibilityWatcher !== undefined && blocks.size > 0) {
+        const watcher = deps.createVisibilityWatcher((changes) => handleVisibility(job, changes));
+        job.watcher = watcher;
+        for (const block of blocks.keys()) watcher.observe(block);
+      }
       emit(base);
       pump(job);
     },

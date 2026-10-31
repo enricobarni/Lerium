@@ -8,6 +8,7 @@ import { PAGE_JOB_PORT_NAME } from '../shared/page-messages';
 import { createContentController, handlePageHide } from './controller';
 import { installOnce } from './install-once';
 import { createJobRunner } from './job-runner';
+import { createVisibilityWatcher } from './visibility-watcher';
 
 const INSTALL_KEY = Symbol.for('lerium.content');
 
@@ -22,6 +23,12 @@ installOnce(globalThis, INSTALL_KEY, () => {
     viewportHeight: () => window.innerHeight,
     // Só leitura do relógio: nada de `performance.mark` (visível à página).
     clock: () => performance.now(),
+    // Geometria só pelo IntersectionObserver: nada de leitura síncrona aqui.
+    createVisibilityWatcher: (onChange) =>
+      createVisibilityWatcher(
+        (callback, options) => new IntersectionObserver(callback, options),
+        onChange,
+      ),
   });
 
   const controller = createContentController({
