@@ -95,6 +95,18 @@ export interface PageStateView {
   firstVisibleMs?: number;
   /** Ms do início ao fim do job (número finito >= 0); ausente se não terminou. */
   durationMs?: number;
+  /**
+   * Latência dos trechos que entraram na tela durante o job: da entrada na
+   * tela até a aplicação. Ausente se nenhum foi medido.
+   */
+  visibleLatency?: VisibleLatencyView;
+}
+
+/** `count` inteiro >= 1; `medianMs` e `maxMs` números finitos >= 0. */
+export interface VisibleLatencyView {
+  count: number;
+  medianMs: number;
+  maxMs: number;
 }
 
 export type PageCommandResponse =
@@ -194,9 +206,31 @@ export function parsePageCommand(input: unknown): PageCommand | null {
   return { type: PAGE_COMMAND_MESSAGE_TYPE, command };
 }
 
+/**
+ * Valida o resumo de latência (só os três números, em objeto novo) ou `null`.
+ * `count` 0 não é aceito: sem medida o campo fica ausente.
+ */
+export function parseVisibleLatency(input: unknown): VisibleLatencyView | null {
+  if (!isRecord(input)) return null;
+  const { count, medianMs, maxMs } = input;
+  if (!isCount(count) || count === 0 || !isDuration(medianMs) || !isDuration(maxMs)) return null;
+  return { count, medianMs, maxMs };
+}
+
 function parseStateView(input: unknown): PageStateView | null {
   if (!isRecord(input)) return null;
-  const { status, view, total, done, failed, skipped, error, firstVisibleMs, durationMs } = input;
+  const {
+    status,
+    view,
+    total,
+    done,
+    failed,
+    skipped,
+    error,
+    firstVisibleMs,
+    durationMs,
+    visibleLatency,
+  } = input;
   if (!isOneOf(STATUSES, status) || !isOneOf(VIEWS, view)) return null;
   if (!isCount(total) || !isCount(done) || !isCount(failed) || !isCount(skipped)) return null;
   const state: PageStateView = { status, view, total, done, failed, skipped };
@@ -211,6 +245,11 @@ function parseStateView(input: unknown): PageStateView | null {
   if (durationMs !== undefined) {
     if (!isDuration(durationMs)) return null;
     state.durationMs = durationMs;
+  }
+  if (visibleLatency !== undefined) {
+    const latency = parseVisibleLatency(visibleLatency);
+    if (latency === null) return null;
+    state.visibleLatency = latency;
   }
   return state;
 }

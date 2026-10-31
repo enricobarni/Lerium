@@ -59,7 +59,13 @@
  *   sucesso; ausente se nenhum foi.
  * - `durationMs`: até o fim do job, qualquer que seja o término
  *   (`translated`, `cancelled` ou `error`); ausente durante `translating`.
- * Ambos somem a cada `start`. Leitura não finita, negativa ou que lança é
+ * - `visibleLatency`: para cada segmento promovido à classe 0 por entrar na
+ *   tela, ms do `clock()` da promoção até a aplicação com sucesso (com
+ *   fallback, até o fallback ser aplicado). Sair da tela enquanto ainda está
+ *   na fila, ou falhar, descarta a medida. Resumo `{ count, medianMs, maxMs }`;
+ *   ausente sem medida. Segmentos já visíveis no início não entram (são o
+ *   `firstVisibleMs`).
+ * Os três somem a cada `start`. Leitura não finita, negativa ou que lança é
  * descartada (o campo fica ausente); o relógio nunca derruba o job.
  *
  * Contagens: `total` é o número de segmentos; `skipped` os acima de
@@ -124,6 +130,18 @@ export interface JobState {
   firstVisibleMs?: number;
   /** Ms do início ao fim do job; ausente até o job terminar. */
   durationMs?: number;
+  /**
+   * Latência dos trechos promovidos pela rolagem: ms de quando o bloco entrou
+   * na tela até o segmento ser aplicado. Ausente enquanto não há medida.
+   */
+  visibleLatency?: VisibleLatency;
+}
+
+/** Resumo das latências medidas no job (só números). */
+export interface VisibleLatency {
+  readonly count: number;
+  readonly medianMs: number;
+  readonly maxMs: number;
 }
 
 export interface JobRunnerDeps {
@@ -200,6 +218,8 @@ interface TrackedSegment {
   zone: VisibilityZone;
   /** Ainda observado: o grupo do segmento está na fila. */
   observed: boolean;
+  /** `clock()` de quando foi promovido por entrar na tela; some se sair dela. */
+  promotedAt?: number;
 }
 
 interface ActiveJob {
@@ -212,6 +232,8 @@ interface ActiveJob {
   /** Bloco observado → segmentos dele ainda observados. */
   readonly blocks: Map<Element, Set<string>>;
   watcher: VisibilityWatcher | undefined;
+  /** Latências medidas (ms), na ordem em que os segmentos foram aplicados. */
+  readonly latencies: number[];
   /** Única fonte do que está em voo: `unitId` → plano a que pertence. */
   readonly window: InFlightWindow<SegmentTask>;
   timer: unknown;
@@ -237,6 +259,25 @@ const IDLE: JobState = {
   failed: 0,
   skipped: 0,
 };
+
+/** Cópia do estado, inclusive do resumo de latência (quem recebe não altera o interno). */
+function copyState(state: JobState): JobState {
+  const { visibleLatency } = state;
+  return visibleLatency === undefined
+    ? { ...state }
+    : { ...state, visibleLatency: { ...visibleLatency } };
+}
+
+/** Resumo de uma lista não vazia de latências: mediana (média dos dois do meio se par) e máximo. */
+function summarize(latencies: readonly number[]): VisibleLatency {
+  const sorted = [...latencies].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  const medianMs =
+    sorted.length % 2 === 1
+      ? (sorted[middle] as number)
+      : ((sorted[middle - 1] as number) + (sorted[middle] as number)) / 2;
+  return { count: sorted.length, medianMs, maxMs: sorted[sorted.length - 1] as number };
+}
 
 function createTask(plan: SegmentPlan, priority: SegmentPriority): SegmentTask {
   return { plan, priority, results: new Map(), remaining: plan.units.length };
@@ -283,7 +324,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 
   const emit = (next: JobState): void => {
     state = next;
-    if (!disposed) deps.onState?.({ ...state });
+    if (!disposed) deps.onState?.(copyState(state));
   };
 
   /** `clock()` no início do `start` atual; `undefined` se a leitura falhou. */
@@ -348,6 +389,8 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     const toFront: typeof toBack = [];
     for (const { segmentId, segment, zone } of touched) {
       const placement = job.queue.has(segmentId) ? placementFor(segment, zone) : undefined;
+      // Saiu da tela antes de ser aplicado: a medida de latência não vale.
+      if (segment.zone === 'visible' && zone !== 'visible') delete segment.promotedAt;
       segment.zone = zone;
       if (placement === undefined) continue;
       (placement.position === 'back' ? toBack : toFront).push({ segmentId, segment, placement });
@@ -357,7 +400,29 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     for (const { segmentId, segment, placement } of [...toBack, ...toFront.reverse()]) {
       job.queue.move(segmentId, placement.priority, placement.position);
       segment.priority = placement.priority;
+      if (placement.priority === PRIORITY_VISIBLE_MAIN) {
+        const now = readClock();
+        if (now === undefined) delete segment.promotedAt;
+        else segment.promotedAt = now;
+      }
     }
+  };
+
+  /**
+   * Fecha a medida do segmento aplicado com sucesso: `clock() - promotedAt`
+   * entra no resumo; leitura inválida ou negativa é descartada.
+   */
+  const measureLatency = (job: ActiveJob, segmentId: string): VisibleLatency | undefined => {
+    const segment = job.tracked.get(segmentId);
+    const promotedAt = segment?.promotedAt;
+    if (segment === undefined || promotedAt === undefined) return undefined;
+    delete segment.promotedAt;
+    const now = readClock();
+    if (now === undefined) return undefined;
+    const value = now - promotedAt;
+    if (!Number.isFinite(value) || value < 0) return undefined;
+    job.latencies.push(value);
+    return summarize(job.latencies);
   };
 
   /** Encerra o job: fila, janela, timer, ouvintes e porta. Nada do job é aplicado depois. */
@@ -396,12 +461,17 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         const firstVisibleMs = elapsed();
         if (firstVisibleMs !== undefined) next.firstVisibleMs = firstVisibleMs;
       }
+      const visibleLatency = measureLatency(job, segmentId);
+      if (visibleLatency !== undefined) next.visibleLatency = visibleLatency;
       emit(next);
     } else if (result.fallback !== undefined) {
       // O fallback não é observado de novo: já sai à frente da classe atual.
+      // A medida de latência continua aberta até ele ser aplicado.
       const priority = job.tracked.get(segmentId)?.priority ?? task.priority;
       job.queue.pushFront(segmentId, itemsOf(createTask(result.fallback, task.priority)), priority);
     } else {
+      const segment = job.tracked.get(segmentId);
+      if (segment !== undefined) delete segment.promotedAt;
       emit({ ...state, failed: state.failed + 1 });
     }
   };
@@ -557,6 +627,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         tracked,
         blocks,
         watcher: undefined,
+        latencies: [],
         window: createInFlightWindow<SegmentTask>(maxInFlight),
         timer: undefined,
         onMessage: (message) => handleMessage(job, message),
@@ -602,7 +673,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     },
 
     getState() {
-      return { ...state };
+      return copyState(state);
     },
 
     dispose() {

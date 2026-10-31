@@ -119,6 +119,8 @@ interface Harness {
 interface SetupOptions {
   maxInFlight?: number;
   withWatcher?: boolean;
+  /** Padrão: relógio sem leitura válida (NaN), então o estado não leva tempos. */
+  clock?: () => number;
 }
 
 function setup(document: Document, options: SetupOptions = {}): Harness {
@@ -142,7 +144,7 @@ function setup(document: Document, options: SetupOptions = {}): Harness {
       return byPosition(block);
     },
     viewportHeight: () => VIEWPORT_HEIGHT,
-    clock: () => Number.NaN,
+    clock: options.clock ?? (() => Number.NaN),
     maxInFlight: options.maxInFlight ?? 1,
     ...(options.withWatcher === false
       ? {}
@@ -482,5 +484,176 @@ describe('createJobRunner — reordenação por visibilidade', () => {
     expect(watchers).toHaveLength(0);
     runToEnd(port());
     expect(runner.getState()).toMatchObject({ status: 'translated', done: 1 });
+  });
+});
+
+describe('createJobRunner — latência do trecho que entrou na tela', () => {
+  /** Relógio falso: `now` muda só quando o teste manda. */
+  function fakeClock(start = 1000): { read: () => number; advance: (ms: number) => void } {
+    let now = start;
+    return {
+      read: () => now,
+      advance: (ms) => {
+        now += ms;
+      },
+    };
+  }
+
+  it('mede da entrada na tela até a aplicação: count, mediana e máximo', () => {
+    const clock = fakeClock();
+    const document = parse(page(4));
+    const { runner, port, watcher, states } = setup(document, { clock: clock.read });
+    runner.start();
+    const fake = port();
+    expect(Object.hasOwn(runner.getState(), 'visibleLatency')).toBe(false);
+
+    clock.advance(10);
+    watcher().emit(changes(document, [1, 'visible'])); // promovido em 1010
+    clock.advance(30);
+    watcher().emit(changes(document, [3, 'visible'], [4, 'visible'])); // promovidos em 1040
+    fake.reply(upperCase); // seg-0 (já visível no início: não conta)
+    expect(Object.hasOwn(runner.getState(), 'visibleLatency')).toBe(false);
+    clock.advance(20);
+    fake.reply(upperCase); // seg-1 aplicado em 1060 → 50 ms
+    expect(runner.getState().visibleLatency).toEqual({ count: 1, medianMs: 50, maxMs: 50 });
+    clock.advance(100);
+    fake.reply(upperCase); // seg-3 em 1160 → 120
+    clock.advance(200);
+    fake.reply(upperCase); // seg-4 em 1360 → 320
+    expect(runner.getState().visibleLatency).toEqual({ count: 3, medianMs: 120, maxMs: 320 });
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-3', 'seg-4', 'seg-2']);
+    runToEnd(fake); // seg-2 nunca entrou na tela
+    expect(runner.getState()).toMatchObject({
+      status: 'translated',
+      visibleLatency: { count: 3, medianMs: 120, maxMs: 320 },
+    });
+    // Só números no estado emitido.
+    const last = states[states.length - 1];
+    expect(Object.values(last?.visibleLatency ?? {}).every((v) => typeof v === 'number')).toBe(
+      true,
+    );
+  });
+
+  it('mediana de quantidade par é a média dos dois do meio', () => {
+    const clock = fakeClock();
+    const document = parse(page(2));
+    const { runner, port, watcher } = setup(document, { clock: clock.read });
+    runner.start();
+    const fake = port();
+    watcher().emit(changes(document, [1, 'visible'], [2, 'visible']));
+    clock.advance(10);
+    fake.reply(upperCase); // seg-0
+    clock.advance(10);
+    fake.reply(upperCase); // seg-1 → 20
+    clock.advance(40);
+    fake.reply(upperCase); // seg-2 → 60
+    expect(runner.getState().visibleLatency).toEqual({ count: 2, medianMs: 40, maxMs: 60 });
+  });
+
+  it('sair da tela antes de ser aplicado descarta a medida', () => {
+    const clock = fakeClock();
+    const document = parse(page(3));
+    const { runner, port, watcher } = setup(document, { clock: clock.read });
+    runner.start();
+    const fake = port();
+    watcher().emit(changes(document, [1, 'visible']));
+    clock.advance(5);
+    watcher().emit(changes(document, [1, 'out']));
+    runToEnd(fake);
+    expect(Object.hasOwn(runner.getState(), 'visibleLatency')).toBe(false);
+
+    // Volta à tela: a medida recomeça na nova entrada.
+    const again = parse(page(3));
+    const second = setup(again, { clock: clock.read });
+    second.runner.start();
+    second.watcher().emit(changes(again, [1, 'visible']));
+    clock.advance(500);
+    second.watcher().emit(changes(again, [1, 'near']));
+    second.watcher().emit(changes(again, [1, 'visible']));
+    clock.advance(7);
+    second.port().reply(upperCase); // seg-0
+    second.port().reply(upperCase); // seg-1 → 7, não 507
+    expect(second.runner.getState().visibleLatency).toEqual({ count: 1, medianMs: 7, maxMs: 7 });
+    runToEnd(second.port());
+  });
+
+  it('segmento que falha não entra na medida', () => {
+    const clock = fakeClock();
+    const document = parse(page(2));
+    const { runner, port, watcher } = setup(document, { clock: clock.read });
+    runner.start();
+    const fake = port();
+    watcher().emit(changes(document, [1, 'visible']));
+    fake.reply(upperCase);
+    clock.advance(9);
+    const unit = fake.inFlight.shift();
+    if (unit === undefined) throw new Error('sem unidade');
+    fake.emit({
+      type: 'job:result',
+      jobId: unit.jobId,
+      unitId: unit.unitId,
+      ok: false,
+      error: 'timeout',
+      retryable: false,
+    });
+    runToEnd(fake);
+    expect(runner.getState()).toMatchObject({ status: 'translated', failed: 1 });
+    expect(Object.hasOwn(runner.getState(), 'visibleLatency')).toBe(false);
+  });
+
+  it('com fallback mede até o fallback ser aplicado', () => {
+    const clock = fakeClock();
+    const document = parse('<p>Top.</p><p data-pos="below">Far <i>away</i> text.</p>');
+    const { runner, port, watcher } = setup(document, { clock: clock.read });
+    runner.start();
+    const fake = port();
+    watcher().emit(changes(document, [1, 'visible']));
+    fake.reply(upperCase); // seg-0
+    clock.advance(10);
+    fake.reply(dropMarkers); // markers inválidos → fallback nó a nó
+    expect(Object.hasOwn(runner.getState(), 'visibleLatency')).toBe(false);
+    clock.advance(15);
+    runToEnd(fake);
+    expect(runner.getState()).toMatchObject({
+      status: 'translated',
+      done: 2,
+      visibleLatency: { count: 1, medianMs: 25, maxMs: 25 },
+    });
+  });
+
+  it('zerada a cada start; relógio inválido ou que volta descarta a medida', () => {
+    let now = 1000;
+    const document = parse(page(2));
+    const { runner, port, watcher } = setup(document, { clock: () => now });
+    runner.start();
+    watcher().emit(changes(document, [1, 'visible']));
+    now = 1004;
+    runToEnd(port());
+    expect(runner.getState().visibleLatency).toEqual({ count: 1, medianMs: 4, maxMs: 4 });
+
+    runner.start();
+    expect(Object.hasOwn(runner.getState(), 'visibleLatency')).toBe(false);
+    watcher().emit(changes(document, [1, 'visible'], [2, 'visible']));
+    now = 900; // voltou no tempo
+    port().reply(upperCase); // seg-0
+    port().reply(upperCase); // seg-1: negativo, descartado
+    expect(Object.hasOwn(runner.getState(), 'visibleLatency')).toBe(false);
+    now = Number.NaN;
+    runToEnd(port()); // seg-2: leitura inválida, descartado
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 3 });
+    expect(Object.hasOwn(runner.getState(), 'visibleLatency')).toBe(false);
+  });
+
+  it('getState devolve cópia do resumo', () => {
+    const clock = fakeClock();
+    const document = parse(page(1));
+    const { runner, port, watcher } = setup(document, { clock: clock.read });
+    runner.start();
+    watcher().emit(changes(document, [1, 'visible']));
+    clock.advance(3);
+    runToEnd(port());
+    const first = runner.getState();
+    (first.visibleLatency as { count: number }).count = 99;
+    expect(runner.getState().visibleLatency).toEqual({ count: 1, medianMs: 3, maxMs: 3 });
   });
 });

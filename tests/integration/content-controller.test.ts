@@ -465,6 +465,30 @@ describe('toPageStateView', () => {
     expect(Object.hasOwn(view, 'durationMs')).toBe(false);
   });
 
+  it('copia visibleLatency válido em objeto novo e descarta o inválido', () => {
+    const visibleLatency = { count: 2, medianMs: 7.5, maxMs: 10 };
+    const state: JobState = { ...IDLE_STATE, visibleLatency };
+    const view = toPageStateView(state);
+    expect(view).toEqual({ ...IDLE_STATE, visibleLatency });
+    expect(view.visibleLatency).not.toBe(visibleLatency);
+    const withExtra = {
+      ...IDLE_STATE,
+      visibleLatency: { ...visibleLatency, extra: 'texto' },
+    } as JobState;
+    expect(toPageStateView(withExtra).visibleLatency).toEqual(visibleLatency);
+    for (const bad of [
+      { count: 0, medianMs: 0, maxMs: 0 },
+      { count: 1.5, medianMs: 1, maxMs: 1 },
+      { count: 1, medianMs: Number.NaN, maxMs: 1 },
+      { count: 1, medianMs: 1, maxMs: -1 },
+      { count: 1, medianMs: 1, maxMs: Infinity },
+    ]) {
+      const result = toPageStateView({ ...IDLE_STATE, visibleLatency: bad });
+      expect(Object.hasOwn(result, 'visibleLatency')).toBe(false);
+    }
+    expect(Object.hasOwn(toPageStateView(IDLE_STATE), 'visibleLatency')).toBe(false);
+  });
+
   it('o estado do runner real leva os tempos à resposta do controller', () => {
     let now = 1000;
     const document = parse('<p>Only line.</p>');

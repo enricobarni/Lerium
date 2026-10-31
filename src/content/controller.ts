@@ -24,6 +24,7 @@
 
 import {
   parsePageCommand,
+  parseVisibleLatency,
   type PageCommandResponse,
   type PageStateView,
 } from '../shared/page-control';
@@ -60,6 +61,11 @@ export function toPageStateView(state: JobState): PageStateView {
   if (state.error !== undefined) view.error = state.error;
   if (state.firstVisibleMs !== undefined) view.firstVisibleMs = state.firstVisibleMs;
   if (state.durationMs !== undefined) view.durationMs = state.durationMs;
+  if (state.visibleLatency !== undefined) {
+    // Mesma validação do parser do popup: resumo inválido não atravessa.
+    const latency = parseVisibleLatency(state.visibleLatency);
+    if (latency !== null) view.visibleLatency = latency;
+  }
   return view;
 }
 
