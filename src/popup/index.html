@@ -8,9 +8,20 @@
   </head>
   <body>
     <main>
-      <h1>Lerium</h1>
-      <p>A tradução ainda não está disponível nesta versão.</p>
-      <button type="button" id="open-options">Abrir configurações</button>
+      <h1 id="popup-title" tabindex="-1">Lerium</h1>
+      <p id="page-message" data-tone="info">Verificando a página…</p>
+      <progress id="page-progress" aria-label="Progresso da tradução" hidden></progress>
+      <div class="actions">
+        <button type="button" id="translate" class="primary" hidden>Traduzir página</button>
+        <button type="button" id="cancel" class="secondary" hidden>Cancelar tradução</button>
+        <button type="button" id="show-original" class="secondary" hidden>Mostrar original</button>
+        <button type="button" id="show-translation" class="secondary" hidden>
+          Mostrar tradução
+        </button>
+        <button type="button" id="open-options" class="secondary">Abrir configurações</button>
+      </div>
+      <!-- Anuncia só mudanças de status; o texto visível (com contagens) fica em #page-message. -->
+      <p id="page-status" class="visually-hidden" role="status"></p>
       <p id="feedback" role="status"></p>
     </main>
     <script type="module" src="./index.ts"></script>
