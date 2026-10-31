@@ -741,10 +741,11 @@ comando (`src/shared/page-messages.ts`, `src/background/page-job.ts`,
   `job:result`, `job:progress` (só contagem de caracteres) e `job:fatal`
   (`invalid_config`, `model_missing`, `forbidden`, `settings_unavailable`).
   Nenhuma mensagem além do resultado leva texto.
-- **Sequência:** o content envia uma unidade por vez e espera o resultado; o
-  worker responde `busy` a uma segunda unidade na mesma Port. Uma Port por
-  aba: uma nova derruba a anterior. O limite global entre abas é do
-  scheduler (Fase 5).
+- **Sequência:** o content envia até `MAX_UNITS_IN_FLIGHT` unidades por vez
+  (hoje 1, medido na ADR-015) e espera os resultados; o worker responde
+  `busy` acima disso e ignora um `unitId` repetido em voo. Uma Port por aba:
+  uma nova derruba a anterior. O limite global entre abas é o semáforo FIFO
+  do worker (ADR-015).
 - **Cancelamento:** desconectar a Port aborta a requisição em voo; saída
   acima de `MAX_OUTPUT_CHARS` é abortada durante o stream.
 - **Ciclo de vida do worker:** pela documentação do Chrome, mensagens de
@@ -773,3 +774,69 @@ comando (`src/shared/page-messages.ts`, `src/background/page-job.ts`,
   é chamado no início do worker, para que um content script não leia nem
   regrave as configurações; o efeito em `storage.local` precisa de
   confirmação no smoke manual.
+
+## ADR-015 — Scheduler de tradução e limite de concorrência
+
+**Status:** Aceita (31/10/2026)
+
+**Contexto.** Na versão 0.2.0 o job traduzia do topo ao fim da página, um
+segmento por vez, inclusive menu e rodapé, e o responsável percebeu a
+tradução como lenta. A Fase 5 pede prioridade para o texto visível e limite
+global de requisições, inclusive entre abas.
+
+**Decisão.**
+
+- **Fila no content** (`src/core/translation-scheduler.ts`, pura): três
+  classes, em ordem — principal visível, principal fora da tela, periférico.
+  FIFO dentro da classe; o fallback nó a nó volta à frente da própria classe.
+- **Classificação uma vez no início** (`src/content/segment-priority.ts`):
+  periférico é o bloco dentro de `nav`, `aside`, `search`, `role`
+  navigation/complementary/banner/contentinfo/search, ou de `header`/`footer`
+  fora de `article`/`main`/`section`/`aside`/`nav` e de `role`
+  main/article/region/complementary/navigation (regra do HTML-AAM). Visível
+  é o bloco com área que cruza a viewport (`getBoundingClientRect`, uma
+  medição por bloco). Fora da tela: primeiro o que está abaixo, depois o que
+  está acima, do mais próximo ao mais distante.
+- **Semáforo global no service worker** (`src/background/translation-gate.ts`):
+  FIFO entre todas as Ports, adquirido antes de chamar o Ollama (a espera não
+  consome o prazo do primeiro token) e liberado em `finally`.
+- **Janela por Port** igual à capacidade do semáforo
+  (`MAX_UNITS_IN_FLIGHT`), para que a ordem por prioridade continue no
+  content. As duas grandezas estão acopladas de propósito.
+- **Tempos sem expor marcas:** `firstVisibleMs` e `durationMs` ficam no
+  estado do job e só a extensão os lê (`page:command get-state`);
+  `performance.mark` foi descartado porque a linha do tempo de User Timing é
+  visível à página (fingerprinting).
+
+**Experimento de concorrência** (`tests/manual/concurrency.manual.test.ts`,
+31/10/2026): Ollama 0.40.13 isolado na porta 11998, configuração padrão
+(`OLLAMA_NUM_PARALLEL` resolvido para 1 nesta máquina, só CPU),
+`translategemma:4b`, i5-13420H, 8 unidades literárias. Critério fixado antes
+da medição: menor concorrência com tempo total ≥ 15% menor que 1, primeiro
+resultado no máximo 25% pior e sem falhas; senão 1.
+
+| Simultâneas | Total (mediana) | Primeiro | Latência p50 | Falhas |
+|---|---|---|---|---|
+| 1 (5 rodadas) | 97,4 s | 8,6 s | 8,0 s | 0 |
+| 2 (3 rodadas) | 102,0 s (−3,9% sobre 106,1 s) | 12,0 s | 23,6 s | 0 |
+| 4 (5 rodadas) | 93,2 s (−4,3%) | 8,5 s | 44,7 s | 0 |
+
+Uma rodada anterior com 3 amostras deu −15,4% para 4 simultâneas, em cima do
+limite; repetida com 5 amostras e a regra inalterada, caiu para −4,3%.
+**Limite: 1.** Na CPU o Ollama atende uma requisição por vez; várias juntas
+só criam fila e multiplicam a latência de cada parágrafo.
+
+**Consequências.**
+
+- O ganho percebido vem da ordem, não do paralelismo.
+- A métrica “primeiro resultado” do experimento conta qualquer unidade; para
+  o leitor importa o primeiro parágrafo **visível**, que passa a ser medido
+  pelo `firstVisibleMs` do job.
+- Sites sem marcação semântica (menu em `<div id="header">`) ficam na classe
+  principal: degradam para a ordem de documento, nunca para algo pior que a
+  0.2.0.
+- Com GPU ou `OLLAMA_NUM_PARALLEL` maior o resultado pode mudar; o limite
+  passa a ser configurável numa fase futura (P1), com nova medição.
+- Reordenação durante a rolagem (IntersectionObserver), aging do periférico e
+  cache de segmentos repetidos ficam para `feat/viewport-priority` e
+  `perf/scroll-translation`.
