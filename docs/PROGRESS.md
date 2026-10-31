@@ -5,13 +5,32 @@
 
 ## Estado atual
 
-- **Fase:** 4 — DOM e tradução de página (em andamento)
-- **Tarefa:** `feat/page-translation` (popup de tradução; aguardando o smoke manual no Chrome real para fechar o Gate da Fase 4)
+- **Fase:** 5 — Experiência progressiva e desempenho (a iniciar)
+- **Tarefa:** `chore/release-0.2.0` (encerra a Fase 4)
+- **Fase 4:** concluída — PRs #17–#22 mesclados; Gate cumprido (E2E de ida e volta byte a byte e aceite manual do responsável no Chrome real)
 - **Fase 3:** concluída — PRs #13–#16 mesclados; gate cumprido (18/18 execuções com o modelo real); ADR-011 aceita após conferência do model card pelo responsável
-- **Versão:** `0.1.0` (esqueleto + conexão com o Ollama, PLAN.md §5.4; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.1.0` em `ab06507` (validado: lint, typecheck, 398 testes, build, 8 E2E) e release [Lerium 0.1.0](https://github.com/enricobarni/Lerium/releases/tag/v0.1.0) publicadas pelo responsável.
+- **Versão:** `0.2.0` (primeira que traduz páginas; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.2.0` pendente de criação pelo responsável. Versão anterior: `0.1.0`. Tag `v0.1.0` em `ab06507` (validado: lint, typecheck, 398 testes, build, 8 E2E) e release [Lerium 0.1.0](https://github.com/enricobarni/Lerium/releases/tag/v0.1.0) publicadas pelo responsável.
 - **Fase 2:** concluída — PRs #9 e #10 mesclados; aceite manual do responsável no Chrome estável (conexão, modelos listados, Ollama fechado)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
+
+## Fase 4 — `chore/release-0.2.0`
+
+| Commit | Mensagem |
+|---|---|
+| `72f15c8` | `chore(release): versiona 0.2.0` |
+| `e68738c` | `docs(changelog): registra a versão 0.2.0` |
+| (este commit) | `docs(progress): encerra a fase 4 na versão 0.2.0` |
+
+**Gate da Fase 4 (PLAN.md):** “fixture HTML própria traduzida sem quebrar estrutura; `original -> traduzido -> original` retorna o conteúdo exato, incluindo links e formatação”.
+
+- [x] E2E: a fixture `novel-chapter.html` é traduzida e restaurada byte a byte (`outerHTML`), com links, negrito, itálico, `pre/code` e campos de formulário intactos (`tests/e2e/page-translation.spec.ts`, `tests/e2e/popup.spec.ts`).
+- [x] Integração (jsdom): ida e volta byte a byte nos três caminhos (texto puro, marcadores, nó a nó).
+- [x] Aceite manual do responsável no Chrome real (31/10/2026): a página traduz pelo popup; num site real de novel o resultado foi satisfatório; tradução percebida como lenta.
+
+**Itens do smoke sem resultado anotado:** 10 (modelo frio: concluiu ou terminou em “interrompida”) e 15 (`chrome.storage.local.get()` no contexto do Lerium deve falhar). Ficam pendentes de anotação; o risco da ADR-010 e o efeito do `setAccessLevel` continuam não confirmados.
+
+**Validações:** `npm run lint`, `typecheck`, `test` (1678/1678), `build` (`verify-dist` ok) e `test:e2e` (17/17); `package.json`, lockfile e manifesto em `0.2.0`.
 
 ## Fase 4 — `feat/page-translation`
 
@@ -576,4 +595,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 4 — smoke manual no Chrome real (19 itens do TEST_PLAN), executado pelo responsável. Com ele aprovado: registrar o Gate da Fase 4, atualizar o CHANGELOG e versionar 0.2.0.
+Fase 5 — `feat/translation-scheduler`: fila compartilhada com prioridade (texto visível primeiro) e limite de concorrência, com medição do tempo até a primeira tradução visível no hardware real (i5-13420H).
