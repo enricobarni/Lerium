@@ -189,6 +189,19 @@ Anote o resultado de cada item (ok / falhou + o que apareceu).
 16. Nenhum texto da página aparece no console da página nem no do service
     worker (`chrome://extensions` → Lerium → service worker).
 
+**Caminhos que só o Chrome real exercita**
+
+17. Num site https real qualquer (fora de `localhost`), clicar no ícone →
+    **Traduzir página**: a tradução funciona. É o único teste do caminho de
+    `activeTab`, porque os E2E servem a fixture numa origem que já tem
+    permissão de host (`127.0.0.1:11434`).
+18. Com o popup aberto, recarregar a página: o popup mostra “Não foi possível
+    falar com a página…” ou volta a “Pronto para traduzir”, e **Traduzir**
+    funciona de novo.
+19. Com o Ollama recusando a origem (`OLLAMA_ORIGINS` sem o ID do Lerium):
+    aparece a mensagem de origem recusada e o foco vai para **Abrir
+    configurações**. Conferir também no tema escuro.
+
 ## Desempenho
 
 Medir no hardware real do usuário, com o modelo configurado, e registrar os

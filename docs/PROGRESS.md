@@ -6,12 +6,46 @@
 ## Estado atual
 
 - **Fase:** 4 — DOM e tradução de página (em andamento)
-- **Tarefa:** `feat/page-injection` (injeção sob demanda, build do content script, manifesto e E2E de tradução de página)
+- **Tarefa:** `feat/page-translation` (popup de tradução; aguardando o smoke manual no Chrome real para fechar o Gate da Fase 4)
 - **Fase 3:** concluída — PRs #13–#16 mesclados; gate cumprido (18/18 execuções com o modelo real); ADR-011 aceita após conferência do model card pelo responsável
 - **Versão:** `0.1.0` (esqueleto + conexão com o Ollama, PLAN.md §5.4; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.1.0` em `ab06507` (validado: lint, typecheck, 398 testes, build, 8 E2E) e release [Lerium 0.1.0](https://github.com/enricobarni/Lerium/releases/tag/v0.1.0) publicadas pelo responsável.
 - **Fase 2:** concluída — PRs #9 e #10 mesclados; aceite manual do responsável no Chrome estável (conexão, modelos listados, Ollama fechado)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
+
+## Fase 4 — `feat/page-translation`
+
+| Commit | Mensagem |
+|---|---|
+| `0af1e0f` | `feat(popup): mapeia estado da página em mensagens pt-br` |
+| `48d3c89` | `feat(popup): adiciona traduzir, cancelar e alternar original` |
+| `36759bc` | `docs(test-plan): adiciona checklist do smoke manual da fase 4` |
+| `62e6a8f` | `fix(popup): limita a espera por resposta do service worker` |
+| `f78b32c` | `fix(popup): distingue falha de comando de falha ao preparar` |
+| `98a142d` | `fix(popup): foca a ação em destaque após erro de configuração` |
+| `38cf483` | `test(popup): enxuga a matriz e cobre sequências do controlador` |
+| `0e9f519` | `fix(popup): remove import sem uso no renderizador` |
+| (este commit) | `docs(progress): registra o popup de tradução da fase 4` |
+
+Última branch da Fase 4. O Gate só é declarado cumprido depois do smoke manual no Chrome real (checklist em [TEST_PLAN.md](TEST_PLAN.md#smoke-manual-da-fase-4-chrome-real)).
+
+**O que foi feito:**
+
+- `src/popup/page-view.ts`: view-model puro que transforma o estado da página em mensagem PT-BR, tom, progresso e botões visíveis.
+- `src/popup/page-actions.ts`: controlador sem `chrome`; envia `page:inject` antes de todo `start`, valida respostas, consulta o estado a cada 1 s só durante a tradução, prazo de 10 s por mensagem e para tudo no `pagehide`.
+- `src/popup/page-render.ts` + `index.html`/`style.css`: botões com `hidden`, foco realocado quando o botão focado some, região `role="status"` que anuncia só mudanças, `<progress>` rotulado, contraste AA conferido nos dois temas.
+- E2E do popup: página não suportada, tradução e alternância só pelo teclado, origem recusada.
+
+**Revisão:** reviewer aprovou com ressalvas, sem crítico. Aplicadas: prazo de resposta, mensagem própria para falha de comando, foco na ação em destaque após erro de configuração, matriz de testes enxuta com o singular coberto, testes de duplo clique e de fechamento durante a injeção. A lacuna do E2E (caminho de `activeTab` só no smoke) está registrada no spec e no checklist.
+
+**Registro de falhas de processo:**
+
+- `98a142d` foi gravado com o lint falhando (import sem uso). Os gates foram rodados com `| tail`, e o pipe devolveu o código de saída do `tail`, não o do eslint. Corrigido em `0e9f519`, sem reescrever o histórico. Regra adotada: conferir os gates com `set -o pipefail` ou sem pipe.
+- Durante a verificação, um comando do orquestrador deixou o repositório em HEAD destacado num commit antigo (`git checkout <commit> --` sem caminho). A árvore estava limpa; nada se perdeu, e a branch foi restaurada em seguida. As verificações já tinham rodado no commit final.
+
+**Validações executadas** (códigos de saída conferidos): `npm run lint`, `typecheck`, `test` (1678/1678; a matriz redundante do view-model saiu de 420 para 176 casos), `build` (`verify-dist` ok) e `test:e2e` (17/17).
+
+**Pendências:** smoke manual no Chrome real (19 itens). Depois dele: Gate da Fase 4, CHANGELOG e versão 0.2.0.
 
 ## Fase 4 — `feat/page-injection`
 
@@ -542,4 +576,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 4 — `feat/page-translation`: popup com Traduzir, Cancelar e Mostrar original/tradução, mensagens em PT-BR e acessibilidade, seguindo o contrato “inject antes de todo start”, e smoke manual no Chrome real. Fecha o Gate da Fase 4.
+Fase 4 — smoke manual no Chrome real (19 itens do TEST_PLAN), executado pelo responsável. Com ele aprovado: registrar o Gate da Fase 4, atualizar o CHANGELOG e versionar 0.2.0.
