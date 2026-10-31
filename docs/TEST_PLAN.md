@@ -122,6 +122,73 @@ Cenários derivados de [PLAN.md §2.2](PLAN.md):
 | 10 | Menu de seleção | E2E: menu de contexto "traduzir seleção" chega ao content script e exibe o resultado. |
 | 13 | `onInstalled` destrutivo | Simular atualização com preferências salvas: valores do usuário mantidos; só chaves novas recebem default. |
 
+## Smoke manual da Fase 4 (Chrome real)
+
+Executado pelo responsável, no Chrome estável (versão ≥ 114, anotar a
+versão), com `npm run build` recente e a pasta `dist/` carregada em
+`chrome://extensions` (modo do desenvolvedor → **Carregar sem compactação**).
+Anote o resultado de cada item (ok / falhou + o que apareceu).
+
+**Preparação**
+
+- Ollama aberto, com `translategemma:4b` instalado e `OLLAMA_ORIGINS` com a
+  origem do Lerium (ver README).
+- Servir a fixture localmente, a partir da raiz do repositório:
+  `python -m http.server 8080 --bind 127.0.0.1 --directory tests/fixtures`
+  e abrir `http://127.0.0.1:8080/novel-chapter.html`.
+
+**Instalação e permissões**
+
+1. Com a versão 0.1.0 instalada, carregar esta versão por cima (botão de
+   recarregar em `chrome://extensions`): não aparece pedido de permissão novo
+   e a extensão continua ativa.
+2. Os detalhes da extensão não mostram acesso a sites (só “quando você clicar
+   na extensão”).
+
+**Tradução**
+
+3. Na fixture, clicar no ícone do Lerium → **Traduzir página**: aparece
+   “Traduzindo… x de y trechos” e o texto muda para português aos poucos.
+4. Fechar o popup no meio: a tradução continua. Reabrir: o estado está
+   correto.
+5. Ao terminar: **Mostrar original** → **Mostrar tradução** → **Mostrar
+   original**. Links, negrito e itálico continuam iguais; o bloco de código,
+   o campo de texto e o parágrafo oculto não foram traduzidos.
+6. **Cancelar** no meio de uma tradução: para; o terminal do Ollama não
+   recebe pedidos novos; **Mostrar original** restaura a página.
+7. Navegação só pelo teclado (Tab, Enter, Espaço) em todos os botões; o foco
+   é visível.
+8. Com NVDA (opcional): o início, o fim e os erros da tradução são
+   anunciados uma vez, sem repetir a cada segundo.
+
+**Erros**
+
+9. Fechar o Ollama e **Traduzir**: aparece “O Ollama não respondeu…” e a
+   página fica intacta.
+10. Modelo frio: rodar `ollama stop translategemma:4b` e **Traduzir**.
+    Anotar se a tradução conclui ou termina em “interrompida”, e quanto tempo
+    o primeiro trecho levou (risco da ADR-010).
+11. Páginas proibidas — `chrome://settings`, a Chrome Web Store, uma página
+    da própria extensão, um PDF e um arquivo `file://`: o popup mostra “Esta
+    página não pode ser traduzida…”, sem botão Traduzir, e sem erros em
+    `chrome://extensions`.
+12. Porta personalizada sem permissão: nas configurações, trocar a porta
+    para uma não liberada **sem** salvar a permissão (se possível) e
+    traduzir: aparece a orientação de permissão e **Abrir configurações**
+    funciona.
+13. Recarregar a página no meio da tradução: sem erro; o documento novo
+    fica no original.
+14. Duas abas com a fixture traduzindo ao mesmo tempo: uma não interfere na
+    outra.
+
+**Segurança e privacidade**
+
+15. No console da página, escolher o contexto “Lerium” (seletor de contexto
+    do DevTools) e rodar `chrome.storage.local.get()`: deve falhar (ADR-010,
+    `setAccessLevel`). Anotar o resultado.
+16. Nenhum texto da página aparece no console da página nem no do service
+    worker (`chrome://extensions` → Lerium → service worker).
+
 ## Desempenho
 
 Medir no hardware real do usuário, com o modelo configurado, e registrar os
