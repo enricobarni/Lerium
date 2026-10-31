@@ -88,6 +88,13 @@ export interface PageStateView {
   failed: number;
   skipped: number;
   error?: PageStateError;
+  /**
+   * Ms do início do job ao primeiro segmento visível aplicado (número finito
+   * >= 0); ausente se ainda não aconteceu.
+   */
+  firstVisibleMs?: number;
+  /** Ms do início ao fim do job (número finito >= 0); ausente se não terminou. */
+  durationMs?: number;
 }
 
 export type PageCommandResponse =
@@ -149,6 +156,10 @@ const isOneOf = <T extends string>(
 const isCount = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 
+/** Tempo em ms: número finito >= 0 (não precisa ser inteiro). */
+const isDuration = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0;
+
 export const isDocumentId = (value: unknown): value is string =>
   typeof value === 'string' &&
   value.length <= MAX_DOCUMENT_ID_CHARS &&
@@ -185,13 +196,23 @@ export function parsePageCommand(input: unknown): PageCommand | null {
 
 function parseStateView(input: unknown): PageStateView | null {
   if (!isRecord(input)) return null;
-  const { status, view, total, done, failed, skipped, error } = input;
+  const { status, view, total, done, failed, skipped, error, firstVisibleMs, durationMs } = input;
   if (!isOneOf(STATUSES, status) || !isOneOf(VIEWS, view)) return null;
   if (!isCount(total) || !isCount(done) || !isCount(failed) || !isCount(skipped)) return null;
   const state: PageStateView = { status, view, total, done, failed, skipped };
-  if (error === undefined) return state;
-  if (!isOneOf(STATE_ERRORS, error)) return null;
-  return { ...state, error };
+  if (error !== undefined) {
+    if (!isOneOf(STATE_ERRORS, error)) return null;
+    state.error = error;
+  }
+  if (firstVisibleMs !== undefined) {
+    if (!isDuration(firstVisibleMs)) return null;
+    state.firstVisibleMs = firstVisibleMs;
+  }
+  if (durationMs !== undefined) {
+    if (!isDuration(durationMs)) return null;
+    state.durationMs = durationMs;
+  }
+  return state;
 }
 
 export function parsePageCommandResponse(input: unknown): PageCommandResponse | null {

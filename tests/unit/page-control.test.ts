@@ -299,4 +299,38 @@ describe('parsePageCommandResponse', () => {
     if (parsed?.ok !== true) throw new Error('esperava sucesso');
     expect(Object.hasOwn(parsed.state, 'error')).toBe(false);
   });
+
+  it('aceita firstVisibleMs e durationMs finitos >= 0, juntos ou separados', () => {
+    for (const value of [0, 0.25, 12.5, 1234, Number.MAX_VALUE]) {
+      for (const state of [
+        { ...STATE, firstVisibleMs: value },
+        { ...STATE, durationMs: value },
+        { ...STATE, status: 'translated', firstVisibleMs: value, durationMs: value },
+      ]) {
+        expect(parsePageCommandResponse({ ok: true, state })).toEqual({ ok: true, state });
+      }
+    }
+    const withError = { ...STATE, status: 'error', error: 'network', durationMs: 7 };
+    expect(parsePageCommandResponse({ ok: true, state: withError })).toEqual({
+      ok: true,
+      state: withError,
+    });
+  });
+
+  it('omite firstVisibleMs e durationMs quando ausentes', () => {
+    const parsed = parsePageCommandResponse({ ok: true, state: STATE });
+    if (parsed?.ok !== true) throw new Error('esperava sucesso');
+    expect(Object.hasOwn(parsed.state, 'firstVisibleMs')).toBe(false);
+    expect(Object.hasOwn(parsed.state, 'durationMs')).toBe(false);
+  });
+
+  it('recusa tempos NaN, infinitos, negativos ou não numéricos', () => {
+    for (const key of ['firstVisibleMs', 'durationMs']) {
+      for (const value of [Number.NaN, Infinity, -Infinity, -1, -0.5, '1', '', null, true, {}]) {
+        expect(
+          parsePageCommandResponse({ ok: true, state: { ...STATE, [key]: value } }),
+        ).toBeNull();
+      }
+    }
+  });
 });

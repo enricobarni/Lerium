@@ -11,9 +11,9 @@
  * aplicado. Um `markers_invalid` com fallback põe as unidades nó a nó do
  * segmento no início da sua classe, em ordem.
  *
- * Sem `chrome`: a porta, o UUID, a geometria, os timers e as marcas de
- * desempenho são injetados. Sem logs e sem texto no estado emitido nem nas
- * marcas (só nomes fixos, contagens e códigos de erro).
+ * Sem `chrome`: a porta, o UUID, a geometria, os timers e o relógio são
+ * injetados. Sem logs e sem texto no estado emitido (só contagens, tempos e
+ * códigos de erro).
  *
  * Regras:
  * - Toda mensagem recebida passa por `parseWorkerToContent`; é descartada se
@@ -34,10 +34,17 @@
  * - Cancelamento, fatal, interrupção e `dispose` esvaziam fila e janela;
  *   nada do job é aplicado depois.
  *
- * Marcas (`deps.mark`, só o nome): `lerium:job-start` no início de `start`;
- * `lerium:first-visible-applied` no primeiro segmento de prioridade 0
- * aplicado com sucesso; `lerium:job-done` quando o job termina em
- * `translated`. Cancelamento e erro não marcam `job-done`.
+ * Tempos (`deps.clock`, em ms, relativos ao início de `start`): o executor
+ * só lê o relógio e guarda os tempos no próprio estado. Não usa
+ * `performance.mark`/`measure`: a linha do tempo de User Timing é
+ * compartilhada com a página, e marcas com nome fixo denunciariam a
+ * extensão (fingerprinting).
+ * - `firstVisibleMs`: até o primeiro segmento de prioridade 0 aplicado com
+ *   sucesso; ausente se nenhum foi.
+ * - `durationMs`: até o fim do job, qualquer que seja o término
+ *   (`translated`, `cancelled` ou `error`); ausente durante `translating`.
+ * Ambos somem a cada `start`. Leitura não finita, negativa ou que lança é
+ * descartada (o campo fica ausente); o relógio nunca derruba o job.
  *
  * Contagens: `total` é o número de segmentos; `skipped` os acima de
  * `MAX_SEGMENT_CHARS`; `done` os aplicados; `failed` os que o applier
@@ -93,6 +100,10 @@ export interface JobState {
   skipped: number;
   /** Código do erro (`JobFatalErrorKind` ou `interrupted`); nunca texto da página. */
   error?: JobErrorKind;
+  /** Ms do início ao primeiro segmento visível aplicado; ausente até acontecer. */
+  firstVisibleMs?: number;
+  /** Ms do início ao fim do job; ausente até o job terminar. */
+  durationMs?: number;
 }
 
 export interface JobRunnerDeps {
@@ -107,12 +118,10 @@ export interface JobRunnerDeps {
   /** Altura da viewport (no content real: `window.innerHeight`). */
   viewportHeight(): number;
   /**
-   * Relógio monotônico (no content real: `performance.now`). Reservado para
-   * medições de duração; as marcas atuais levam o próprio carimbo de tempo.
+   * Relógio monotônico em ms (no content real: `performance.now`). Só é
+   * lido: ler não cria entrada visível à página.
    */
-  now?: () => number;
-  /** Marca de desempenho (no content real: `performance.mark`); só nomes fixos. */
-  mark?: (name: string) => void;
+  clock(): number;
   /** Limite da janela; só para teste. Padrão `MAX_UNITS_IN_FLIGHT`. */
   maxInFlight?: number;
   onState?(state: JobState): void;
@@ -136,10 +145,6 @@ export const INTERRUPTED = 'interrupted' as const;
 /** Código de erro do job: falha fatal do service worker ou porta perdida. */
 export type JobErrorKind = JobFatalErrorKind | typeof INTERRUPTED;
 
-export const MARK_JOB_START = 'lerium:job-start';
-export const MARK_FIRST_VISIBLE_APPLIED = 'lerium:first-visible-applied';
-export const MARK_JOB_DONE = 'lerium:job-done';
-
 /** Um plano em andamento: resultados chegam em qualquer ordem. */
 interface SegmentTask {
   readonly plan: SegmentPlan;
@@ -162,7 +167,6 @@ interface ActiveJob {
   readonly window: ReturnType<typeof createInFlightWindow>;
   /** `unitId` em voo → plano a que pertence. */
   readonly inFlight: Map<string, SegmentTask>;
-  firstVisibleMarked: boolean;
   timer: unknown;
   readonly onMessage: (message: unknown) => void;
   readonly onDisconnect: () => void;
@@ -227,12 +231,32 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     if (!disposed) deps.onState?.({ ...state });
   };
 
-  const mark = (name: string): void => {
+  /** `clock()` no início do `start` atual; `undefined` se a leitura falhou. */
+  let startedAt: number | undefined;
+
+  const readClock = (): number | undefined => {
     try {
-      deps.mark?.(name);
+      const value = deps.clock();
+      return Number.isFinite(value) ? value : undefined;
     } catch {
-      // Marca de desempenho é diagnóstico: nunca derruba o job.
+      // Relógio é diagnóstico: nunca derruba o job.
+      return undefined;
     }
+  };
+
+  /** Ms desde o início do `start` atual, ou `undefined` se não dá para medir. */
+  const elapsed = (): number | undefined => {
+    if (startedAt === undefined) return undefined;
+    const now = readClock();
+    if (now === undefined) return undefined;
+    const value = now - startedAt;
+    return Number.isFinite(value) && value >= 0 ? value : undefined;
+  };
+
+  /** `next` com o `durationMs` do job que termina agora (se medível). */
+  const finished = (next: JobState): JobState => {
+    const durationMs = elapsed();
+    return durationMs === undefined ? next : { ...next, durationMs };
   };
 
   /** Encerra o job: fila, janela, timer, ouvintes e porta. Nada do job é aplicado depois. */
@@ -254,18 +278,19 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 
   const fail = (job: ActiveJob, error: JobErrorKind): void => {
     teardown(job);
-    emit({ ...state, status: 'error', error });
+    emit(finished({ ...state, status: 'error', error }));
   };
 
   /** Aplica o plano completo; fallback volta à frente da própria classe. */
   const applyTask = (job: ActiveJob, task: SegmentTask): void => {
     const result = applier.apply(task.plan.segmentId, task.results);
     if (result.ok) {
-      if (task.priority === PRIORITY_VISIBLE_MAIN && !job.firstVisibleMarked) {
-        job.firstVisibleMarked = true;
-        mark(MARK_FIRST_VISIBLE_APPLIED);
+      const next: JobState = { ...state, done: state.done + 1 };
+      if (task.priority === PRIORITY_VISIBLE_MAIN && state.firstVisibleMs === undefined) {
+        const firstVisibleMs = elapsed();
+        if (firstVisibleMs !== undefined) next.firstVisibleMs = firstVisibleMs;
       }
-      emit({ ...state, done: state.done + 1 });
+      emit(next);
     } else if (result.fallback !== undefined) {
       pushTaskFront(job.queue, createTask(result.fallback, task.priority));
     } else {
@@ -288,8 +313,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       if (item === undefined) {
         if (job.window.size === 0) {
           teardown(job);
-          mark(MARK_JOB_DONE);
-          emit({ ...state, status: 'translated' });
+          emit(finished({ ...state, status: 'translated' }));
         }
         return;
       }
@@ -344,14 +368,14 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 
   const cancel = (): void => {
     if (disposed) return;
-    if (stopActive()) emit({ ...state, status: 'cancelled' });
+    if (stopActive()) emit(finished({ ...state, status: 'cancelled' }));
   };
 
   return {
     start() {
       if (disposed) return;
       stopActive();
-      mark(MARK_JOB_START);
+      startedAt = readClock();
       applier.restore();
       applier.clear();
 
@@ -376,8 +400,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         skipped,
       };
       if (queue.size === 0) {
-        mark(MARK_JOB_DONE);
-        emit({ ...base, status: 'translated' });
+        emit(finished({ ...base, status: 'translated' }));
         return;
       }
 
@@ -385,7 +408,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       try {
         port = deps.connect();
       } catch {
-        emit({ ...base, status: 'error', error: INTERRUPTED });
+        emit(finished({ ...base, status: 'error', error: INTERRUPTED }));
         return;
       }
 
@@ -395,7 +418,6 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         queue,
         window: createInFlightWindow(maxInFlight),
         inFlight: new Map(),
-        firstVisibleMarked: false,
         timer: undefined,
         onMessage: (message) => handleMessage(job, message),
         onDisconnect: () => {
@@ -424,7 +446,8 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       const wasActive = stopActive();
       applier.restore();
       if (!wasActive && state.view === 'original') return;
-      emit({ ...state, status: wasActive ? 'cancelled' : state.status, view: 'original' });
+      const next: JobState = { ...state, view: 'original' };
+      emit(wasActive ? finished({ ...next, status: 'cancelled' }) : next);
     },
 
     showTranslation() {
@@ -440,7 +463,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     dispose() {
       if (disposed) return;
       disposed = true;
-      if (stopActive()) state = { ...state, status: 'cancelled' };
+      if (stopActive()) state = finished({ ...state, status: 'cancelled' });
       applier.clear();
     },
   };

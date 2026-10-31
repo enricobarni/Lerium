@@ -20,10 +20,8 @@ installOnce(globalThis, INSTALL_KEY, () => {
     clearInterval: (id) => clearInterval(id as number),
     measure: (block) => block.getBoundingClientRect(),
     viewportHeight: () => window.innerHeight,
-    now: () => performance.now(),
-    mark: (name) => {
-      performance.mark(name);
-    },
+    // Só leitura do relógio: nada de `performance.mark` (visível à página).
+    clock: () => performance.now(),
   });
 
   const controller = createContentController({

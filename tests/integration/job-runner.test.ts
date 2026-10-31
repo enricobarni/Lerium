@@ -13,6 +13,7 @@ import {
   isSendableUnit,
   PING_INTERVAL_MS,
   type JobRunner,
+  type JobRunnerDeps,
   type JobState,
 } from '../../src/content/job-runner';
 import type { SegmentPlan } from '../../src/content/page-applier';
@@ -213,7 +214,8 @@ interface SetupOptions {
   /** Padrão: todo bloco visível (a ordem fica a de documento). */
   measure?: (block: Element) => BlockRect;
   maxInFlight?: number;
-  mark?: (name: string) => void;
+  /** Padrão: relógio sem leitura válida (NaN), então o estado não leva tempos. */
+  clock?: () => number;
 }
 
 /** `hook` roda dentro do `onState`, depois de registrar o estado (reentrância). */
@@ -238,7 +240,7 @@ function setup(
     measure: options.measure ?? (() => VISIBLE_RECT),
     viewportHeight: () => VIEWPORT_HEIGHT,
     ...(options.maxInFlight === undefined ? {} : { maxInFlight: options.maxInFlight }),
-    ...(options.mark === undefined ? {} : { mark: options.mark }),
+    clock: options.clock ?? (() => Number.NaN),
     onState: (state) => {
       states.push(state);
       hook?.(state, runner);
@@ -1421,80 +1423,163 @@ describe('createJobRunner — escalonador', () => {
     expect(pings()).toBe(2);
   });
 
-  it('marcas: início, primeiro visível aplicado e fim, só com nomes', () => {
-    const calls: unknown[][] = [];
+  it('tempos: primeiro visível e duração pelo relógio injetado, sem texto', () => {
+    let now = 5000;
     const document = parse(
       '<nav><p>Menu link.</p></nav>' +
         '<p data-pos="below">Far line.</p>' +
         '<p>Hello<!--x--> world</p>' +
         '<p>Seen line.</p>',
     );
-    const { runner, port } = setup(document, undefined, {
+    const { runner, port, states } = setup(document, undefined, {
       measure: byPosition,
-      mark: (...args: unknown[]) => {
-        calls.push(args);
-      },
+      clock: () => now,
     });
     runner.start();
-    expect(calls).toEqual([['lerium:job-start']]);
+    const timesOf = (state: JobState): unknown[] => [state.firstVisibleMs, state.durationMs];
+    expect(timesOf(runner.getState())).toEqual([undefined, undefined]);
+    expect(Object.hasOwn(runner.getState(), 'firstVisibleMs')).toBe(false);
+    expect(Object.hasOwn(runner.getState(), 'durationMs')).toBe(false);
     const fake = port();
 
-    // O primeiro segmento visível (duas unidades) falha: ainda não marca.
+    // O primeiro segmento visível (duas unidades) falha: ainda sem tempo.
+    now = 5010;
     fake.replyError('timeout');
     fake.replyError('timeout');
     expect(runner.getState()).toMatchObject({ failed: 1, done: 0 });
-    expect(calls).toEqual([['lerium:job-start']]);
-    // O segundo visível é aplicado: marca uma vez só.
+    expect(timesOf(runner.getState())).toEqual([undefined, undefined]);
+    // O segundo visível é aplicado: registra uma vez só.
+    now = 5025.5;
     fake.reply(upperCase);
-    expect(calls).toEqual([['lerium:job-start'], ['lerium:first-visible-applied']]);
+    expect(timesOf(runner.getState())).toEqual([25.5, undefined]);
+    // Segmentos seguintes (abaixo e periférico) não mexem no primeiro tempo.
+    now = 5300;
     fake.runToEnd(upperCase);
 
-    expect(calls).toEqual([
-      ['lerium:job-start'],
-      ['lerium:first-visible-applied'],
-      ['lerium:job-done'],
-    ]);
-    expect(JSON.stringify(calls)).not.toMatch(/menu|far|hello|world|seen|line/i);
+    expect(runner.getState()).toMatchObject({
+      status: 'translated',
+      firstVisibleMs: 25.5,
+      durationMs: 300,
+    });
+    expect(
+      states
+        .filter((state) => state.status === 'translating')
+        .every((state) => state.durationMs === undefined),
+    ).toBe(true);
+    expect(JSON.stringify(states)).not.toMatch(/menu|far|hello|world|seen|line/i);
   });
 
-  it('marcas: sem visível não marca o primeiro; cancel e erro não marcam o fim', () => {
-    const names: string[] = [];
-    const mark = (name: string): void => {
-      names.push(name);
-    };
+  it('tempos: zerados a cada start; restart ignora o job anterior', () => {
+    let now = 100;
+    const page = '<p>Seen line.</p><p>Two line.</p>';
+    const { runner, ports } = setup(parse(page), undefined, { clock: () => now });
+    runner.start();
+    now = 130;
+    ports[0]?.runToEnd(upperCase);
+    expect(runner.getState()).toMatchObject({ firstVisibleMs: 30, durationMs: 30 });
+
+    now = 1000;
+    runner.start();
+    const restarted = runner.getState();
+    expect(restarted.status).toBe('translating');
+    expect(Object.hasOwn(restarted, 'firstVisibleMs')).toBe(false);
+    expect(Object.hasOwn(restarted, 'durationMs')).toBe(false);
+    now = 1007;
+    ports[1]?.reply(upperCase);
+    expect(runner.getState().firstVisibleMs).toBe(7);
+    now = 1009;
+    ports[1]?.runToEnd(upperCase);
+    expect(runner.getState()).toMatchObject({ firstVisibleMs: 7, durationMs: 9 });
+  });
+
+  it('tempos: sem visível não registra o primeiro; cancel e erro registram a duração', () => {
+    let now = 0;
+    const clock = (): number => now;
     const page = '<p data-pos="below">Far line.</p><nav><p>Menu link.</p></nav>';
 
-    const done = setup(parse(page), undefined, { measure: byPosition, mark });
+    const done = setup(parse(page), undefined, { measure: byPosition, clock });
     done.runner.start();
+    now = 50;
     done.port().runToEnd(upperCase);
-    expect(done.runner.getState()).toMatchObject({ status: 'translated', done: 2 });
-    expect(names).toEqual(['lerium:job-start', 'lerium:job-done']);
+    expect(done.runner.getState()).toMatchObject({ status: 'translated', done: 2, durationMs: 50 });
+    expect(done.runner.getState().firstVisibleMs).toBeUndefined();
 
-    names.length = 0;
-    const cancelled = setup(parse('<p>Seen line.</p><p>Two line.</p>'), undefined, { mark });
+    now = 0;
+    const cancelled = setup(parse('<p>Seen line.</p><p>Two line.</p>'), undefined, { clock });
     cancelled.runner.start();
+    now = 4;
     cancelled.port().reply(upperCase);
+    now = 9;
     cancelled.runner.cancel();
-    expect(names).toEqual(['lerium:job-start', 'lerium:first-visible-applied']);
+    expect(cancelled.runner.getState()).toMatchObject({
+      status: 'cancelled',
+      firstVisibleMs: 4,
+      durationMs: 9,
+    });
 
-    names.length = 0;
-    const failed = setup(parse(page), undefined, { measure: byPosition, mark });
+    now = 0;
+    const failed = setup(parse(page), undefined, { measure: byPosition, clock });
     failed.runner.start();
+    now = 3;
     failed.port().emit({ type: 'job:fatal', jobId: JOB_IDS[0], error: 'model_missing' });
-    expect(failed.runner.getState()).toMatchObject({ status: 'error', error: 'model_missing' });
-    expect(names).toEqual(['lerium:job-start']);
+    expect(failed.runner.getState()).toMatchObject({
+      status: 'error',
+      error: 'model_missing',
+      durationMs: 3,
+    });
+    expect(failed.runner.getState().firstVisibleMs).toBeUndefined();
+
+    now = 0;
+    const empty = setup(parse('<p>   </p>'), undefined, { clock });
+    empty.runner.start();
+    expect(empty.runner.getState()).toMatchObject({ status: 'translated', durationMs: 0 });
   });
 
-  it('marca que lança não derruba o job', () => {
-    const document = parse('<p>Only line.</p>');
-    const { runner, port } = setup(document, undefined, {
-      mark: () => {
-        throw new Error('mark indisponível');
+  it('relógio que lança, NaN ou que volta no tempo não derruba o job nem gera tempo', () => {
+    const clocks: (() => number)[] = [
+      () => {
+        throw new Error('relógio indisponível');
       },
-    });
-    runner.start();
-    port().runToEnd(upperCase);
-    expect(bodyHtml(document)).toBe('<p>ONLY LINE.</p>');
-    expect(runner.getState()).toMatchObject({ status: 'translated', done: 1 });
+      () => Number.NaN,
+    ];
+    let backwards = 100;
+    clocks.push(() => (backwards -= 10));
+    for (const clock of clocks) {
+      const document = parse('<p>Only line.</p>');
+      const { runner, port } = setup(document, undefined, { clock });
+      runner.start();
+      port().runToEnd(upperCase);
+      expect(bodyHtml(document)).toBe('<p>ONLY LINE.</p>');
+      const state = runner.getState();
+      expect(state).toMatchObject({ status: 'translated', done: 1 });
+      expect(Object.hasOwn(state, 'firstVisibleMs')).toBe(false);
+      expect(Object.hasOwn(state, 'durationMs')).toBe(false);
+    }
+  });
+
+  it('não cria entradas de User Timing (performance.mark/measure)', () => {
+    const markSpy = vi.spyOn(performance, 'mark');
+    const measureSpy = vi.spyOn(performance, 'measure');
+    try {
+      const { runner, port } = setup(parse('<p>Seen line.</p>'), undefined, {
+        clock: () => performance.now(),
+      });
+      runner.start();
+      port().runToEnd(upperCase);
+      expect(runner.getState().status).toBe('translated');
+      expect(markSpy).not.toHaveBeenCalled();
+      expect(measureSpy).not.toHaveBeenCalled();
+    } finally {
+      markSpy.mockRestore();
+      measureSpy.mockRestore();
+    }
+  });
+
+  it('a API não expõe mais deps de marca nem nomes de marca', async () => {
+    const runnerModule: Record<string, unknown> = await import('../../src/content/job-runner');
+    expect(Object.keys(runnerModule).filter((key) => /mark/i.test(key))).toEqual([]);
+    expectTypeOf<JobRunnerDeps>().not.toHaveProperty('mark');
+    expectTypeOf<JobRunnerDeps>().not.toHaveProperty('now');
+    expectTypeOf<JobRunnerDeps>().toHaveProperty('clock').toEqualTypeOf<() => number>();
   });
 });
