@@ -18,6 +18,10 @@ installOnce(globalThis, INSTALL_KEY, () => {
     randomUUID: () => crypto.randomUUID(),
     setInterval: (fn, ms) => setInterval(fn, ms),
     clearInterval: (id) => clearInterval(id as number),
+    measure: (block) => block.getBoundingClientRect(),
+    viewportHeight: () => window.innerHeight,
+    // Só leitura do relógio: nada de `performance.mark` (visível à página).
+    clock: () => performance.now(),
   });
 
   const controller = createContentController({

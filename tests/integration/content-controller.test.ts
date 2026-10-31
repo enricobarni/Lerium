@@ -106,6 +106,11 @@ function setup(body = '<p>Plain sentence here.</p><p>Second line.</p>'): Harness
     randomUUID: () => JOB_ID,
     setInterval: (fn, ms) => setInterval(fn, ms),
     clearInterval: (id) => clearInterval(id as Parameters<typeof clearInterval>[0]),
+    // Geometria falsa: todo bloco visível, ordem de documento.
+    measure: () => ({ top: 0, bottom: 20, width: 100, height: 20 }),
+    viewportHeight: () => 600,
+    // Sem leitura válida: o estado não leva tempos (os testes comparam com toEqual).
+    clock: () => Number.NaN,
   });
   const controller = createContentController({
     runner,
@@ -439,6 +444,61 @@ describe('toPageStateView', () => {
     expect(toPageStateView({ ...IDLE_STATE, error: 'interrupted' })).toEqual({
       ...IDLE_STATE,
       error: 'interrupted',
+    });
+  });
+
+  it('copia firstVisibleMs e durationMs quando presentes', () => {
+    const timed: JobState = {
+      ...IDLE_STATE,
+      status: 'translated',
+      view: 'translation',
+      firstVisibleMs: 12.5,
+      durationMs: 340,
+    };
+    expect(toPageStateView(timed)).toEqual(timed);
+    expect(toPageStateView({ ...IDLE_STATE, durationMs: 0 })).toEqual({
+      ...IDLE_STATE,
+      durationMs: 0,
+    });
+    const view = toPageStateView(IDLE_STATE);
+    expect(Object.hasOwn(view, 'firstVisibleMs')).toBe(false);
+    expect(Object.hasOwn(view, 'durationMs')).toBe(false);
+  });
+
+  it('o estado do runner real leva os tempos à resposta do controller', () => {
+    let now = 1000;
+    const document = parse('<p>Only line.</p>');
+    const ports: FakePort[] = [];
+    const runner = createJobRunner({
+      root: document,
+      connect: () => {
+        const fake = createFakePort();
+        ports.push(fake);
+        return fake.port;
+      },
+      randomUUID: () => JOB_ID,
+      setInterval: (fn, ms) => setInterval(fn, ms),
+      clearInterval: (id) => clearInterval(id as Parameters<typeof clearInterval>[0]),
+      measure: () => ({ top: 0, bottom: 20, width: 100, height: 20 }),
+      viewportHeight: () => 600,
+      clock: () => now,
+    });
+    const controller = createContentController({
+      runner,
+      runtimeId: RUNTIME_ID,
+      extensionOrigin: ORIGIN,
+    });
+    runner.start();
+    now = 1040;
+    const fake = ports[0];
+    if (fake === undefined) throw new Error('sem porta');
+    fake.runToEnd((text) => text.toUpperCase());
+    const response = parsePageCommandResponse(
+      controller.handleMessage(command('get-state'), POPUP),
+    );
+    expect(response).toEqual({
+      ok: true,
+      state: expect.objectContaining({ status: 'translated', firstVisibleMs: 40, durationMs: 40 }),
     });
   });
 });

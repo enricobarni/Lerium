@@ -16,6 +16,14 @@ export { MAX_OUTPUT_CHARS, MAX_UNIT_CHARS } from '../core/text-limits';
 
 export const PAGE_JOB_PORT_NAME = 'lerium:page-job';
 
+/**
+ * Unidades em voo por Port (janela do content) e capacidade do semáforo
+ * global no service worker (ADR-015). O valor sai do experimento de
+ * concorrência (`tests/manual/concurrency.manual.test.ts`) no hardware de
+ * referência; provisório até a medição ser registrada.
+ */
+export const MAX_UNITS_IN_FLIGHT = 1;
+
 /** Comprimento máximo de um `unitId` (`seg-0#text@7`, `seg-3#node-12@41`…). */
 export const MAX_UNIT_ID_CHARS = 64;
 

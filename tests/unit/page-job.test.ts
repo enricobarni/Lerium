@@ -4,6 +4,7 @@ import {
   createPageJobHandler,
   type PageJobDeps,
 } from '../../src/background/page-job';
+import { createTranslationGate } from '../../src/background/translation-gate';
 import type {
   TranslateOptions,
   TranslationInput,
@@ -35,6 +36,9 @@ const INJECTED_DOCUMENTS = new Map([
 ]);
 const isInjectedDocument = (tabId: number, documentId: string): boolean =>
   INJECTED_DOCUMENTS.get(tabId) === documentId;
+
+/** Semáforo folgado: os testes que não tratam do limite global não esbarram nele. */
+const roomyGate = () => createTranslationGate(16);
 
 const VALID_SENDER: PortSenderLike = {
   id: RUNTIME_ID,
@@ -119,6 +123,7 @@ function setup(overrides: Partial<PageJobDeps> = {}) {
     isInjectedDocument,
     loadSettings,
     createProvider,
+    gate: roomyGate(),
     ...overrides,
   });
   const port = createFakePort();
@@ -166,6 +171,7 @@ describe('createPageJobHandler — remetente', () => {
     const handler = createPageJobHandler({
       runtimeId: RUNTIME_ID,
       isInjectedDocument,
+      gate: roomyGate(),
       loadSettings,
       createProvider: () => createFakeProvider().provider,
     });
@@ -183,6 +189,7 @@ describe('createPageJobHandler — remetente', () => {
     const handler = createPageJobHandler({
       runtimeId: RUNTIME_ID,
       isInjectedDocument,
+      gate: roomyGate(),
       loadSettings: async () => SETTINGS,
       createProvider: () => createFakeProvider().provider,
     });
@@ -196,6 +203,7 @@ describe('createPageJobHandler — remetente', () => {
     const handler = createPageJobHandler({
       runtimeId: RUNTIME_ID,
       isInjectedDocument,
+      gate: roomyGate(),
       loadSettings: async () => SETTINGS,
       createProvider: () => createFakeProvider().provider,
     });
@@ -326,6 +334,7 @@ describe('createPageJobHandler — tradução', () => {
     const handler = createPageJobHandler({
       runtimeId: RUNTIME_ID,
       isInjectedDocument,
+      gate: roomyGate(),
       loadSettings: async () => SETTINGS,
       createProvider: () => ({ translate: () => Promise.reject(new Error('boom')) }),
     });
@@ -619,5 +628,270 @@ describe('createPageJobHandler — uma port por aba', () => {
     handler(second);
     expect(first.disconnect).not.toHaveBeenCalled();
     expect(second.disconnect).not.toHaveBeenCalled();
+  });
+});
+
+describe('createPageJobHandler — várias unidades e semáforo global', () => {
+  const otherTab: PortSenderLike = { ...VALID_SENDER, tab: { id: 8 }, documentId: 'DOC-8' };
+  const ok = (text = TRANSLATED): TranslationResult => ({ ok: true, text, durationMs: 1 });
+  const busy = (unitId: string) => ({
+    type: 'job:result',
+    jobId: JOB_ID,
+    unitId,
+    ok: false,
+    error: 'busy',
+    retryable: true,
+  });
+
+  it('N=2: duas unidades em voo, a terceira recebe busy', async () => {
+    const gate = createTranslationGate(2);
+    const { port, calls } = setup({ gate, maxUnitsPerPort: 2 });
+    port.emit(unit('a'));
+    port.emit(unit('b'));
+    port.emit(unit('c'));
+    await flush();
+    expect(calls).toHaveLength(2);
+    expect(gate.inUse).toBe(2);
+    expect(port.sent).toEqual([busy('c')]);
+
+    calls[1]!.resolve(ok('B'));
+    calls[0]!.resolve(ok('A'));
+    await flush();
+    expect(port.sent).toEqual([
+      busy('c'),
+      { type: 'job:result', jobId: JOB_ID, unitId: 'b', ok: true, text: 'B' },
+      { type: 'job:result', jobId: JOB_ID, unitId: 'a', ok: true, text: 'A' },
+    ]);
+    expect(gate.inUse).toBe(0);
+
+    // Vagas da port liberadas: a terceira é aceita agora.
+    port.emit(unit('c'));
+    await flush();
+    expect(calls).toHaveLength(3);
+  });
+
+  it('unitId repetido em voo é ignorado, sem busy nem segunda chamada', async () => {
+    const gate = createTranslationGate(2);
+    const { port, calls } = setup({ gate, maxUnitsPerPort: 2 });
+    port.emit(unit('a'));
+    port.emit(unit('a'));
+    await flush();
+    expect(calls).toHaveLength(1);
+    expect(port.sent).toEqual([]);
+    expect(gate.inUse).toBe(1);
+
+    calls[0]!.resolve(ok());
+    await flush();
+    expect(port.sent).toEqual([
+      { type: 'job:result', jobId: JOB_ID, unitId: 'a', ok: true, text: TRANSLATED },
+    ]);
+    // Concluída, a mesma unidade pode ser pedida de novo (retry).
+    port.emit(unit('a'));
+    await flush();
+    expect(calls).toHaveLength(2);
+  });
+
+  it('semáforo compartilhado entre ports: a segunda espera a primeira', async () => {
+    const gate = createTranslationGate(1);
+    const { handler, port: first, calls } = setup({ gate });
+    const second = createFakePort(otherTab);
+    handler(second);
+
+    first.emit(unit('a'));
+    second.emit(unit('b'));
+    await flush();
+    // A espera não chama o provedor nem responde busy.
+    expect(calls).toHaveLength(1);
+    expect(gate.inUse).toBe(1);
+    expect(gate.waiting).toBe(1);
+    expect(second.sent).toEqual([]);
+
+    calls[0]!.resolve(ok('A'));
+    await flush();
+    expect(calls).toHaveLength(2);
+    expect(gate.inUse).toBe(1);
+    expect(gate.waiting).toBe(0);
+    calls[1]!.resolve(ok('B'));
+    await flush();
+    expect(first.sent).toEqual([
+      { type: 'job:result', jobId: JOB_ID, unitId: 'a', ok: true, text: 'A' },
+    ]);
+    expect(second.sent).toEqual([
+      { type: 'job:result', jobId: JOB_ID, unitId: 'b', ok: true, text: 'B' },
+    ]);
+    expect(gate.inUse).toBe(0);
+  });
+
+  it('disconnect durante a espera sai da fila sem chamar o provedor', async () => {
+    const gate = createTranslationGate(1);
+    const { handler, port: first, calls } = setup({ gate });
+    const second = createFakePort(otherTab);
+    handler(second);
+    first.emit(unit('a'));
+    second.emit(unit('b'));
+    await flush();
+    expect(gate.waiting).toBe(1);
+
+    second.close();
+    expect(gate.waiting).toBe(0);
+    calls[0]!.resolve(ok());
+    await flush();
+    expect(calls).toHaveLength(1);
+    expect(second.sent).toEqual([]);
+    expect(second.listenerCount()).toBe(0);
+    expect(gate.inUse).toBe(0);
+  });
+
+  it('nova port da mesma aba aborta também as unidades na fila', async () => {
+    const gate = createTranslationGate(1);
+    const { handler, port: first, calls } = setup({ gate, maxUnitsPerPort: 2 });
+    first.emit(unit('a'));
+    first.emit(unit('b'));
+    await flush();
+    expect(gate.waiting).toBe(1);
+
+    handler(createFakePort());
+    expect(gate.waiting).toBe(0);
+    expect(calls[0]!.options!.signal!.aborted).toBe(true);
+    calls[0]!.resolve({ ok: false, error: 'cancelled', retryable: false });
+    await flush();
+    expect(calls).toHaveLength(1);
+    expect(first.sent).toEqual([]);
+    expect(gate.inUse).toBe(0);
+  });
+
+  it('fatal aborta as demais unidades (em voo e na fila) e não posta mais nada', async () => {
+    const gate = createTranslationGate(2);
+    const { port, calls } = setup({ gate, maxUnitsPerPort: 3 });
+    port.emit(unit('a'));
+    port.emit(unit('b'));
+    port.emit(unit('c'));
+    await flush();
+    expect(calls).toHaveLength(2);
+    expect(gate.waiting).toBe(1);
+
+    calls[0]!.resolve({ ok: false, error: 'network', retryable: true });
+    await flush();
+    expect(port.sent).toEqual([
+      {
+        type: 'job:result',
+        jobId: JOB_ID,
+        unitId: 'a',
+        ok: false,
+        error: 'network',
+        retryable: true,
+      },
+      { type: 'job:fatal', jobId: JOB_ID, error: 'network' },
+    ]);
+    expect(port.disconnect).toHaveBeenCalledTimes(1);
+    expect(calls[1]!.options!.signal!.aborted).toBe(true);
+    expect(gate.waiting).toBe(0);
+    // A vaga de "a" não passou para "c": a fila já tinha sido esvaziada.
+    expect(calls).toHaveLength(2);
+
+    calls[1]!.options!.onToken!('abc');
+    calls[1]!.resolve(ok());
+    await flush();
+    expect(port.sent).toHaveLength(2);
+    expect(calls).toHaveLength(2);
+    expect(gate.inUse).toBe(0);
+  });
+
+  it('progresso é limitado por unidade', async () => {
+    let clock = 0;
+    const gate = createTranslationGate(2);
+    const { port, calls } = setup({ gate, maxUnitsPerPort: 2, now: () => clock });
+    port.emit(unit('a'));
+    port.emit(unit('b'));
+    await flush();
+    clock = PROGRESS_INTERVAL_MS;
+    calls[0]!.options!.onToken!('xx');
+    calls[1]!.options!.onToken!('yyy');
+    calls[0]!.options!.onToken!('x');
+    expect(port.sent).toEqual([
+      { type: 'job:progress', jobId: JOB_ID, unitId: 'a', chars: 2 },
+      { type: 'job:progress', jobId: JOB_ID, unitId: 'b', chars: 3 },
+    ]);
+  });
+
+  describe('gate.inUse volta a 0', () => {
+    it.each<[string, TranslationResult]>([
+      ['sucesso', ok()],
+      ['erro repetível', { ok: false, error: 'timeout', retryable: true }],
+      ['fatal', { ok: false, error: 'model_missing', retryable: false }],
+      ['saída grande demais', ok('x'.repeat(MAX_OUTPUT_CHARS + 1))],
+    ])('%s', async (_label, result) => {
+      const gate = createTranslationGate(1);
+      const { port, calls } = setup({ gate });
+      port.emit(unit());
+      await flush();
+      expect(gate.inUse).toBe(1);
+      calls[0]!.resolve(result);
+      await flush();
+      expect(gate.inUse).toBe(0);
+      expect(gate.waiting).toBe(0);
+    });
+
+    it('provedor que rejeita', async () => {
+      const gate = createTranslationGate(1);
+      const { port } = setup({
+        gate,
+        createProvider: () => ({ translate: () => Promise.reject(new Error('boom')) }),
+      });
+      port.emit(unit());
+      await flush();
+      expect(gate.inUse).toBe(0);
+      expect(port.sent).toHaveLength(1);
+    });
+
+    it('overflow no streaming: só quando o provedor retorna', async () => {
+      const gate = createTranslationGate(1);
+      const { port, calls } = setup({ gate });
+      port.emit(unit());
+      await flush();
+      calls[0]!.options!.onToken!('x'.repeat(MAX_OUTPUT_CHARS + 1));
+      expect(port.sent).toHaveLength(1);
+      // A geração ainda não terminou: a vaga global segue ocupada.
+      expect(gate.inUse).toBe(1);
+      calls[0]!.resolve({ ok: false, error: 'cancelled', retryable: false });
+      await flush();
+      expect(gate.inUse).toBe(0);
+    });
+
+    it('disconnect com unidade em voo', async () => {
+      const gate = createTranslationGate(1);
+      const { port, calls } = setup({ gate });
+      port.emit(unit());
+      await flush();
+      port.close();
+      expect(gate.inUse).toBe(1);
+      calls[0]!.resolve({ ok: false, error: 'cancelled', retryable: false });
+      await flush();
+      expect(gate.inUse).toBe(0);
+      expect(port.sent).toEqual([]);
+    });
+
+    it('settings indisponíveis: nem chega a adquirir', async () => {
+      const gate = createTranslationGate(1);
+      const { port } = setup({ gate, loadSettings: async () => null });
+      port.emit(unit());
+      await flush();
+      expect(gate.inUse).toBe(0);
+    });
+  });
+
+  it('limite por port inválido lança na criação', () => {
+    for (const maxUnitsPerPort of [0, -1, 1.5, Number.NaN]) {
+      expect(() =>
+        createPageJobHandler({
+          runtimeId: RUNTIME_ID,
+          isInjectedDocument,
+          loadSettings: async () => SETTINGS,
+          createProvider: () => createFakeProvider().provider,
+          gate: roomyGate(),
+          maxUnitsPerPort,
+        }),
+      ).toThrow(RangeError);
+    }
   });
 });

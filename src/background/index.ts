@@ -4,6 +4,8 @@ import { restrictToTrustedContexts } from '../storage/storage-access';
 import { createInjectHandler, createInjectionRegistry } from './injection';
 import { createMessageHandler, isHandledMessage } from './message-router';
 import { createPageJobHandler } from './page-job';
+import { createTranslationGate } from './translation-gate';
+import { MAX_UNITS_IN_FLIGHT } from '../shared/page-messages';
 
 /**
  * Service worker do Lerium (ADR-009): único cliente HTTP do Ollama. O
@@ -63,10 +65,15 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   return true;
 });
 
+// Semáforo único do worker (ADR-015): limita as traduções simultâneas somando
+// todas as abas. Guarda só contadores, nenhum conteúdo.
+const translationGate = createTranslationGate(MAX_UNITS_IN_FLIGHT);
+
 // Job de página: uma port por job, aberta pelo content script da aba.
 chrome.runtime.onConnect.addListener(
   createPageJobHandler({
     runtimeId: chrome.runtime.id,
+    gate: translationGate,
     isInjectedDocument: (tabId, documentId) => injectionRegistry.isInjected(tabId, documentId),
     loadSettings: () => settingsRepository.load().catch(() => null),
     createProvider: (settings) =>

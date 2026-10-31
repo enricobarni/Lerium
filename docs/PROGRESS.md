@@ -5,14 +5,58 @@
 
 ## Estado atual
 
-- **Fase:** 5 — Experiência progressiva e desempenho (a iniciar)
-- **Tarefa:** `chore/release-0.2.0` (encerra a Fase 4)
+- **Fase:** 5 — Experiência progressiva e desempenho (em andamento)
+- **Tarefa:** `feat/translation-scheduler` (fila com prioridades, semáforo global e limite de concorrência medido)
 - **Fase 4:** concluída — PRs #17–#22 mesclados; Gate cumprido (E2E de ida e volta byte a byte e aceite manual do responsável no Chrome real)
 - **Fase 3:** concluída — PRs #13–#16 mesclados; gate cumprido (18/18 execuções com o modelo real); ADR-011 aceita após conferência do model card pelo responsável
 - **Versão:** `0.2.0` (primeira que traduz páginas; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.2.0` pendente de criação pelo responsável. Versão anterior: `0.1.0`. Tag `v0.1.0` em `ab06507` (validado: lint, typecheck, 398 testes, build, 8 E2E) e release [Lerium 0.1.0](https://github.com/enricobarni/Lerium/releases/tag/v0.1.0) publicadas pelo responsável.
 - **Fase 2:** concluída — PRs #9 e #10 mesclados; aceite manual do responsável no Chrome estável (conexão, modelos listados, Ollama fechado)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
+
+## Fase 5 — `feat/translation-scheduler`
+
+| Commit | Mensagem |
+|---|---|
+| `cace500` | `feat(queue): adiciona fila pura com prioridades e limite` |
+| `44132a9` | `feat(content): classifica segmentos por visibilidade e periferia` |
+| `77ac3eb` | `feat(background): adiciona semáforo global de traduções` |
+| `ccd53b2` | `test(manual): mede concorrência do ollama na cpu` |
+| `aa2390a` | `feat(shared): define janela de unidades em voo do job de página` |
+| `c6444c6` | `refactor(content): usa o scheduler no executor do job` |
+| `3147d9d` | `feat(stream): permite n unidades por port no job de página` |
+| `c4c6c16` | `test(e2e): adiciona fixture longa e contador de requisições no mock` |
+| `1fc60af` | `test(e2e): verifica prioridade visível e limite entre abas` |
+| `e3f1c35` | `fix(content): mantém conteúdo principal dentro de role main ou article` |
+| `80e61a7` | `fix(content): mede o job sem expor marcas à página` |
+| `22f9cba` | `refactor(content): explicita duplicado na janela de unidades em voo` |
+| `5cc4d1e` | `test(content): liga o executor ao service worker com janela 2` |
+| (este commit) | `docs: registra adr-015 do scheduler e o limite medido` |
+
+Primeira branch da Fase 5. Resposta ao feedback da 0.2.0 (“a tradução é meio lenta”).
+
+**O que foi feito:**
+
+- `src/core/translation-scheduler.ts`: fila pura com prioridades e janela de unidades em voo.
+- `src/content/segment-priority.ts`: classificação visível / fora da tela / periférico (ADR-015).
+- `src/background/translation-gate.ts`: semáforo global FIFO entre abas.
+- Protocolo: até `MAX_UNITS_IN_FLIGHT` unidades por Port, `busy` acima disso (ADR-010 atualizada).
+- `src/content/job-runner.ts`: o executor usa a fila; tempos `firstVisibleMs`/`durationMs` no estado, sem `performance.mark`.
+- E2E da fila numa fixture longa autoral (`tests/fixtures/long-chapter.html`, 40 parágrafos).
+- Experimento de concorrência com o modelo real; limite fixado em 1 (ver ADR-015).
+
+**Trabalho paralelo:** fila, classificação, semáforo e script do experimento em paralelo (checkout e duas worktrees); integração do service worker e do content em paralelo; revisão e E2E escritos durante a medição, sem rodar nada pesado para não perturbar os números. Integração por `cherry-pick`, sem conflitos.
+
+**Revisão:** reviewer aprovou com ressalvas. Aplicadas: `header` dentro de `role` main/article continua principal, tempos sem expor marcas à página, blocos sem área ordenados corretamente, janela em voo com estado único e duplicado explícito, teste ligando o executor real ao service worker real com janela 2 (verificado por mutação: com 1 unidade por Port, os 3 testes falham).
+
+**Registro de método:**
+
+- A primeira rodada do experimento perdeu as medições com 2 e 4 simultâneas: a instância isolada do Ollama foi encerrada de fora no meio (sessão interrompida), e as requisições seguintes deram `network` em ~0,5 s. O log não mostrou erro. O experimento foi refeito inteiro, já no Ollama 0.40.13 (atualizado entre as rodadas).
+- Com 3 rodadas, 4 simultâneas passaram no critério por pouco (−15,4%). Como o resultado caiu na fronteira, a amostra subiu para 5 rodadas sem mudar a regra, e o ganho caiu para −4,3%.
+
+**Validações executadas** (códigos de saída conferidos): `npm run lint`, `typecheck`, `test` (1809/1809; eram 1678), `build` (`verify-dist` ok) e `test:e2e` (21/21).
+
+**Pendências:** medir `firstVisibleMs` na extensão, no Chrome real, com a fixture longa e um site de novel (smoke da próxima branch); `feat/viewport-priority` (reordenar ao rolar, aging do periférico).
 
 ## Fase 4 — `chore/release-0.2.0`
 
@@ -595,4 +639,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 5 — `feat/translation-scheduler`: fila compartilhada com prioridade (texto visível primeiro) e limite de concorrência, com medição do tempo até a primeira tradução visível no hardware real (i5-13420H).
+Fase 5 — `feat/viewport-priority`: observar a visibilidade com IntersectionObserver e reordenar a fila quando o leitor rola, com aging para o periférico não ficar parado; medir `firstVisibleMs` no Chrome real.

@@ -2,6 +2,7 @@ import type { TranslationProvider, TranslationResult } from '../core/translation
 import type { TranslationSettings } from '../core/types';
 import {
   MAX_OUTPUT_CHARS,
+  MAX_UNITS_IN_FLIGHT,
   PAGE_JOB_PORT_NAME,
   parseContentToWorker,
   type JobFatalErrorKind,
@@ -9,18 +10,23 @@ import {
   type WorkerToContentMessage,
 } from '../shared/page-messages';
 import type { PortLike, PortSenderLike } from '../shared/port-like';
+import type { TranslationGate } from './translation-gate';
 
 /**
- * Lado do service worker do job de página (ADR-009, ADR-014). Módulo puro:
- * `chrome` entra por injeção, e só `index.ts` toca a API. Cada port é um job:
- * configurações e provedor são lidos uma única vez (snapshot), há no máximo
- * uma unidade em voo e nada é enviado depois do desligamento. Nenhum texto
- * da página ou do modelo é registrado; só o resultado final volta pela port.
+ * Lado do service worker do job de página (ADR-009, ADR-014, ADR-015). Módulo
+ * puro: `chrome` entra por injeção, e só `index.ts` toca a API. Cada port é
+ * um job: configurações e provedor são lidos uma única vez (snapshot), há no
+ * máximo `maxUnitsPerPort` unidades aceitas ao mesmo tempo e nada é enviado
+ * depois do desligamento. Nenhum texto da página ou do modelo é registrado;
+ * só o resultado final volta pela port.
+ *
+ * O limite global de traduções simultâneas entre abas é o semáforo `gate`,
+ * um só para todo o worker: cada unidade aceita espera uma vaga antes de
+ * chamar o provedor, então a espera não conta no prazo do primeiro token.
  *
  * Há no máximo um job por aba: uma nova port válida da mesma aba (recarga,
- * novo clique) derruba a anterior, que aborta a unidade em voo e não posta
- * mais nada. O limite global de traduções simultâneas entre abas não é
- * tratado aqui; cabe ao scheduler da Fase 5.
+ * novo clique) derruba a anterior, que aborta as unidades (em voo ou na fila
+ * do semáforo) e não posta mais nada.
  */
 
 export interface PageJobDeps {
@@ -31,6 +37,10 @@ export interface PageJobDeps {
   /** Lê as configurações; `null` (ou rejeição) = indisponíveis. */
   loadSettings(): Promise<TranslationSettings | null>;
   createProvider(settings: TranslationSettings): TranslationProvider;
+  /** Semáforo global de traduções, compartilhado por todas as ports. */
+  gate: TranslationGate;
+  /** Unidades aceitas ao mesmo tempo por port; padrão `MAX_UNITS_IN_FLIGHT`. */
+  maxUnitsPerPort?: number;
   /** Relógio em milissegundos; padrão `Date.now`. */
   now?: () => number;
 }
@@ -102,6 +112,11 @@ type Ready =
 
 export function createPageJobHandler(deps: PageJobDeps): (port: PortLike) => void {
   const now = typeof deps.now === 'function' ? deps.now : () => Date.now();
+  const maxUnits = deps.maxUnitsPerPort ?? MAX_UNITS_IN_FLIGHT;
+  if (!Number.isInteger(maxUnits) || maxUnits < 1) {
+    throw new RangeError(`limite inválido de unidades por port: ${String(maxUnits)}`);
+  }
+  const { gate } = deps;
   /** Job ativo de cada aba; `stop` encerra sem postar mais nada. */
   const jobsByTab = new Map<number, { port: PortLike; stop: () => void }>();
 
@@ -122,7 +137,13 @@ export function createPageJobHandler(deps: PageJobDeps): (port: PortLike) => voi
     let disconnected = false;
     let jobId: string | null = null;
     let ready: Promise<Ready> | null = null;
-    let inFlight: AbortController | null = null;
+    /** Unidades aceitas desta port (em voo ou na fila do semáforo). */
+    const units = new Map<string, { controller: AbortController }>();
+
+    /** Libera a vaga da port, se ainda for desta unidade (unitId reenviado). */
+    const forget = (unitId: string, controller: AbortController): void => {
+      if (units.get(unitId)?.controller === controller) units.delete(unitId);
+    };
 
     const post = (message: WorkerToContentMessage): void => {
       if (disconnected) return;
@@ -137,8 +158,9 @@ export function createPageJobHandler(deps: PageJobDeps): (port: PortLike) => voi
     const teardown = (): void => {
       if (disconnected) return;
       disconnected = true;
-      inFlight?.abort();
-      inFlight = null;
+      // Aborta tudo: as em voo cortam a geração; as na fila saem do semáforo.
+      for (const { controller } of units.values()) controller.abort();
+      units.clear();
       port.onMessage.removeListener(onMessage);
       port.onDisconnect.removeListener(onDisconnect);
       // Só remove o registro se ainda for desta port (pode ter sido trocada).
@@ -174,10 +196,13 @@ export function createPageJobHandler(deps: PageJobDeps): (port: PortLike) => voi
       return ready;
     };
 
-    const runUnit = async (id: string, unit: JobUnitMessage, controller: AbortController) => {
-      const state = await prepare(id);
-      if (!state.ok || disconnected || controller.signal.aborted) return;
-
+    /** Traduz uma unidade já com a vaga do semáforo global. */
+    const translateUnit = async (
+      id: string,
+      state: Extract<Ready, { ok: true }>,
+      unit: JobUnitMessage,
+      controller: AbortController,
+    ): Promise<void> => {
       let chars = 0;
       let overflowed = false;
       let lastProgressAt = now();
@@ -185,11 +210,12 @@ export function createPageJobHandler(deps: PageJobDeps): (port: PortLike) => voi
         if (overflowed || controller.signal.aborted) return;
         chars += delta.length;
         if (chars > MAX_OUTPUT_CHARS) {
-          // Saída grande demais: corta a geração já, sem esperar o fim. O
-          // slot é liberado aqui; o que o provedor devolver depois é ignorado.
+          // Saída grande demais: corta a geração já, sem esperar o fim. A
+          // vaga da port é liberada aqui; a do semáforo, quando o provedor
+          // retornar. O que o provedor devolver depois é ignorado.
           overflowed = true;
           controller.abort();
-          if (inFlight === controller) inFlight = null;
+          forget(unit.unitId, controller);
           post({
             type: 'job:result',
             jobId: id,
@@ -221,8 +247,8 @@ export function createPageJobHandler(deps: PageJobDeps): (port: PortLike) => voi
         result = { ok: false, error: 'internal_error', retryable: false };
       }
 
-      if (inFlight === controller) inFlight = null;
-      if (disconnected || overflowed) return;
+      forget(unit.unitId, controller);
+      if (disconnected || overflowed || controller.signal.aborted) return;
 
       if (result.ok) {
         if (result.text.length > MAX_OUTPUT_CHARS) {
@@ -248,7 +274,28 @@ export function createPageJobHandler(deps: PageJobDeps): (port: PortLike) => voi
         error: result.error,
         retryable: result.retryable,
       });
+      // `fatal` derruba a port e, com ela, aborta as demais unidades.
       if (isFatalTranslationError(result.error)) fatal(id, result.error);
+    };
+
+    const runUnit = async (
+      id: string,
+      unit: JobUnitMessage,
+      controller: AbortController,
+    ): Promise<void> => {
+      const state = await prepare(id);
+      if (!state.ok || disconnected || controller.signal.aborted) return;
+
+      // A espera pela vaga vem antes do provedor: não consome o prazo do
+      // primeiro token. `null` = abortada na fila; nada a enviar.
+      const release = await gate.acquire(controller.signal);
+      if (release === null) return;
+      try {
+        if (disconnected || controller.signal.aborted) return;
+        await translateUnit(id, state, unit, controller);
+      } finally {
+        release();
+      }
     };
 
     function onMessage(raw: unknown): void {
@@ -265,7 +312,10 @@ export function createPageJobHandler(deps: PageJobDeps): (port: PortLike) => voi
         return;
       }
 
-      if (inFlight !== null) {
+      // Mesma unidade já aceita: não traduz duas vezes nem responde de novo.
+      if (units.has(message.unitId)) return;
+
+      if (units.size >= maxUnits) {
         post({
           type: 'job:result',
           jobId: id,
@@ -277,10 +327,13 @@ export function createPageJobHandler(deps: PageJobDeps): (port: PortLike) => voi
         return;
       }
       const controller = new AbortController();
-      inFlight = controller;
-      runUnit(id, message, controller).catch(() => {
-        if (inFlight === controller) inFlight = null;
-      });
+      units.set(message.unitId, { controller });
+      void runUnit(id, message, controller)
+        .catch(() => {
+          // Erro inesperado: só libera a vaga da port (a do semáforo já saiu
+          // no `finally` de `runUnit`).
+        })
+        .finally(() => forget(message.unitId, controller));
     }
 
     function onDisconnect(): void {

@@ -11,15 +11,23 @@ import type { LanguageCode } from '../../src/core/types';
  * (ADR-007/ADR-009): requisição sem `Origin` passa; com `Origin` fora de
  * `allowedOrigins` recebe 403 SEM cabeçalhos CORS.
  *
- * Também serve a fixture de capítulo em `GET /fixture/novel-chapter.html`:
- * a origem já está em `host_permissions`, então `executeScript` funciona sem
- * gesto do usuário. `POST /api/chat` "traduz" com ROT13 (ver `fakeTranslate`).
+ * Também serve as fixtures de capítulo em `GET /fixture/novel-chapter.html` e
+ * `GET /fixture/long-chapter.html`: a origem já está em `host_permissions`,
+ * então `executeScript` funciona sem gesto do usuário. `POST /api/chat`
+ * "traduz" com ROT13 (ver `fakeTranslate`).
  */
 export const MOCK_HOST = '127.0.0.1';
 export const MOCK_PORT = 11434;
 
 export const FIXTURE_PATH = '/fixture/novel-chapter.html';
-const FIXTURE_FILE = fileURLToPath(new URL('../fixtures/novel-chapter.html', import.meta.url));
+/** Capítulo com mais de três alturas de viewport, nav, header, aside e footer de site. */
+export const LONG_FIXTURE_PATH = '/fixture/long-chapter.html';
+
+/** Caminho servido → arquivo em `tests/fixtures`. */
+const FIXTURE_FILES: ReadonlyMap<string, string> = new Map([
+  [FIXTURE_PATH, fileURLToPath(new URL('../fixtures/novel-chapter.html', import.meta.url))],
+  [LONG_FIXTURE_PATH, fileURLToPath(new URL('../fixtures/long-chapter.html', import.meta.url))],
+]);
 
 /** Par de idiomas que o mock espera no prompt (o mesmo gravado pelos testes). */
 export const CHAT_SOURCE: LanguageCode = 'en';
@@ -150,6 +158,8 @@ export interface MockScenario {
 }
 
 export interface RecordedRequest {
+  /** Ordem de chegada (0, 1, 2…), contada desde o início ou o último `clearRequests`. */
+  seq: number;
   method: string;
   path: string;
   /** `undefined` quando o navegador não enviou o cabeçalho. */
@@ -158,6 +168,11 @@ export interface RecordedRequest {
   open: boolean;
   /** O cliente fechou a conexão antes do fim da resposta. */
   aborted: boolean;
+  /**
+   * Só em `POST /api/chat`: texto do usuário extraído do prompt (`null` se o
+   * formato não bate ou o corpo ainda não chegou). Fica só na memória do teste.
+   */
+  text: string | null;
 }
 
 export interface MockOllama {
@@ -176,6 +191,17 @@ export interface MockOllama {
    * nenhum chegar em `timeoutMs` (janela de observação, não espera fixa).
    */
   waitForChatRequest(timeoutMs: number): Promise<boolean>;
+  /**
+   * Atraso fixo (ms) antes de responder cada `POST /api/chat`, para que
+   * requisições simultâneas fiquem visíveis. `0` desliga.
+   */
+  setChatDelay(ms: number): void;
+  /** `POST /api/chat` em atendimento agora (da chegada até o último pedaço). */
+  readonly openChats: number;
+  /** Maior `openChats` observado desde o início ou o último `resetPeak`. */
+  readonly peakOpen: number;
+  /** Recomeça o pico a partir do valor atual de `openChats`. */
+  resetPeak(): void;
   clearRequests(): void;
   close(): Promise<void>;
 }
@@ -227,7 +253,11 @@ export async function startMockOllama(initial: Partial<MockScenario> = {}): Prom
 
   let scenario: MockScenario = { ...DEFAULT_SCENARIO, ...initial };
   const requests: RecordedRequest[] = [];
+  let nextSeq = 0;
   let server: Server | undefined;
+  let chatDelayMs = 0;
+  let openChats = 0;
+  let peakOpen = 0;
   let held = false;
   let releaseHeld: (() => void) | undefined;
   let heldGate: Promise<void> = Promise.resolve();
@@ -267,6 +297,7 @@ export async function startMockOllama(initial: Partial<MockScenario> = {}): Prom
     res: ServerResponse,
     record: RecordedRequest,
     origin: string | undefined,
+    settle: () => void,
   ): Promise<void> => {
     let model: unknown;
     try {
@@ -284,13 +315,21 @@ export async function startMockOllama(initial: Partial<MockScenario> = {}): Prom
       return;
     }
     if (held) await heldGate;
+    if (chatDelayMs > 0) {
+      const delay = chatDelayMs;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
     if (!record.open) return;
 
     const headers: Record<string, string> = { 'content-type': 'application/x-ndjson' };
     if (origin !== undefined) headers['access-control-allow-origin'] = origin;
     res.writeHead(200, headers);
-    for (const piece of splitBytes(Buffer.from(chatLines(model, fakeTranslate(text)), 'utf8'))) {
+    const pieces = splitBytes(Buffer.from(chatLines(model, fakeTranslate(text)), 'utf8'));
+    for (const [index, piece] of pieces.entries()) {
       if (!record.open) return;
+      // Antes do último pedaço: o cliente não pode ter visto `done` e aberto a
+      // próxima requisição enquanto esta ainda conta como em atendimento.
+      if (index === pieces.length - 1) settle();
       res.write(piece);
       await nextTick();
     }
@@ -301,24 +340,40 @@ export async function startMockOllama(initial: Partial<MockScenario> = {}): Prom
     const path = new URL(req.url ?? '/', `http://${MOCK_HOST}`).pathname;
     const origin = req.headers.origin;
     const record: RecordedRequest = {
+      seq: nextSeq,
       method: req.method ?? '',
       path,
       origin,
       open: true,
       aborted: false,
+      text: null,
     };
+    nextSeq += 1;
     requests.push(record);
-    if (record.method === 'POST' && path === '/api/chat') {
+    const isChat = record.method === 'POST' && path === '/api/chat';
+    let counted = false;
+    const settle = (): void => {
+      if (!counted) return;
+      counted = false;
+      openChats -= 1;
+    };
+    if (isChat) {
+      counted = true;
+      openChats += 1;
+      peakOpen = Math.max(peakOpen, openChats);
       for (const listener of [...chatListeners]) listener();
     }
     res.once('close', () => {
       record.open = false;
       if (!res.writableFinished) record.aborted = true;
+      settle();
     });
     const body = await readBody(req);
+    if (isChat) record.text = extractUserText(body);
 
-    if (req.method === 'GET' && path === FIXTURE_PATH) {
-      const html = await readFile(FIXTURE_FILE);
+    const fixtureFile = req.method === 'GET' ? FIXTURE_FILES.get(path) : undefined;
+    if (fixtureFile !== undefined) {
+      const html = await readFile(fixtureFile);
       res.writeHead(200, {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
@@ -370,8 +425,8 @@ export async function startMockOllama(initial: Partial<MockScenario> = {}): Prom
       else sendJson(res, 404, { error: `model '${model}' not found` }, origin);
       return;
     }
-    if (req.method === 'POST' && path === '/api/chat') {
-      await handleChat(body, res, record, origin);
+    if (isChat) {
+      await handleChat(body, res, record, origin, settle);
       return;
     }
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
@@ -424,8 +479,21 @@ export async function startMockOllama(initial: Partial<MockScenario> = {}): Prom
     holdChat,
     releaseChat,
     waitForChatRequest,
+    setChatDelay(ms) {
+      chatDelayMs = Math.max(0, ms);
+    },
+    get openChats() {
+      return openChats;
+    },
+    get peakOpen() {
+      return peakOpen;
+    },
+    resetPeak() {
+      peakOpen = openChats;
+    },
     clearRequests() {
       requests.length = 0;
+      nextSeq = 0;
     },
     async close() {
       await stop();

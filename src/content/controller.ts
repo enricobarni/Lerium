@@ -58,6 +58,8 @@ export function toPageStateView(state: JobState): PageStateView {
     skipped: state.skipped,
   };
   if (state.error !== undefined) view.error = state.error;
+  if (state.firstVisibleMs !== undefined) view.firstVisibleMs = state.firstVisibleMs;
+  if (state.durationMs !== undefined) view.durationMs = state.durationMs;
   return view;
 }
 

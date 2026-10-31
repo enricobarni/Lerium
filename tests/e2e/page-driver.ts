@@ -6,7 +6,7 @@ import type {
   PageStateView,
 } from '../../src/shared/page-control';
 import { MOCK_ENDPOINT } from './fixtures';
-import { CHAT_SOURCE, CHAT_TARGET, FIXTURE_PATH } from './mock-ollama';
+import { CHAT_SOURCE, CHAT_TARGET, FIXTURE_PATH, LONG_FIXTURE_PATH } from './mock-ollama';
 
 /**
  * Pilota a tradução de página como o popup faria: uma página da extensão
@@ -16,6 +16,7 @@ import { CHAT_SOURCE, CHAT_TARGET, FIXTURE_PATH } from './mock-ollama';
  */
 
 export const FIXTURE_URL = `${MOCK_ENDPOINT}${FIXTURE_PATH}`;
+export const LONG_FIXTURE_URL = `${MOCK_ENDPOINT}${LONG_FIXTURE_PATH}`;
 
 /** Subconjunto de `chrome` usado nos callbacks (tipado à mão). */
 interface ChromeLike {
@@ -50,19 +51,26 @@ export interface FixtureTab {
   tabId: number;
 }
 
-/** Abre a fixture numa aba nova e descobre o id da aba pelo service worker. */
+/**
+ * Abre a fixture numa aba nova e descobre o id da aba pelo service worker.
+ * `knownTabIds`: abas já abertas com a mesma URL, ignoradas na busca.
+ */
 export async function openFixture(
   context: BrowserContext,
   serviceWorker: Worker,
+  url: string = FIXTURE_URL,
+  knownTabIds: readonly number[] = [],
 ): Promise<FixtureTab> {
   const page = await context.newPage();
-  await page.goto(FIXTURE_URL);
-  const ids = await serviceWorker.evaluate(async (url) => {
-    const { chrome } = globalThis as unknown as { chrome: ChromeLike };
-    return (await chrome.tabs.query({ url })).map((tab) => tab.id);
-  }, FIXTURE_URL);
+  await page.goto(url);
+  const ids = (
+    await serviceWorker.evaluate(async (target) => {
+      const { chrome } = globalThis as unknown as { chrome: ChromeLike };
+      return (await chrome.tabs.query({ url: target })).map((tab) => tab.id);
+    }, url)
+  ).filter((id) => typeof id !== 'number' || !knownTabIds.includes(id));
   if (ids.length !== 1 || typeof ids[0] !== 'number') {
-    throw new Error(`Esperava uma aba da fixture, achei ${ids.length}.`);
+    throw new Error(`Esperava uma aba nova da fixture, achei ${ids.length}.`);
   }
   return { page, tabId: ids[0] };
 }
