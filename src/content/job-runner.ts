@@ -12,12 +12,20 @@
  * nó do segmento no início da classe atual dele, em ordem.
  *
  * Rolagem (`deps.createVisibilityWatcher`, opcional): os blocos dos segmentos
- * não periféricos em fila são observados. Entrar em `visible` leva o grupo ao
- * fim da classe 0; sair de `visible` estando na classe 0, ou entrar em `near`
- * estando na classe 1, leva-o à frente da classe 1. Cada lote é aplicado em
- * ordem de documento. O callback só reordena: nunca envia nem chama `pump`;
- * a ordem nova vale na próxima vaga. O bloco deixa de ser observado quando o
- * grupo sai da fila (última unidade enviada) ou é aplicado, e o observador é
+ * não periféricos em fila são observados e a fila acompanha a leitura
+ * (`placementFor`):
+ * - entrar em `visible` (de qualquer classe que não a 0) → fim da classe 0;
+ * - entrar em `near` estando na classe 2 → fim da classe 1 (FIFO: rolando
+ *   para baixo, a ordem de entrada é a ordem de documento);
+ * - sair de `visible` para `near` (rolou para cima) → frente da classe 1;
+ * - sair de `visible` para `out` (passou pelo topo) → fim da classe 2;
+ * - sair de `near` para `out` estando na classe 1 → fim da classe 2.
+ * Dentro de um lote, os movimentos são feitos em ordem de documento; os que
+ * vão para a frente da classe 1, do último para o primeiro, para que a
+ * frente fique em ordem de documento. O callback só reordena: nunca envia
+ * nem chama `pump`; a ordem nova vale na próxima vaga. O bloco deixa de ser
+ * observado quando o grupo sai da fila (última unidade enviada) ou é
+ * aplicado, e o observador é
  * desconectado em todo término; eventos depois disso são ignorados. Sem a
  * dependência, a ordem é a da classificação inicial. Periféricos nunca são
  * observados e a fila é finita, então eles sempre saem (sem aging).
@@ -105,6 +113,7 @@ import {
   classifySegments,
   PRIORITY_CLASSES,
   PRIORITY_MAIN,
+  PRIORITY_NEAR,
   PRIORITY_PERIPHERAL,
   PRIORITY_VISIBLE_MAIN,
   type BlockRect,
@@ -296,21 +305,29 @@ interface Placement {
 }
 
 /**
- * Para onde vai um segmento que passou de `segment.zone` para `zone`, ou
- * `undefined` se fica onde está:
- * - entrou em `visible` fora da classe 0 → fim da classe 0;
- * - saiu de `visible` estando na classe 0 → frente da classe 1;
- * - entrou em `near` estando na classe 1 → frente da classe 1.
+ * Para onde vai um segmento da classe `priority` que passou da zona `from`
+ * para `to`, ou `undefined` se fica onde está (regras no topo do arquivo).
  */
-function placementFor(segment: TrackedSegment, zone: VisibilityZone): Placement | undefined {
-  if (zone === 'visible') {
-    return segment.priority === PRIORITY_VISIBLE_MAIN
+function placementFor(
+  priority: SegmentPriority,
+  from: VisibilityZone,
+  to: VisibilityZone,
+): Placement | undefined {
+  if (to === 'visible') {
+    return priority === PRIORITY_VISIBLE_MAIN
       ? undefined
       : { priority: PRIORITY_VISIBLE_MAIN, position: 'back' };
   }
-  const leftVisible = segment.zone === 'visible' && segment.priority === PRIORITY_VISIBLE_MAIN;
-  if (leftVisible || (zone === 'near' && segment.priority === PRIORITY_MAIN)) {
-    return { priority: PRIORITY_MAIN, position: 'front' };
+  if (from === 'visible' && priority === PRIORITY_VISIBLE_MAIN) {
+    return to === 'near'
+      ? { priority: PRIORITY_NEAR, position: 'front' }
+      : { priority: PRIORITY_MAIN, position: 'back' };
+  }
+  if (to === 'near' && priority === PRIORITY_MAIN) {
+    return { priority: PRIORITY_NEAR, position: 'back' };
+  }
+  if (to === 'out' && from === 'near' && priority === PRIORITY_NEAR) {
+    return { priority: PRIORITY_MAIN, position: 'back' };
   }
   return undefined;
 }
@@ -388,16 +405,25 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     const toBack: { segmentId: string; segment: TrackedSegment; placement: Placement }[] = [];
     const toFront: typeof toBack = [];
     for (const { segmentId, segment, zone } of touched) {
-      const placement = job.queue.has(segmentId) ? placementFor(segment, zone) : undefined;
+      const from = segment.zone;
+      const placement = job.queue.has(segmentId)
+        ? placementFor(segment.priority, from, zone)
+        : undefined;
       // Saiu da tela antes de ser aplicado: a medida de latência não vale.
-      if (segment.zone === 'visible' && zone !== 'visible') delete segment.promotedAt;
+      if (from === 'visible' && zone !== 'visible') delete segment.promotedAt;
       segment.zone = zone;
       if (placement === undefined) continue;
       (placement.position === 'back' ? toBack : toFront).push({ segmentId, segment, placement });
     }
-    // Fim da classe 0 em ordem de documento; frente da classe 1 do último para
-    // o primeiro, para que a frente fique em ordem de documento.
-    for (const { segmentId, segment, placement } of [...toBack, ...toFront.reverse()]) {
+    // Fins em ordem de documento (FIFO entre lotes). A frente da classe 1 é
+    // preenchida do último para o primeiro do lote, para ficar em ordem de
+    // documento; entre lotes ela é LIFO de propósito: rolando para cima, o
+    // bloco que saiu da tela por último é o mais perto dela.
+    const moves = [...toBack];
+    for (let index = toFront.length - 1; index >= 0; index -= 1) {
+      moves.push(toFront[index] as (typeof toFront)[number]);
+    }
+    for (const { segmentId, segment, placement } of moves) {
       job.queue.move(segmentId, placement.priority, placement.position);
       segment.priority = placement.priority;
       if (placement.priority === PRIORITY_VISIBLE_MAIN) {

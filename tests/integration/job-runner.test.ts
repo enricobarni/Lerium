@@ -1153,7 +1153,7 @@ describe('createJobRunner — sequências reais do service worker', () => {
   });
 });
 
-/** Abaixo da viewport de `VIEWPORT_HEIGHT`: principal fora da tela (classe 1). */
+/** Abaixo da viewport de `VIEWPORT_HEIGHT`: principal fora da tela (classe 2). */
 const BELOW_RECT: BlockRect = { top: 1000, bottom: 1020, width: 100, height: 20 };
 
 /** Bloco com `data-pos="below"` fica abaixo da viewport; o resto é visível. */
@@ -1305,10 +1305,10 @@ describe('createJobRunner — escalonador', () => {
     const fake = port();
     expect(labelsOf(fake)).toEqual(['seg-0#markers', 'seg-1#markers']);
 
-    // Fallback da classe 1 passa à frente de seg-2, da mesma classe.
+    // Fallback da classe 2 passa à frente de seg-2, da mesma classe.
     replyTo(fake, 'seg-1#markers', dropMarkers);
     expect(fake.inFlight.map(labelOf)).toEqual(['seg-0#markers', 'seg-1#node-0']);
-    // Fallback da classe 0 passa à frente do restante da classe 1.
+    // Fallback da classe 0 passa à frente do restante da classe 2.
     replyTo(fake, 'seg-0#markers', dropMarkers);
     fake.runToEnd(upperCase);
 

@@ -258,23 +258,71 @@ describe('createJobRunner — reordenação por visibilidade', () => {
     expect(runner.getState()).toMatchObject({ status: 'translated', done: 4, failed: 0 });
   });
 
-  it('sair de visible (para near ou out) rebaixa para a frente da classe 1', () => {
+  it('sair de visible para near vai à frente da classe 1; para out, ao fim da classe 2', () => {
+    const document = parse(
+      '<p>One.</p><p>Two.</p><p>Three.</p><p>Four.</p><p data-pos="below">Five.</p>' +
+        '<p data-pos="below">Six.</p>',
+    );
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    // Observação inicial: os quatro estão na tela; seg-5 já está perto (fim da classe 1).
+    watcher().emit(changes(document, [1, 'visible'], [2, 'visible'], [3, 'visible'], [5, 'near']));
+    // Rolou para cima: seg-1 desceu para a faixa perto e passa à frente de seg-5.
+    watcher().emit(changes(document, [1, 'near']));
+    // Passou pelo topo: seg-2 já foi lido; volta ao fim da classe 2, depois de
+    // seg-4 (antes, ia à frente da classe dos de fora da tela, à frente do que
+    // ainda está por ler).
+    watcher().emit(changes(document, [2, 'out']));
+    runToEnd(fake);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-3', 'seg-1', 'seg-5', 'seg-4', 'seg-2']);
+  });
+
+  it('near em lotes sucessivos sai na ordem de entrada (FIFO)', () => {
+    const document = parse(page(6));
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    // Rolando para baixo: B5 entra na faixa perto num lote, B6 no seguinte.
+    watcher().emit(changes(document, [5, 'near']));
+    watcher().emit(changes(document, [6, 'near']));
+    runToEnd(fake);
+    expect(segmentsSent(fake)).toEqual([
+      'seg-0',
+      'seg-5',
+      'seg-6',
+      'seg-1',
+      'seg-2',
+      'seg-3',
+      'seg-4',
+    ]);
+  });
+
+  it('sair de near para out estando na classe 1 vai ao fim da classe 2', () => {
+    const document = parse(page(3));
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    watcher().emit(changes(document, [1, 'near'], [2, 'near']));
+    watcher().emit(changes(document, [1, 'out']));
+    runToEnd(fake);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-2', 'seg-3', 'seg-1']);
+  });
+
+  it('frente da classe 1 no mesmo lote fica em ordem de documento', () => {
     const document = parse(
       '<p>One.</p><p>Two.</p><p>Three.</p><p>Four.</p><p data-pos="below">Five.</p>',
     );
     const { runner, port, watcher } = setup(document);
     runner.start();
     const fake = port();
-    // Observação inicial: os quatro estão na tela.
     watcher().emit(changes(document, [1, 'visible'], [2, 'visible'], [3, 'visible']));
-    watcher().emit(changes(document, [1, 'near']));
-    watcher().emit(changes(document, [2, 'out']));
+    watcher().emit(changes(document, [3, 'near'], [2, 'near']));
     runToEnd(fake);
-    // seg-2 rebaixado por último fica à frente de seg-1; ambos antes de seg-4.
-    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-3', 'seg-2', 'seg-1', 'seg-4']);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-2', 'seg-3', 'seg-4']);
   });
 
-  it('near promove para a frente da classe 1; near sem ter saído de visible não rebaixa', () => {
+  it('near leva ao fim da classe 1; near sem ter saído de visible não rebaixa', () => {
     const document = parse(page(3));
     const { runner, port, watcher } = setup(document);
     runner.start();
@@ -430,7 +478,7 @@ describe('createJobRunner — reordenação por visibilidade', () => {
     expect(labels(fake)).toEqual(['seg-0#text', 'seg-3#markers']);
     fake.reply(dropMarkers);
     runToEnd(fake);
-    // Na classe 0 (atual), à frente de seg-4; na inicial (1) sairia depois dele.
+    // Na classe 0 (atual), à frente de seg-4; na inicial (2) sairia depois dele.
     expect(labels(fake)).toEqual([
       'seg-0#text',
       'seg-3#markers',
