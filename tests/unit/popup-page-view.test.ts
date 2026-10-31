@@ -22,6 +22,8 @@ import {
   describePage,
   firstActionButton,
   focusFallback,
+  partialMessage,
+  translatingMessage,
   type PageButtons,
   type PageViewInput,
 } from '../../src/popup/page-view';
@@ -315,13 +317,17 @@ describe('describePage: matriz completa', () => {
   const counts = [
     { total: 0, done: 0, failed: 0, skipped: 0 },
     { total: 5, done: 0, failed: 1, skipped: 0 },
+    // Um trecho no original: exercita o singular.
+    { total: 5, done: 1, failed: 1, skipped: 0 },
     { total: 5, done: 3, failed: 1, skipped: 1 },
   ];
-  const errors: Array<PageStateError | undefined> = [undefined, ...STATE_ERRORS];
+  // `error` só tem efeito no status 'error'; fora dele a combinação só repetiria casos.
+  const errorsFor = (status: PageStatus): Array<PageStateError | undefined> =>
+    status === 'error' ? [undefined, ...STATE_ERRORS] : [undefined];
   const all = STATUSES.flatMap((status) =>
     VIEWS.flatMap((pageView) =>
       counts.flatMap((count) =>
-        errors.map((error) => ({
+        errorsFor(status).map((error) => ({
           status,
           view: pageView,
           ...count,
@@ -329,6 +335,25 @@ describe('describePage: matriz completa', () => {
         })),
       ),
     ),
+  );
+
+  // Números trocados por '#': o que sobra tem de ser um destes textos fixos.
+  const strip = (text: string) => text.replace(/\d+/g, '#');
+  const templates = new Set(
+    [
+      READY_MESSAGE,
+      TRANSLATED_MESSAGE,
+      NOTHING_TRANSLATED_MESSAGE,
+      NO_TEXT_MESSAGE,
+      SHOWING_ORIGINAL_MESSAGE,
+      CANCELLED_MESSAGE,
+      translatingMessage(0, 0),
+      translatingMessage(0, 1),
+      translatingMessage(1, 2),
+      partialMessage(1),
+      partialMessage(2),
+      ...STATE_ERRORS.map((error) => describePage(state({ status: 'error', error })).message),
+    ].map(strip),
   );
 
   it.each(all)('%o: regras gerais dos botões', (pageState) => {
@@ -350,21 +375,14 @@ describe('describePage: matriz completa', () => {
 
   it.each(all)('%o: mensagem só com texto fixo e números', (pageState) => {
     const view = describePage({ kind: 'state', state: pageState });
-    // Remove os números: o que sobra tem de ser texto fixo do módulo,
-    // igual para qualquer contagem.
-    const strip = (text: string) => text.replace(/\d+/g, '#');
-    const other = describePage({
-      kind: 'state',
-      state: {
-        ...pageState,
-        total: pageState.total * 7,
-        done: pageState.done * 7,
-        failed: pageState.failed * 7,
-        skipped: pageState.skipped * 7,
-      },
-    });
-    expect(strip(view.message)).toBe(strip(other.message));
+    expect(templates.has(strip(view.message))).toBe(true);
     expect(view.message).not.toMatch(/translat|original'|undefined|null|NaN|\[object/);
+  });
+
+  it('a matriz passa pelo singular de "continua no original"', () => {
+    const messages = all.map((pageState) => describePage({ kind: 'state', state: pageState }));
+    expect(messages.map((view) => view.message)).toContain(partialMessage(1));
+    expect(partialMessage(1)).toBe('Página traduzida. 1 trecho continua no original.');
   });
 });
 

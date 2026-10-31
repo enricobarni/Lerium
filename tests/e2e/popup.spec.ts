@@ -8,6 +8,12 @@ import { openFixture, outerHtml, resetSettings } from './page-driver';
  * script do teste troca só `chrome.tabs.query` pela aba da fixture. O resto
  * (`runtime.sendMessage`, `tabs.sendMessage`, service worker, content script)
  * é o caminho de produção.
+ *
+ * Limite conhecido: a fixture é servida em 127.0.0.1:11434, origem que já está
+ * em `host_permissions` (a mesma do mock do Ollama). Assim, o caminho de
+ * `activeTab` (site fora de `host_permissions`, liberado só pelo clique no
+ * ícone) e a presença de `tab.url` vinda de um popup de verdade só são
+ * exercitados no smoke manual (docs/TEST_PLAN.md).
  */
 
 /** Subconjunto de `chrome` usado no init script (tipado à mão). */

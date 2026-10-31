@@ -319,6 +319,41 @@ describe('popup: traduzir', () => {
     expect(h.calls.filter((call) => call.startsWith('inject'))).toHaveLength(1);
   });
 
+  it('duplo clique em Traduzir: um único inject e um único start', async () => {
+    const h = setUp();
+    await h.controller.open();
+    let release: (value: unknown) => void = () => undefined;
+    h.injectWith(() => new Promise((resolve) => (release = resolve)));
+    h.respond(() => ok(pageState({ status: 'translating', total: 2 })));
+    const first = h.controller.translate();
+    const second = h.controller.translate();
+    release({ ok: true, documentId: 'DOC-1' });
+    await Promise.all([first, second]);
+    expect(h.calls).toEqual(['get-state:7', 'inject:7', 'start:7']);
+    expect(h.intervals.active.size).toBe(1);
+  });
+
+  it('dispose durante o inject: nada é desenhado depois e o prazo é limpo', async () => {
+    vi.useFakeTimers();
+    const h = setUp();
+    await h.controller.open();
+    let release: (value: unknown) => void = () => undefined;
+    h.injectWith(() => new Promise((resolve) => (release = resolve)));
+    const pending = h.controller.translate();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.elements.message.textContent).toBe(BUSY_MESSAGE);
+    const renders = h.render.mock.calls.length;
+    h.controller.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    release({ ok: true, documentId: 'DOC-1' });
+    await pending;
+    await vi.advanceTimersByTimeAsync(RESPONSE_TIMEOUT_MS);
+    expect(h.render.mock.calls.length).toBe(renders);
+    expect(h.elements.message.textContent).toBe(BUSY_MESSAGE);
+    expect(h.intervals.active.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   const injectErrors: Array<[PageInjectErrorKind, string, boolean]> = [
     [
       'permission_required',
