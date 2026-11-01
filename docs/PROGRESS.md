@@ -6,7 +6,7 @@
 ## Estado atual
 
 - **Fase:** 5 — Experiência progressiva e desempenho (em andamento)
-- **Tarefa:** `perf/scroll-translation` (pausa observada na rolagem, cache de segmentos repetidos; escolhida antes de `feat/progress-overlay` por causa do problema relatado pelo responsável)
+- **Tarefa:** `perf/scroll-translation` (interrupção de tradução fora da tela; cache adiado para as Fases 6/7 com aprovação do responsável)
 - **Aceite manual de `feat/viewport-priority`** (31/10/2026): `firstVisibleMs` 2–4 s e `visibleLatency` 3–5 s no Chrome real; pausa ocasional da tela com o popup avançando (ver ADR-016)
 - **Fase 4:** concluída — PRs #17–#22 mesclados; Gate cumprido (E2E de ida e volta byte a byte e aceite manual do responsável no Chrome real)
 - **Fase 3:** concluída — PRs #13–#16 mesclados; gate cumprido (18/18 execuções com o modelo real); ADR-011 aceita após conferência do model card pelo responsável
@@ -14,6 +14,48 @@
 - **Fase 2:** concluída — PRs #9 e #10 mesclados; aceite manual do responsável no Chrome estável (conexão, modelos listados, Ollama fechado)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
+
+## Fase 5 — `perf/scroll-translation`
+
+| Commit | Mensagem |
+|---|---|
+| `b1471a6` | `docs: registra medição no chrome real e a pausa observada na rolagem` |
+| `0b87bbe` | `test(e2e): retém pedidos por texto e registra abortos no mock` |
+| `172aa7c` | `test(e2e): reproduz a pausa com unidade longa fora da tela` |
+| `6212ffc` | `test(e2e): reproduz a pausa em capítulo separado por br` |
+| `d3a610d` | `feat(extension): aceita cancelamento de unidade pela port` |
+| `dcdeb8d` | `feat(content): interrompe tradução fora da tela quando há visível esperando` |
+| `25c5370` | `feat(queue): insere itens na frente de um grupo existente` |
+| `863c9f1` | `fix(content): interrompe pela classe atual e observa o bloco em voo` |
+| `25bf39a` | `fix(content): mantém observado o segmento com fallback na fila` |
+| `e240e7f` | `fix(content): só interrompe com uma unidade em voo por vez` |
+| `c79ee4d` | `feat(content): conta interrupções no estado do job` |
+| `85c8b8c` | `test(content): cobre términos e falhas da interrupção` |
+| `18f93e8` | `test(e2e): atualiza o cabeçalho da rolagem para a interrupção` |
+| (este commit) | `docs: registra adr-017 da interrupção fora da tela` |
+
+Terceira branch da Fase 5, escolhida antes de `feat/progress-overlay` por causa da pausa relatada pelo responsável.
+
+**O que foi feito:**
+
+- Reprodução antes da correção: `tests/e2e/scroll-pause.spec.ts` com duas hipóteses (H1 unidade fora da tela em voo; H2 capítulo em `<br>`), marcadas como falha esperada e conferidas pela asserção que falhou.
+- `job:cancel-unit` no protocolo e no service worker.
+- `prependToGroup` na fila agrupada.
+- Interrupção no executor pela classe atual, com debounce de 500 ms, uma vez por unidade e só com janela 1; contagem `preempted` no estado.
+- ADR-017; ADR-010 e ADR-016 atualizadas.
+
+**Diagnóstico com o responsável:** o popup continuou subindo durante a pausa, `maxMs` até ~8 s e o site usa `<p>` (290). Isso descartou a forma original da hipótese (um parágrafo gigante) e apontou para o mecanismo da H1 com parágrafos comuns. A H2 se confirmou como defeito real, mas não é a causa no site do responsável.
+
+**Decisões no caminho:**
+
+- A primeira versão usava a classe do envio e não interrompia o parágrafo longo, que saía da classe “perto”; o frontend parou e mostrou o conflito em vez de contorná-lo. Corrigido para a classe atual.
+- O E2E “rolar para baixo e para cima” passou a admitir exatamente uma interrupção (a do título, conferida no registro do mock) e continua proibindo rajada; a mudança é de comportamento decidido, não de expectativa afrouxada.
+
+**Revisão:** reviewer aprovou com ressalvas, sem crítico. Aplicadas: fallback continua observado, interrupção só com janela 1, contagem `preempted`, testes de todos os términos e de falha ao enviar o cancelamento, teste “c” exigindo exatamente uma interrupção. Cada teste novo foi conferido falhando sem a correção.
+
+**Validações executadas** (códigos de saída conferidos): `npm run lint`, `typecheck`, `test` (1925/1925; eram 1868), `build` (`verify-dist` ok) e `test:e2e` (29: H1 passa, H2 falha esperada; três rodadas seguidas).
+
+**Pendências:** `fix/shared-block-priority` (H2, `<br>`); medir no Chrome real a pausa, `visibleLatency` e `preempted`; memória e long tasks para o Gate da Fase 5; cache adiado para as Fases 6/7 (aprovado pelo responsável).
 
 ## Fase 5 — `feat/viewport-priority`
 
@@ -674,4 +716,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 5 — `feat/progress-overlay`: indicação de progresso acessível e não intrusiva na página (PLAN.md Fase 5), sem expor nada à página além do necessário.
+Fase 5 — `fix/shared-block-priority`: prioridade por trecho dentro de um bloco compartilhado (capítulos separados por `<br>`), fazendo passar o teste H2 de `tests/e2e/scroll-pause.spec.ts`. Depois: `feat/progress-overlay`.

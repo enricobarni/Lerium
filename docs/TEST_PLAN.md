@@ -28,6 +28,8 @@ literária de [PLAN.md §9](PLAN.md). Arquitetura em
 | E2E | Playwright + Chromium | Fila (`tests/e2e/scheduler.spec.ts`, fixture `long-chapter.html`): primeiro pedido é o título visível e nunca o menu, prioridade após rolar, limite com duas abas, ida e volta byte a byte | Fase 5 |
 | Unitário + integração | Vitest | Prioridade por viewport (ADR-016): fila agrupada com `move` (inclui 10.000 movimentos com memória limitada), observador com zona inicial consolidada, regras de reordenação, deslocamento de layout na borda da faixa perto, `visibleLatency` | Fase 5 |
 | E2E | Playwright + Chromium | Rolagem (`tests/e2e/viewport-priority.spec.ts`): próximo pedido é o parágrafo que entrou na tela, rebaixamento, rolagem rápida sem rajada, periféricos traduzidos, cancelamento, métrica sem texto | Fase 5 |
+| Unitário + integração | Vitest | Interrupção (ADR-017): `job:cancel-unit` no service worker (vaga liberada na hora, semáforo só depois), `prependToGroup`, debounce de 500 ms, classe atual, uma vez por unidade, só com janela 1, fallback observado, timer limpo em todos os términos, contagem `preempted` | Fase 5 |
+| E2E | Playwright + Chromium | Pausa na rolagem (`tests/e2e/scroll-pause.spec.ts`): H1 (trecho fora da tela em voo não atrasa o visível) passa; H2 (capítulo em `<br>`) marcada como falha esperada até `fix/shared-block-priority` | Fase 5 |
 | Manual (opt-in) | Vitest + Ollama real | Concorrência (`tests/manual/concurrency.manual.test.ts`): 1/2/4 simultâneas, tempo total, primeiro resultado e latência; resultados na ADR-015 | Fase 5 |
 | E2E | Playwright + Chromium | Tradução de página (`tests/e2e/page-translation.spec.ts`): injeção do `content.js` na fixture servida pelo mock, ida e volta byte a byte, Ollama fora, cancelamento no meio, injeção dupla, página não suportada, nenhum texto no console | Fase 4 |
 | E2E | Playwright + Chromium | Extensão MV3 carregada; iniciar/parar; seleção; menu de contexto; opções; alternar original; Ollama mock indisponível, HTTP 404 de modelo e resposta lenta | Fases 4–6 |
@@ -220,7 +222,8 @@ durante ou depois de uma tradução:
    await chrome.tabs.sendMessage(tab.id, { type: 'page:command', command: 'get-state' }, { frameId: 0 });
    ```
 
-3. Anote `firstVisibleMs` (do início até o primeiro parágrafo visível
+3. Anote `preempted` (quantas traduções fora da tela foram interrompidas),
+   `firstVisibleMs` (do início até o primeiro parágrafo visível
    traduzido), `durationMs` e `visibleLatency` (`count`, `medianMs`, `maxMs`:
    espera dos parágrafos que entraram na tela por rolagem).
 
