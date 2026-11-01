@@ -70,6 +70,14 @@ export interface GroupedPriorityQueue<K, T> {
    * grupo já está na classe e na posição pedidas, não faz nada (`true`).
    */
   move(key: K, priority: number, position: 'front' | 'back'): boolean;
+  /**
+   * Põe `items` (em ordem) à frente dos itens restantes do grupo `key`, que
+   * continua na mesma classe e na mesma posição. `false`, sem alterar a fila,
+   * se a chave não está na fila (o grupo esvaziou ou nunca entrou). Custo
+   * O(k) nos itens inseridos; `items` vazio não muda nada. Os itens são
+   * copiados.
+   */
+  prependToGroup(key: K, items: readonly T[]): boolean;
   /** Classe atual do grupo `key`; `undefined` se ele não está na fila. */
   priorityOf(key: K): number | undefined;
   has(key: K): boolean;
@@ -93,8 +101,13 @@ export interface GroupedPriorityQueue<K, T> {
 interface Group<K, T> {
   readonly key: K;
   readonly items: T[];
-  /** Índice do próximo item a sair. */
+  /** Índice do próximo item de `items` a sair. */
   head: number;
+  /**
+   * Itens recolocados à frente por `prependToGroup`, em pilha (topo = o
+   * próximo a sair); saem antes dos de `items`.
+   */
+  readonly prefix: T[];
   priority: number;
   /** Versão do slot válido; cada `move` incrementa e invalida os anteriores. */
   version: number;
@@ -240,7 +253,14 @@ export function createGroupedPriorityQueue<K, T>(classCount: number): GroupedPri
     const entry = classOf(priority);
     if (groups.has(key)) throw new RangeError('a chave já está na fila');
     if (items.length === 0) throw new RangeError('o grupo precisa de ao menos um item');
-    const group: Group<K, T> = { key, items: items.slice(), head: 0, priority, version: 0 };
+    const group: Group<K, T> = {
+      key,
+      items: items.slice(),
+      head: 0,
+      prefix: [],
+      priority,
+      version: 0,
+    };
     groups.set(key, group);
     const slot: Slot<K, T> = { group, version: 0 };
     if (atFront) entry.front.push(slot);
@@ -282,6 +302,16 @@ export function createGroupedPriorityQueue<K, T>(classCount: number): GroupedPri
       compactStale(source);
       return true;
     },
+    prependToGroup(key, items) {
+      const group = groups.get(key);
+      if (group === undefined) return false;
+      // Pilha: o último inserido sai primeiro, então empilha do fim ao início.
+      for (let index = items.length - 1; index >= 0; index -= 1) {
+        group.prefix.push(items[index] as T);
+      }
+      size += items.length;
+      return true;
+    },
     priorityOf(key) {
       return groups.get(key)?.priority;
     },
@@ -293,10 +323,15 @@ export function createGroupedPriorityQueue<K, T>(classCount: number): GroupedPri
         const slot = liveFirst(entry);
         if (slot === undefined) continue;
         const group = slot.group;
-        const item = group.items[group.head] as T;
-        group.head += 1;
+        let item: T;
+        if (group.prefix.length > 0) {
+          item = group.prefix.pop() as T;
+        } else {
+          item = group.items[group.head] as T;
+          group.head += 1;
+        }
         size -= 1;
-        if (group.head === group.items.length) {
+        if (group.prefix.length === 0 && group.head === group.items.length) {
           popFirstSlot(entry);
           groups.delete(group.key);
         }
