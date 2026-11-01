@@ -18,7 +18,7 @@ function setup(viewportHeight = 100) {
   let scrollY = 0;
   let nextFrame = 1;
   const frames = new Map<number, () => void>();
-  const listeners = new Set<() => void>();
+  const listeners = new Set<(target: EventTarget | null) => void>();
   const removeListener = vi.fn();
   const cancelFrame = vi.fn((id: number) => {
     frames.delete(id);
@@ -76,9 +76,10 @@ function setup(viewportHeight = 100) {
     makeBlock,
     frames,
     pendingFrames: () => frames.size,
-    scrollTo(y: number) {
+    /** Rola e avisa os listeners; `target` é o alvo do evento (padrão: o documento). */
+    scrollTo(y: number, target: EventTarget | null = document) {
       scrollY = y;
-      for (const listener of listeners) listener();
+      for (const listener of listeners) listener(target);
     },
     listenerCount: () => listeners.size,
     flush() {
@@ -281,6 +282,52 @@ describe('createSegmentZoneTracker', () => {
     expect(bChanges.length).toBeGreaterThan(0);
     // B começa em 1000 - 250 = 750 px: o primeiro trecho está na tela.
     expect(t.zones().get(b.segments[0]?.segmentId ?? '')).toBe('visible');
+  });
+
+  it('rolagem de um contêiner que não contém o bloco não agenda nem mede', () => {
+    const t = setup();
+    const container = document.createElement('div');
+    const inside = t.makeBlock(5, 0);
+    const outside = t.makeBlock(5, 0);
+    container.append(inside.block);
+    document.body.append(container, outside.block);
+    try {
+      t.tracker.track(outside.block, outside.segments);
+      t.tracker.setBlockZone(outside.block, 'visible');
+      t.flush();
+      t.measureText.mockClear();
+
+      t.scrollTo(0, container);
+      expect(t.pendingFrames()).toBe(0);
+      t.flush();
+      expect(t.measureText).not.toHaveBeenCalled();
+
+      // O contêiner que contém o bloco o remede.
+      t.tracker.track(inside.block, inside.segments);
+      t.tracker.setBlockZone(inside.block, 'visible');
+      t.flush();
+      t.measureText.mockClear();
+      t.scrollTo(0, container);
+      expect(t.pendingFrames()).toBe(1);
+      t.flush();
+      const measured = new Set(t.measureText.mock.calls.map(([nodes]) => nodes[0]));
+      expect(measured.has(inside.segments[0]?.nodes[0] as Text)).toBe(true);
+      expect(measured.has(outside.segments[0]?.nodes[0] as Text)).toBe(false);
+
+      // Documento, elemento de rolagem raiz e janela (scroll da página e resize) remedem todos.
+      for (const target of [document, document.scrollingElement, window, null]) {
+        t.measureText.mockClear();
+        t.scrollTo(0, target);
+        expect(t.pendingFrames(), String(target)).toBe(1);
+        t.flush();
+        const all = new Set(t.measureText.mock.calls.map(([nodes]) => nodes[0]));
+        expect(all.has(inside.segments[0]?.nodes[0] as Text), String(target)).toBe(true);
+        expect(all.has(outside.segments[0]?.nodes[0] as Text), String(target)).toBe(true);
+      }
+    } finally {
+      container.remove();
+      outside.block.remove();
+    }
   });
 
   it('rolagem coalescida: vários onScroll geram uma única passada', () => {

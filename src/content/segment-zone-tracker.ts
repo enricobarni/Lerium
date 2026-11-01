@@ -8,6 +8,7 @@
  *
  * - no máximo uma passada por quadro: scroll, resize, `setBlockZone`, `invalidate` e
  *   `track` apenas agendam via `requestFrame`; nada é medido fora do callback do quadro;
+ * - a rolagem de um elemento só remede os blocos que ele contém;
  * - só blocos com zona `visible` ou `near` são medidos; para cada um, uma busca binária
  *   (pela ordem de documento) acha o primeiro trecho com `bottom > 0` e uma caminhada
  *   para frente mede até o primeiro trecho com `top >= 2 * vh`;
@@ -45,8 +46,11 @@ export interface SegmentZoneTrackerDeps {
   viewportHeight(): number;
   requestFrame(cb: () => void): number;
   cancelFrame(id: number): void;
-  /** Registra scroll/resize; devolve a função de remoção. */
-  listen(onScroll: () => void): () => void;
+  /**
+   * Registra scroll/resize; devolve a função de remoção. `target` é o alvo do evento:
+   * a janela (resize), o documento ou um elemento rolável. `null` remede todos os blocos.
+   */
+  listen(onScroll: (target: EventTarget | null) => void): () => void;
 }
 
 export interface SegmentZoneTracker {
@@ -87,6 +91,21 @@ interface BlockState {
   segments: SegmentState[];
 }
 
+function isNode(target: EventTarget): target is Node {
+  return typeof (target as Partial<Node>).nodeType === 'number';
+}
+
+/**
+ * A rolagem de `target` pode ter movido `block`? Janela (inclui resize), documento e
+ * elemento de rolagem raiz movem tudo; outro elemento, só os blocos que contém.
+ */
+function scrollMoves(target: EventTarget | null, block: Element): boolean {
+  if (target === null || !isNode(target)) return true;
+  const doc = block.ownerDocument;
+  if (target === doc || target === doc.scrollingElement) return true;
+  return target.contains(block);
+}
+
 function freshProgress(length: number): BlockProgress {
   return { phase: 'search', lo: 0, hi: length, start: 0, next: 0, cache: new Map() };
 }
@@ -114,10 +133,10 @@ export function createSegmentZoneTracker(
     pending.set(block, null);
   }
 
-  function onScroll(): void {
+  function onScroll(target: EventTarget | null): void {
     if (disconnected) return;
     for (const [block, state] of blocks) {
-      if (state.gate !== 'out') markPending(block);
+      if (state.gate !== 'out' && scrollMoves(target, block)) markPending(block);
     }
     schedule();
   }

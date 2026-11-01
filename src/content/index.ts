@@ -65,11 +65,13 @@ installOnce(globalThis, INSTALL_KEY, () => {
           requestFrame: (cb) => window.requestAnimationFrame(() => cb()),
           cancelFrame: (id) => window.cancelAnimationFrame(id),
           listen: (onScroll) => {
-            window.addEventListener('scroll', onScroll, LISTEN_OPTIONS);
-            window.addEventListener('resize', onScroll, LISTEN_OPTIONS);
+            // O alvo diz qual elemento rolou (resize: a janela, que remede todos).
+            const handler = (event: Event): void => onScroll(event.target);
+            window.addEventListener('scroll', handler, LISTEN_OPTIONS);
+            window.addEventListener('resize', handler, LISTEN_OPTIONS);
             return () => {
-              window.removeEventListener('scroll', onScroll, LISTEN_OPTIONS);
-              window.removeEventListener('resize', onScroll, LISTEN_OPTIONS);
+              window.removeEventListener('scroll', handler, LISTEN_OPTIONS);
+              window.removeEventListener('resize', handler, LISTEN_OPTIONS);
             };
           },
         },
