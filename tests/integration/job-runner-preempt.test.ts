@@ -56,6 +56,9 @@ interface FakePort {
   /** Responde a mais antiga em voo. */
   reply(translate: (text: string) => string): void;
   drop(): void;
+  /** Faz o próximo `job:cancel-unit` lançar (porta que caiu no meio). */
+  failNextCancel(): void;
+  readonly disconnected: () => boolean;
 }
 
 function createFakePort(): FakePort {
@@ -65,6 +68,7 @@ function createFakePort(): FakePort {
   const cancels: CancelMessage[] = [];
   const inFlight: JobUnitMessage[] = [];
   let disconnected = false;
+  let failCancel = false;
   const emit = (message: unknown): void => {
     for (const listener of [...messageListeners]) listener(message);
   };
@@ -78,6 +82,10 @@ function createFakePort(): FakePort {
           sent.push(typed);
           inFlight.push(typed);
         } else if (typed.type === 'job:cancel-unit') {
+          if (failCancel) {
+            failCancel = false;
+            throw new Error('Attempting to use a disconnected port object');
+          }
           cancels.push(typed);
           const index = inFlight.findIndex((unit) => unit.unitId === typed.unitId);
           if (index !== -1) inFlight.splice(index, 1);
@@ -114,6 +122,10 @@ function createFakePort(): FakePort {
       disconnected = true;
       for (const listener of [...disconnectListeners]) listener();
     },
+    failNextCancel() {
+      failCancel = true;
+    },
+    disconnected: () => disconnected,
   };
 }
 
@@ -761,10 +773,80 @@ describe('createJobRunner — interrupção de unidade fora da tela', () => {
   it.each(terminations)('timer limpo no término por %s', (_name, terminate) => {
     const harness = visibleWaitingBehindMain();
     expect(harness.pendingTimeouts()).toBe(1);
+    // Ping e debounce armados.
+    expect(vi.getTimerCount()).toBe(2);
     terminate(harness);
     expect(harness.pendingTimeouts()).toBe(0);
+    // Nenhum timer do job sobrevive ao término (nem o debounce nem o ping).
+    expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(10 * PREEMPT_DEBOUNCE_MS);
     expect(harness.fake.cancels).toEqual([]);
+  });
+
+  it('job:cancel-unit que lança falha o job com interrupted, sem reenvio', () => {
+    const { runner, document, fake, states } = visibleWaitingBehindMain();
+    fake.failNextCancel();
+    const before = states.length;
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
+    expect(fake.cancels).toEqual([]);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1']);
+    expect(runner.getState()).toMatchObject({
+      status: 'error',
+      error: 'interrupted',
+      done: 1,
+      preempted: 0,
+    });
+    expect(states.slice(before).map(({ status }) => status)).toEqual(['error']);
+    expect(fake.disconnected()).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    // Resultado tardio da porta morta não aplica nada.
+    fake.reply(upperCase);
+    expect(document.body.textContent).toBe('TOP LINE.Line 1.Line 2.Line 3.');
+    expect(runner.getState()).toMatchObject({ status: 'error', done: 1 });
+  });
+
+  it('interrompida com marcadores: o reenvio cai no fallback, que termina no lugar', () => {
+    const document = parse(
+      '<p>Top.</p><p data-pos="below">Far <i>away</i> text.</p>' +
+        '<p data-pos="below">Two.</p><p data-pos="below">Three.</p>',
+    );
+    const { runner, port, watcher, armed } = setup(document);
+    runner.start();
+    const fake = port();
+    fake.reply(upperCase);
+    expect(labels(fake)).toEqual(['seg-0#text', 'seg-1#markers']);
+    const markersId = fake.sent[1]?.unitId;
+    watcher().emit(changes(document, [3, 'visible']));
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
+    expect(cancelled(fake)).toEqual(['seg-1#markers']);
+    // Resultado atrasado da tentativa abortada: descartado.
+    fake.emit({ type: 'job:result', jobId: JOB_IDS[0], unitId: markersId, ok: true, text: 'LATE' });
+    expect(blocks(document)[1]?.textContent).toBe('Far away text.');
+
+    fake.reply(upperCase); // seg-3; seg-1#markers é reenviada
+    expect(labels(fake)).toEqual(['seg-0#text', 'seg-1#markers', 'seg-3#text', 'seg-1#markers']);
+    // seg-2 entra na tela; o reenvio nunca é interrompido de novo.
+    watcher().emit(changes(document, [2, 'visible']));
+    const armedBefore = armed();
+    vi.advanceTimersByTime(10 * PREEMPT_DEBOUNCE_MS);
+    expect(armed()).toBe(armedBefore);
+    fake.reply(dropMarkers); // markers inválidos → fallback na frente da classe 2
+    runToEnd(fake);
+    expect(labels(fake).slice(4)).toEqual([
+      'seg-2#text',
+      'seg-1#node-0',
+      'seg-1#node-1',
+      'seg-1#node-2',
+    ]);
+    expect(cancelled(fake)).toEqual(['seg-1#markers']);
+    expect(runner.getState()).toMatchObject({
+      status: 'translated',
+      done: 4,
+      failed: 0,
+      preempted: 1,
+    });
+    expect(document.body.textContent).toBe('TOP.FAR AWAY TEXT.TWO.THREE.');
+    expect(document.querySelector('i')?.textContent).toBe('AWAY');
   });
 
   it('timer limpo no fim normal (translated)', () => {

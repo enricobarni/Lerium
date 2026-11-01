@@ -1,4 +1,5 @@
 import type { Page, Worker } from '@playwright/test';
+import { PREEMPT_DEBOUNCE_MS } from '../../src/content/job-runner';
 import { MAX_UNITS_IN_FLIGHT } from '../../src/shared/page-messages';
 import { EXTENSION_ORIGIN, expect, test } from './fixtures';
 import { fakeTranslate, type MockOllama } from './mock-ollama';
@@ -205,18 +206,18 @@ test.describe('reordenação por rolagem', () => {
     expect(await driver.state(tabId)).toMatchObject({ failed: 0, skipped: 0 });
   });
 
-  test('rolar para baixo e para cima com pedidos retidos: sem rajada, no máximo uma interrupção', async ({
+  test('rolar para baixo e para cima com pedidos retidos: sem rajada, exatamente uma interrupção', async ({
     context,
     serviceWorker,
     extensionId,
     ollama,
   }) => {
-    // Antes, a rolagem só reordenava e nenhum pedido extra podia chegar. Com a
-    // interrupção pela classe atual, o h1 retido termina a rolagem acima da
-    // tela (classe atual ≥ 2) enquanto um parágrafo visível espera mais que
-    // PREEMPT_DEBOUNCE_MS: o h1 pode ser abortado uma vez e o visível sai. O
-    // teste continua protegendo "rolar não gera rajada": no máximo um pedido
-    // extra, só do que está visível no fim, e a janela nunca passa do limite.
+    // A rolagem só reordena; o único pedido extra vem da interrupção pela
+    // classe atual: o h1 retido termina a rolagem acima da tela (classe 2)
+    // enquanto parágrafos visíveis esperam mais que PREEMPT_DEBOUNCE_MS, então
+    // ele é abortado uma vez e um visível sai. O teste continua protegendo
+    // "rolar não gera rajada": exatamente um pedido extra, só do que está
+    // visível no fim, e a janela nunca passa do limite.
     const { driver, fixture } = await setUp(context, serviceWorker, extensionId, ollama);
     const { page, tabId } = fixture;
     await startHeldAtTop(driver, fixture, ollama);
@@ -230,48 +231,50 @@ test.describe('reordenação por rolagem', () => {
     expect(visibleAtEnd.length).toBeGreaterThan(0);
     expect(visibleAtEnd).not.toContain(heldText);
 
-    // Janela de observação: chega no máximo um pedido extra (a interrupção) e,
-    // depois dele, mais nenhum.
-    if (await ollama.waitForChatRequest(QUIET_WINDOW_MS)) {
-      expect(await ollama.waitForChatRequest(QUIET_WINDOW_MS)).toBe(false);
-    }
+    // A interrupção vem depois do debounce, com prazo: o h1 é abortado e um
+    // visível chega como segundo pedido.
+    await expect
+      .poll(() => ollama.chatRequests().length, { timeout: 10 * PREEMPT_DEBOUNCE_MS })
+      .toBe(2);
+    await expect
+      .poll(() => ollama.chatRequests().find(({ seq }) => seq === 0)?.aborted, {
+        timeout: 10_000,
+      })
+      .toBe(true);
+    expect(visibleAtEnd).toContain(await chatTextAt(ollama, 1));
+    // Depois da interrupção, nenhum outro pedido.
+    expect(await ollama.waitForChatRequest(QUIET_WINDOW_MS)).toBe(false);
     const duringHold = ollama.chatRequests();
-    expect(duringHold.length).toBeLessThanOrEqual(2);
-    if (duringHold.length === 2) {
-      // O extra é de um parágrafo visível agora, e o retido (o h1) foi abortado.
-      expect(visibleAtEnd).toContain(await chatTextAt(ollama, 1));
-      await expect
-        .poll(() => ollama.chatRequests().find(({ seq }) => seq === 0)?.aborted)
-        .toBe(true);
-    }
+    expect(duringHold).toHaveLength(2);
+    expect(duringHold.filter((chat) => chat.aborted).map(({ seq }) => seq)).toEqual([0]);
     expect(ollama.openChats).toBe(MAX_UNITS_IN_FLIGHT);
     expect(ollama.peakOpen).toBeLessThanOrEqual(MAX_UNITS_IN_FLIGHT);
-    expect(await driver.state(tabId)).toMatchObject({ status: 'translating', done: 0 });
+    expect(await driver.state(tabId)).toMatchObject({
+      status: 'translating',
+      done: 0,
+      preempted: 1,
+    });
 
     ollama.releaseChat();
     await expect.poll(statusOf(driver, tabId), { timeout: 20_000 }).toBe('translated');
-    expect(await driver.state(tabId)).toMatchObject({ failed: 0, skipped: 0 });
+    expect(await driver.state(tabId)).toMatchObject({ failed: 0, skipped: 0, preempted: 1 });
     expect(ollama.peakOpen).toBeGreaterThanOrEqual(1);
     expect(ollama.peakOpen).toBeLessThanOrEqual(MAX_UNITS_IN_FLIGHT);
 
     const chats = ollama.chatRequests();
-    // Só o h1 retido pode ter sido abortado, uma vez; nenhum outro pedido.
+    // Só o h1 retido foi abortado, exatamente uma vez; nenhum outro pedido.
     const aborted = chats.filter((chat) => chat.aborted);
-    expect(aborted.length).toBeLessThanOrEqual(1);
-    for (const chat of aborted) {
-      expect(chat.seq).toBe(0);
-      expect(normalize(chat.text ?? '')).toBe(heldText);
-    }
-    // Cada texto é traduzido exatamente uma vez (o h1 pode ter um pedido
-    // abortado a mais, seguido do reenvio): sem duplicata nem perda.
+    expect(aborted).toHaveLength(1);
+    expect(aborted[0]?.seq).toBe(0);
+    expect(normalize(aborted[0]?.text ?? '')).toBe(heldText);
+    // Cada texto é traduzido exatamente uma vez (o h1 tem um pedido abortado a
+    // mais, seguido do reenvio): sem duplicata nem perda.
     const completed = chats.filter((chat) => !chat.aborted).map(({ text }) => text);
     expect(completed).not.toContain(null);
     expect(new Set(completed).size).toBe(completed.length);
-    expect(chats.length).toBe(completed.length + aborted.length);
-    if (aborted.length === 1) {
-      expect(completed.map((text) => normalize(text!))).toContain(heldText);
-      expect(chats.filter((chat) => normalize(chat.text ?? '') === heldText)).toHaveLength(2);
-    }
+    expect(chats.length).toBe(completed.length + 1);
+    expect(completed.map((text) => normalize(text!))).toContain(heldText);
+    expect(chats.filter((chat) => normalize(chat.text ?? '') === heldText)).toHaveLength(2);
   });
 
   test('rolando durante o job até o fim: periféricos traduzidos e ida e volta byte a byte', async ({
