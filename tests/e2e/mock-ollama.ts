@@ -24,6 +24,8 @@ export const FIXTURE_PATH = '/fixture/novel-chapter.html';
 export const LONG_FIXTURE_PATH = '/fixture/long-chapter.html';
 /** Capítulo curto por parágrafo, com um parágrafo longo (`LONG`) logo abaixo da viewport inicial. */
 export const LONG_PARAGRAPH_FIXTURE_PATH = '/fixture/long-paragraph-chapter.html';
+/** Capítulo num único `<div>`, com os parágrafos (`R01`…`R40`) separados por `<br><br>`. */
+export const BR_FIXTURE_PATH = '/fixture/br-chapter.html';
 
 /** Caminho servido → arquivo em `tests/fixtures`. */
 const FIXTURE_FILES: ReadonlyMap<string, string> = new Map([
@@ -33,6 +35,7 @@ const FIXTURE_FILES: ReadonlyMap<string, string> = new Map([
     LONG_PARAGRAPH_FIXTURE_PATH,
     fileURLToPath(new URL('../fixtures/long-paragraph-chapter.html', import.meta.url)),
   ],
+  [BR_FIXTURE_PATH, fileURLToPath(new URL('../fixtures/br-chapter.html', import.meta.url))],
 ]);
 
 /** Par de idiomas que o mock espera no prompt (o mesmo gravado pelos testes). */

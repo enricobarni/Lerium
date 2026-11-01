@@ -7,6 +7,7 @@ import type {
 } from '../../src/shared/page-control';
 import { MOCK_ENDPOINT } from './fixtures';
 import {
+  BR_FIXTURE_PATH,
   CHAT_SOURCE,
   CHAT_TARGET,
   FIXTURE_PATH,
@@ -24,6 +25,7 @@ import {
 export const FIXTURE_URL = `${MOCK_ENDPOINT}${FIXTURE_PATH}`;
 export const LONG_FIXTURE_URL = `${MOCK_ENDPOINT}${LONG_FIXTURE_PATH}`;
 export const LONG_PARAGRAPH_FIXTURE_URL = `${MOCK_ENDPOINT}${LONG_PARAGRAPH_FIXTURE_PATH}`;
+export const BR_FIXTURE_URL = `${MOCK_ENDPOINT}${BR_FIXTURE_PATH}`;
 
 /** Subconjunto de `chrome` usado nos callbacks (tipado à mão). */
 interface ChromeLike {

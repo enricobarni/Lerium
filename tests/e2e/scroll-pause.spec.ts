@@ -8,6 +8,7 @@ import { MAX_UNITS_IN_FLIGHT } from '../../src/shared/page-messages';
 import { EXTENSION_ORIGIN, expect, test } from './fixtures';
 import type { MockOllama, RecordedRequest } from './mock-ollama';
 import {
+  BR_FIXTURE_URL,
   LONG_PARAGRAPH_FIXTURE_URL,
   openFixture,
   PageDriver,
@@ -229,5 +230,92 @@ test.describe('pausa de tradução ao rolar', () => {
       `nenhum pedido em ${NEXT_REQUEST_WINDOW_MS} ms com LONG em voo: o meio visível esperou LONG`,
     ).toBe(true);
     expect(middle).toContain(nextDuringHold);
+  });
+
+  test('H2: capítulo separado por <br>: depois de rolar até o meio, o próximo pedido é visível', async ({
+    context,
+    serviceWorker,
+    extensionId,
+    ollama,
+  }) => {
+    // Documenta o defeito H2: os parágrafos separados por <br><br> viram
+    // segmentos distintos com o MESMO bloco (o <div>). A classificação e o
+    // observador olham o bloco, então todos contam como visíveis enquanto
+    // qualquer parte do div está na tela, e a fila segue a ordem do documento
+    // mesmo depois de rolar até o meio. A anotação sai no commit da correção.
+    test.fail();
+
+    const { driver, fixture } = await setUp(
+      context,
+      serviceWorker,
+      extensionId,
+      ollama,
+      BR_FIXTURE_URL,
+    );
+    const { page, tabId } = fixture;
+    expect(await page.evaluate(() => scrollY)).toBe(0);
+    // Pré-condição: um único bloco, bem mais alto que a viewport, com 40 parágrafos.
+    expect(
+      await page.evaluate(() => {
+        const chapter = document.getElementById('chapter')!;
+        return {
+          blockChildren: chapter.querySelectorAll('p, div').length,
+          breaks: chapter.querySelectorAll('br').length,
+          tall: chapter.getBoundingClientRect().height > 3 * innerHeight,
+        };
+      }),
+    ).toEqual({ blockChildren: 0, breaks: 78, tall: true });
+
+    expect(await driver.inject(tabId)).toEqual({ ok: true, documentId: expect.any(String) });
+    ollama.holdChat();
+    expect((await driver.state(tabId, 'start')).status).toBe('translating');
+    await expect.poll(() => ollama.openChats, { timeout: 10_000 }).toBe(MAX_UNITS_IN_FLIGHT);
+    expect(await markerAt(ollama, 0)).toBe('R01');
+    await frames(page);
+
+    // Com o primeiro pedido retido, rola até R20 (12 px abaixo do topo da viewport).
+    await page.evaluate(() => {
+      const node = [...document.getElementById('chapter')!.childNodes].find(
+        (child) => child.nodeType === Node.TEXT_NODE && /^\s*R20\b/.test(child.nodeValue ?? ''),
+      )!;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      scrollTo(0, scrollY + range.getBoundingClientRect().top - 12);
+    });
+    await frames(page);
+    const visible = await page.evaluate(() =>
+      [...document.getElementById('chapter')!.childNodes]
+        .filter((child) => child.nodeType === Node.TEXT_NODE)
+        .filter((child) => {
+          const range = document.createRange();
+          range.selectNodeContents(child);
+          const rect = range.getBoundingClientRect();
+          return rect.height > 0 && rect.top < innerHeight && rect.bottom > 0;
+        })
+        .map((child) => /^\s*(R\d{2})\b/.exec(child.nodeValue ?? '')?.[1])
+        .filter((marker): marker is string => marker !== undefined),
+    );
+    expect(visible).toContain('R20');
+    // O seguinte na ordem do documento já não está na tela: o teste distingue as ordens.
+    expect(visible).not.toContain('R02');
+    expect(ollama.chatRequests()).toHaveLength(1);
+
+    ollama.releaseChat();
+    const next = await markerAt(ollama, 1);
+    await expect.poll(statusOf(driver, tabId), { timeout: 20_000 }).toBe('translated');
+    const state = await driver.state(tabId);
+    expect(state).toMatchObject({ failed: 0, skipped: 0 });
+    // Cada parágrafo foi um pedido próprio (segmentos distintos do mesmo bloco).
+    const paragraphs = chatsInOrder(ollama)
+      .map(({ text }) => markerOf(text))
+      .filter((marker) => marker !== null);
+    expect(new Set(paragraphs).size).toBe(40);
+    // A espera não entra em `visibleLatency`: nenhum bloco "entrou" na tela.
+    recordState('H2 get-state final', state);
+    recordState('H2 visibleLatency', { visibleLatency: state.visibleLatency ?? 'ausente' });
+
+    expect(visible, 'depois de rolar até R20, o próximo pedido deveria ser visível').toContain(
+      next,
+    );
   });
 });
