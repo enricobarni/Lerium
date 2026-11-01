@@ -26,6 +26,8 @@ literária de [PLAN.md §9](PLAN.md). Arquitetura em
 | Integração/DOM | Vitest + jsdom (projeto `integration`, `tests/integration/`; ADR-012) | Coleta (`collectTextNodes`): ordem de documento na fixture de novel, uma regra de exclusão por caso, raiz excluída, DOM inalterado, Shadow DOM fora. Segmentação (`segmentTextNodes`): segmentos esperados da fixture, um caso por elemento de bloco, `<br>` e elementos excluídos separam, nenhum nó perdido ou duplicado, ids determinísticos, 5000 parágrafos em tempo linear. Layout inline (`inlineLayoutOf`): runs e caminhos, wrapper que cobre tudo ignorado, ida e volta com o codec. Aplicação e restauração (`createPageApplier`, ADR-014): os três caminhos, atomicidade (nó removido, alterado, movido ou em contexto editável), vínculo resultado-plano, limite de saída, site alterando nó traduzido; ida e volta byte a byte na fixture do capítulo e em DOM com os três caminhos. Executor de job (`createJobRunner`, ADR-010) com Port falsa: sequencialidade, resultados antigos descartados, fallback, fatal, interrupção, cancelamento, reentrância e ping. A seguir: títulos, listas, `<em>`/`<strong>`/`<a>`, espaços e quebras; exclusões (`code`/`pre`, campos editáveis, scripts, UI da extensão); restauração exata; resultado fora de ordem no bloco correto; nó removido/substituído | Fase 4 |
 | Unitário + integração | Vitest | Scheduler (ADR-015): fila por classe e `pushFront`, janela em voo, classificação visível/fora da tela/periférico (inclui `header` dentro de `role` main/article), semáforo FIFO entre Ports, N unidades por Port, executor real ligado ao service worker real com janela 2 | Fase 5 |
 | E2E | Playwright + Chromium | Fila (`tests/e2e/scheduler.spec.ts`, fixture `long-chapter.html`): primeiro pedido é o título visível e nunca o menu, prioridade após rolar, limite com duas abas, ida e volta byte a byte | Fase 5 |
+| Unitário + integração | Vitest | Prioridade por viewport (ADR-016): fila agrupada com `move` (inclui 10.000 movimentos com memória limitada), observador com zona inicial consolidada, regras de reordenação, deslocamento de layout na borda da faixa perto, `visibleLatency` | Fase 5 |
+| E2E | Playwright + Chromium | Rolagem (`tests/e2e/viewport-priority.spec.ts`): próximo pedido é o parágrafo que entrou na tela, rebaixamento, rolagem rápida sem rajada, periféricos traduzidos, cancelamento, métrica sem texto | Fase 5 |
 | Manual (opt-in) | Vitest + Ollama real | Concorrência (`tests/manual/concurrency.manual.test.ts`): 1/2/4 simultâneas, tempo total, primeiro resultado e latência; resultados na ADR-015 | Fase 5 |
 | E2E | Playwright + Chromium | Tradução de página (`tests/e2e/page-translation.spec.ts`): injeção do `content.js` na fixture servida pelo mock, ida e volta byte a byte, Ollama fora, cancelamento no meio, injeção dupla, página não suportada, nenhum texto no console | Fase 4 |
 | E2E | Playwright + Chromium | Extensão MV3 carregada; iniciar/parar; seleção; menu de contexto; opções; alternar original; Ollama mock indisponível, HTTP 404 de modelo e resposta lenta | Fases 4–6 |
@@ -203,6 +205,26 @@ Anote o resultado de cada item (ok / falhou + o que apareceu).
 19. Com o Ollama recusando a origem (`OLLAMA_ORIGINS` sem o ID do Lerium):
     aparece a mensagem de origem recusada e o foco vai para **Abrir
     configurações**. Conferir também no tema escuro.
+
+## Como ler as métricas de prioridade (Chrome real)
+
+Os tempos ficam no estado do job, que só a extensão lê. Para consultá-los
+durante ou depois de uma tradução:
+
+1. Com a página traduzindo, abra o popup do Lerium, clique com o botão
+   direito dentro dele e escolha **Inspecionar**.
+2. No console do DevTools do popup, rode:
+
+   ```js
+   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+   await chrome.tabs.sendMessage(tab.id, { type: 'page:command', command: 'get-state' }, { frameId: 0 });
+   ```
+
+3. Anote `firstVisibleMs` (do início até o primeiro parágrafo visível
+   traduzido), `durationMs` e `visibleLatency` (`count`, `medianMs`, `maxMs`:
+   espera dos parágrafos que entraram na tela por rolagem).
+
+A resposta traz só números e códigos, nunca texto da página.
 
 ## Desempenho
 

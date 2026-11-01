@@ -837,6 +837,61 @@ só criam fila e multiplicam a latência de cada parágrafo.
   0.2.0.
 - Com GPU ou `OLLAMA_NUM_PARALLEL` maior o resultado pode mudar; o limite
   passa a ser configurável numa fase futura (P1), com nova medição.
-- Reordenação durante a rolagem (IntersectionObserver), aging do periférico e
-  cache de segmentos repetidos ficam para `feat/viewport-priority` e
-  `perf/scroll-translation`.
+- Reordenação durante a rolagem: ver ADR-016. Cache de segmentos repetidos
+  fica para `perf/scroll-translation`.
+
+## ADR-016 — Prioridade por viewport durante a rolagem
+
+**Status:** Aceita (31/10/2026)
+
+**Contexto.** A ADR-015 classifica os segmentos uma vez, no início. Quando o
+leitor rola durante a tradução, o que entra na tela precisa ir para a frente,
+sem gerar rajada de requisições.
+
+**Decisão.**
+
+- **Classes:** 0 visível, 1 perto (até uma tela abaixo), 2 resto do conteúdo,
+  3 periférico. A classificação inicial produz só 0, 2 e 3; a classe 1 nasce da
+  rolagem. A fila (`createGroupedPriorityQueue`) agrupa as unidades de um
+  segmento e as move juntas em O(1) amortizado.
+- **Observação** (`src/content/visibility-watcher.ts`): dois
+  `IntersectionObserver` com `threshold: 0`, um na viewport e um com
+  `rootMargin: 0px 0px 100% 0px`. A zona inicial de um bloco só é emitida
+  depois que **os dois** entregaram a primeira entrada, inclusive `out`;
+  depois, só mudanças. Um bloco que não intersecta e está acima da viewport
+  (`boundingClientRect` da própria entrada) vai direto para `out`.
+- **Regras de reordenação:** entrar na tela → fim da classe 0; entrar em
+  perto, vindo do resto → fim da classe 1 (FIFO = ordem de leitura rolando
+  para baixo); sair da tela para perto (rolando para cima) → frente da classe
+  1; sair da tela pelo topo → fim da classe 2; sair de perto por baixo →
+  frente da classe 2. Periféricos não são observados.
+- **Sem rajada, por construção:** o callback só reordena; requisições só
+  saem no início do job e quando chega um resultado. O limite em voo continua
+  o da ADR-015.
+- **Sem aging:** o job coleta tudo no início e nada novo entra; as classes 0
+  a 2 se esgotam e o periférico sempre sai. Aging só fará sentido com conteúdo
+  contínuo (Fase 7).
+- **Métrica `visibleLatency`** (`count`, `medianMs`, `maxMs`): do aviso do
+  observador (até ~1 quadro depois da entrada real) até a aplicação, só para
+  segmentos promovidos que ainda estavam na fila; descartada se o leitor
+  rolar para longe antes. Junto com `firstVisibleMs`, fica no estado do job e
+  só a extensão a lê (`page:command get-state`).
+- **Privacidade:** o observador vive no mundo isolado, não altera o DOM e não
+  cria entradas de User Timing.
+
+**Defeito encontrado e corrigido.** No E2E da página no topo, o parágrafo
+P17 saía por último. Causa medida: o título traduzido passou a ocupar duas
+linhas e empurrou a página 51 px; o P17, encostado no limite da faixa perto
+(1440 px), saiu dela por baixo, e a regra antiga mandava esse caso para o fim
+da classe 2. Também se mediu que, no Chrome, o observador perto respondeu
+antes do visível no mesmo quadro, gerando zonas transitórias que inflavam a
+`visibleLatency`; a emissão consolidada da zona inicial eliminou isso.
+
+**Consequências.**
+
+- A tradução muda o layout da própria página; as regras precisam ser
+  estáveis a deslocamentos pequenos na borda das faixas.
+- Sair pelo topo vai para o fim da classe 2, e não para a frente: o bloco
+  já passou pelo leitor.
+- A ordem relativa dos callbacks dos dois observadores não é garantida; o
+  código não depende dela.

@@ -6,13 +6,47 @@
 ## Estado atual
 
 - **Fase:** 5 — Experiência progressiva e desempenho (em andamento)
-- **Tarefa:** `feat/translation-scheduler` (fila com prioridades, semáforo global e limite de concorrência medido)
+- **Tarefa:** `feat/viewport-priority` (reordenação durante a rolagem e latência do que entrou na tela)
 - **Fase 4:** concluída — PRs #17–#22 mesclados; Gate cumprido (E2E de ida e volta byte a byte e aceite manual do responsável no Chrome real)
 - **Fase 3:** concluída — PRs #13–#16 mesclados; gate cumprido (18/18 execuções com o modelo real); ADR-011 aceita após conferência do model card pelo responsável
 - **Versão:** `0.2.0` (primeira que traduz páginas; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.2.0` pendente de criação pelo responsável. Versão anterior: `0.1.0`. Tag `v0.1.0` em `ab06507` (validado: lint, typecheck, 398 testes, build, 8 E2E) e release [Lerium 0.1.0](https://github.com/enricobarni/Lerium/releases/tag/v0.1.0) publicadas pelo responsável.
 - **Fase 2:** concluída — PRs #9 e #10 mesclados; aceite manual do responsável no Chrome estável (conexão, modelos listados, Ollama fechado)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
+
+## Fase 5 — `feat/viewport-priority`
+
+| Commit | Mensagem |
+|---|---|
+| `2c78301` | `feat(content): observa a visibilidade dos blocos em fila` |
+| `d0d870d` | `feat(queue): agrupa unidades por chave e permite mover entre classes` |
+| `c6da378` | `feat(content): reprioriza na rolagem sem enviar fora do pump` |
+| `b58643b` | `feat(content): mede a latência do trecho que entrou na tela` |
+| `2d25529` | `test(e2e): prova a prioridade na rolagem e a ausência de rajada` |
+| `8e52202` | `fix(content): adiciona classe perto e ordena a rolagem como leitura` |
+| `849de39` | `fix(content): rebaixa segmento inicial que o observador vê fora da tela` |
+| `24e0d64` | `refactor(content): documenta a métrica de latência e unifica tipos` |
+| `d51000c` | `fix(content): mantém na frente quem sai da faixa perto por baixo` |
+| `818c665` | `fix(content): emite a zona inicial só com os dois observadores` |
+| (este commit) | `docs: registra adr-016 da prioridade por viewport` |
+
+Segunda branch da Fase 5.
+
+**O que foi feito:**
+
+- `src/core/translation-scheduler.ts`: fila agrupada por segmento com `move` em O(1) amortizado (a fila anterior saiu).
+- `src/content/visibility-watcher.ts`: dois `IntersectionObserver` (visível e perto), com zona inicial consolidada.
+- `src/content/job-runner.ts`: reordena durante a rolagem sem enviar fora do fluxo normal; classe “perto”; métrica `visibleLatency`.
+- E2E `tests/e2e/viewport-priority.spec.ts`: o próximo pedido é o parágrafo que acabou de entrar na tela; rebaixamento; rolagem rápida sem rajada; periféricos traduzidos; cancelamento; métrica sem texto.
+- ADR-016.
+
+**Revisão:** reviewer aprovou com ressalvas depois de um fuzz diferencial da fila (3.000 rodadas × 400 operações contra um modelo ingênuo, sem divergência). Aplicadas: classe própria “perto” (acaba a ordem invertida entre lotes), saída pelo topo para o fim, rebaixamento do segmento inicial que o observador vê fora da tela.
+
+**Defeito encontrado pelo E2E e investigado pelo debugger:** depois das correções de ordem, o teste “no topo” passou a falhar sempre (P17 por último). A causa foi medida com instrumentação temporária, depois revertida: o título traduzido em duas linhas desloca a página 51 px e tira o P17 da faixa perto por baixo; a regra “perto → fora” o mandava para o fim. Corrigido no código, sem mudar as asserções do teste; também se eliminaram as zonas transitórias causadas pela ordem dos callbacks dos dois observadores, que inflavam a `visibleLatency`.
+
+**Validações executadas** (códigos de saída conferidos): `npm run lint`, `typecheck`, `test` (1868/1868; eram 1809), `build` (`verify-dist` ok) e `test:e2e` (27/27, três rodadas seguidas, cerca de 45 s cada).
+
+**Pendências:** medir `firstVisibleMs` e `visibleLatency` no Chrome real com o modelo de verdade (roteiro em TEST_PLAN); numa série anterior, um E2E de cancelamento levou 29,4 s, perto do limite, e não voltou a acontecer em execuções posteriores.
 
 ## Fase 5 — `feat/translation-scheduler`
 
@@ -639,4 +673,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 5 — `feat/viewport-priority`: observar a visibilidade com IntersectionObserver e reordenar a fila quando o leitor rola, com aging para o periférico não ficar parado; medir `firstVisibleMs` no Chrome real.
+Fase 5 — `feat/progress-overlay`: indicação de progresso acessível e não intrusiva na página (PLAN.md Fase 5), sem expor nada à página além do necessário.
