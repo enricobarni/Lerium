@@ -15,10 +15,16 @@
  * A geometria vem de `deps.measure`, injetada (no content real, a partir de
  * `getBoundingClientRect`), chamada no máximo uma vez por bloco distinto e
  * nunca para blocos periféricos (a classe deles não depende da posição).
+ * Bloco compartilhado (dois ou mais segmentos não periféricos com o mesmo
+ * `segment.block`) é medido por trecho com `deps.measureSegment`, quando
+ * houver, sem cache: cada segmento recebe a classe da própria posição.
  * Não altera o DOM, não loga e não guarda estado entre chamadas.
  */
 
 import type { TranslationSegment } from './segmenter';
+import { hasArea, zoneOfRect, type RectZone, type ZoneRect } from './zone-rect';
+
+export { zoneOfRect, type RectZone };
 
 export const PRIORITY_VISIBLE_MAIN = 0;
 export const PRIORITY_NEAR = 1;
@@ -36,16 +42,17 @@ export type SegmentPriority =
 /** O que `classifySegments` produz: a classe `PRIORITY_NEAR` fica de fora. */
 export type InitialPriority = Exclude<SegmentPriority, typeof PRIORITY_NEAR>;
 
-/** Retângulo em coordenadas da viewport (como `DOMRect`). */
-export interface BlockRect {
-  readonly top: number;
-  readonly bottom: number;
-  readonly width: number;
-  readonly height: number;
-}
+/** Retângulo em coordenadas da viewport: o mesmo tipo de `zone-rect.ts`. */
+export type BlockRect = ZoneRect;
 
 export interface SegmentPriorityDeps {
   measure(block: Element): BlockRect;
+  /**
+   * Opcional: retângulo do próprio trecho (no content real, de um `Range`
+   * sobre os nós do segmento). Só é chamado para segmentos de bloco
+   * compartilhado; ausente, todo segmento usa `measure(block)`.
+   */
+  measureSegment?(segment: TranslationSegment): BlockRect;
   viewportHeight: number;
 }
 
@@ -125,14 +132,9 @@ function isPeripheral(block: Element): boolean {
   return false;
 }
 
-/** Tem área (largura e altura positivas; `NaN` não tem). */
-function hasArea(rect: BlockRect): boolean {
-  return rect.width > 0 && rect.height > 0;
-}
-
 /** Cruza a faixa vertical `(0, viewportHeight)` e tem área. */
 function isVisible(rect: BlockRect, viewportHeight: number): boolean {
-  return hasArea(rect) && rect.top < viewportHeight && rect.bottom > 0;
+  return zoneOfRect(rect, viewportHeight) === 'visible';
 }
 
 /** Segmento principal acima da viewport, com a borda inferior do bloco. */
@@ -157,6 +159,10 @@ interface AboveViewport {
  *
  * A classe 1 (`PRIORITY_NEAR`) não é produzida aqui.
  *
+ * "Bloco" acima é o retângulo usado para o segmento: o do bloco, ou o do
+ * próprio trecho quando o bloco é compartilhado e `deps.measureSegment`
+ * existe (aí sem cache, uma chamada por segmento).
+ *
  * Medida com valor não finito (`NaN`) não é visível e conta como "não acima".
  */
 export function classifySegments(
@@ -170,22 +176,40 @@ export function classifySegments(
   const above: AboveViewport[] = [];
   const peripheral: ClassifiedSegment[] = [];
 
-  segments.forEach((segment, order) => {
-    const { block } = segment;
+  const peripheralOf = (block: Element): boolean => {
     let blockIsPeripheral = peripheralCache.get(block);
     if (blockIsPeripheral === undefined) {
       blockIsPeripheral = isPeripheral(block);
       peripheralCache.set(block, blockIsPeripheral);
     }
-    if (blockIsPeripheral) {
+    return blockIsPeripheral;
+  };
+
+  // Pré-contagem de segmentos não periféricos por bloco; só importa com a
+  // medida por trecho, então sem ela nem é feita.
+  const mainCount = new Map<Element, number>();
+  if (deps.measureSegment !== undefined) {
+    for (const { block } of segments) {
+      if (!peripheralOf(block)) mainCount.set(block, (mainCount.get(block) ?? 0) + 1);
+    }
+  }
+
+  segments.forEach((segment, order) => {
+    const { block } = segment;
+    if (peripheralOf(block)) {
       peripheral.push({ segment, priority: PRIORITY_PERIPHERAL, order });
       return;
     }
 
-    let rect = rectCache.get(block);
-    if (rect === undefined) {
-      rect = deps.measure(block);
-      rectCache.set(block, rect);
+    let rect: BlockRect | undefined;
+    if (deps.measureSegment !== undefined && (mainCount.get(block) ?? 0) >= 2) {
+      rect = deps.measureSegment(segment);
+    } else {
+      rect = rectCache.get(block);
+      if (rect === undefined) {
+        rect = deps.measure(block);
+        rectCache.set(block, rect);
+      }
     }
     if (isVisible(rect, deps.viewportHeight)) {
       visible.push({ segment, priority: PRIORITY_VISIBLE_MAIN, order });

@@ -6,7 +6,7 @@
 ## Estado atual
 
 - **Fase:** 5 — Experiência progressiva e desempenho (em andamento)
-- **Tarefa:** `perf/scroll-translation` (interrupção de tradução fora da tela; cache adiado para as Fases 6/7 com aprovação do responsável)
+- **Tarefa:** `fix/shared-block-priority` (prioridade por trecho em capítulos separados por `<br>`)
 - **Aceite manual de `feat/viewport-priority`** (31/10/2026): `firstVisibleMs` 2–4 s e `visibleLatency` 3–5 s no Chrome real; pausa ocasional da tela com o popup avançando (ver ADR-016)
 - **Fase 4:** concluída — PRs #17–#22 mesclados; Gate cumprido (E2E de ida e volta byte a byte e aceite manual do responsável no Chrome real)
 - **Fase 3:** concluída — PRs #13–#16 mesclados; gate cumprido (18/18 execuções com o modelo real); ADR-011 aceita após conferência do model card pelo responsável
@@ -14,6 +14,41 @@
 - **Fase 2:** concluída — PRs #9 e #10 mesclados; aceite manual do responsável no Chrome estável (conexão, modelos listados, Ollama fechado)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
+
+## Fase 5 — `fix/shared-block-priority`
+
+| Commit | Mensagem |
+|---|---|
+| `8930562` | `refactor(content): aplica zonas por segmento no executor` |
+| `b577c9c` | `feat(content): classifica por trecho segmentos de bloco compartilhado` |
+| `ea093ed` | `feat(content): cria rastreador de zona por trecho em bloco compartilhado` |
+| `d027e18` | `refactor(content): unifica a regra de zona por retângulo` |
+| `5bbfc8e` | `feat(content): liga o rastreador de zona ao executor e ao content` |
+| `35b9e33` | `test(e2e): remove a falha esperada da h2 da rolagem` |
+| `50c4771` | `fix(content): marca fora os trechos acima logo após a busca` |
+| `1aec958` | `fix(content): reveza blocos no orçamento de medidas` |
+| `04b91b2` | `fix(content): remede só blocos afetados pela rolagem` |
+| `0861896` | `test(content): cobre continuação e vizinhos sem área no rastreador` |
+| (este commit) | `docs: registra adr-018 da prioridade por trecho` |
+
+Quarta branch da Fase 5: corrige o defeito H2 reproduzido em `perf/scroll-translation`.
+
+**O que foi feito:**
+
+- `src/content/zone-rect.ts`: regra única de zona por retângulo.
+- `src/content/segment-priority.ts`: blocos compartilhados classificados por trecho (`measureSegment`).
+- `src/content/segment-zone-tracker.ts`: rastreador de zona por trecho (rolagem passiva + rAF, busca binária, teto de 64 medidas por quadro, revezamento de blocos).
+- `src/content/job-runner.ts`: zonas aplicadas por segmento; blocos compartilhados usam o observador só como portão.
+- E2E H2 sem `test.fail()`.
+- ADR-018.
+
+**Trabalho paralelo:** refatoração do executor (checkout), classificação por trecho e rastreador (duas worktrees) em paralelo; integração por `cherry-pick`; ligação em seguida.
+
+**Revisão:** reviewer aprovou com ressalvas e reproduziu dois defeitos em script separado: trechos que saem pelo topo seguiam “visíveis” com rolagem contínua quando a passada passava de 64 medidas, e um bloco podia consumir o orçamento de todos os quadros. Corrigidos (trechos acima viram `out` logo após a busca; revezamento), junto com o filtro por alvo da rolagem; cada teste de regressão falhou antes da correção.
+
+**Validações executadas** (códigos de saída conferidos): `npm run lint`, `typecheck`, `test` (1979/1979; eram 1925), `build` (`verify-dist` ok) e `test:e2e` (29/29, três rodadas; H1 e H2 passam).
+
+**Pendências:** medir no Chrome real num site de capítulo em `<br>`; Gate da Fase 5 (memória e long tasks no hardware real); `feat/progress-overlay`.
 
 ## Fase 5 — `perf/scroll-translation`
 
@@ -716,4 +751,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 5 — `fix/shared-block-priority`: prioridade por trecho dentro de um bloco compartilhado (capítulos separados por `<br>`), fazendo passar o teste H2 de `tests/e2e/scroll-pause.spec.ts`. Depois: `feat/progress-overlay`.
+Fase 5 — `feat/progress-overlay`: indicação de progresso acessível e não intrusiva na página. Depois, fechar o Gate da Fase 5 com as medições de memória e de long tasks no hardware real.

@@ -7,6 +7,7 @@ import {
   PRIORITY_NEAR,
   PRIORITY_PERIPHERAL,
   PRIORITY_VISIBLE_MAIN,
+  zoneOfRect,
   type BlockRect,
   type SegmentPriorityDeps,
 } from '../../src/content/segment-priority';
@@ -394,5 +395,152 @@ describe('classifySegments: medição e efeitos', () => {
     } finally {
       for (const spy of spies) spy.mockRestore();
     }
+  });
+});
+
+describe('zoneOfRect', () => {
+  it('cruzando a faixa com área é visible', () => {
+    expect(zoneOfRect(rect(100), VIEWPORT)).toBe('visible');
+    expect(zoneOfRect(rect(-20), VIEWPORT)).toBe('visible');
+    expect(zoneOfRect(rect(VIEWPORT - 1), VIEWPORT)).toBe('visible');
+    expect(zoneOfRect(rect(-500, 3000), VIEWPORT)).toBe('visible');
+  });
+
+  it('top == viewportHeight é near, não visible', () => {
+    expect(zoneOfRect(rect(VIEWPORT), VIEWPORT)).toBe('near');
+  });
+
+  it('bottom == 0 é out (acima, só encostando)', () => {
+    expect(zoneOfRect(rect(-40), VIEWPORT)).toBe('out');
+    expect(zoneOfRect(rect(-500), VIEWPORT)).toBe('out');
+  });
+
+  it('near vai até antes de 2 * viewportHeight', () => {
+    expect(zoneOfRect(rect(2 * VIEWPORT - 1), VIEWPORT)).toBe('near');
+    expect(zoneOfRect(rect(2 * VIEWPORT), VIEWPORT)).toBe('out');
+    expect(zoneOfRect(rect(5 * VIEWPORT), VIEWPORT)).toBe('out');
+  });
+
+  it('área 0 é out em qualquer posição', () => {
+    expect(zoneOfRect({ top: 100, bottom: 100, width: 600, height: 0 }, VIEWPORT)).toBe('out');
+    expect(zoneOfRect({ top: 100, bottom: 140, width: 0, height: 40 }, VIEWPORT)).toBe('out');
+    expect(zoneOfRect({ top: 0, bottom: 0, width: 0, height: 0 }, VIEWPORT)).toBe('out');
+    expect(zoneOfRect(rect(VIEWPORT + 10, 0), VIEWPORT)).toBe('out');
+  });
+
+  it('NaN é out', () => {
+    const nan = Number.NaN;
+    expect(zoneOfRect({ top: nan, bottom: nan, width: 10, height: 10 }, VIEWPORT)).toBe('out');
+  });
+});
+
+describe('classifySegments: bloco compartilhado medido por trecho', () => {
+  /**
+   * `measure` e `measureSegment` falsos: o bloco pelo id (como `fakeDeps`), o
+   * trecho pelo texto do segmento; sem entrada, `fallback`.
+   */
+  function segmentDeps(
+    blockRects: Readonly<Record<string, BlockRect>>,
+    segmentRects: Readonly<Record<string, BlockRect>>,
+    fallback: BlockRect = IN_VIEW,
+  ) {
+    return {
+      measure: vi.fn((block: Element) => blockRects[block.id] ?? fallback),
+      measureSegment: vi.fn(
+        (segment: TranslationSegment) => segmentRects[segment.text] ?? fallback,
+      ),
+      viewportHeight: VIEWPORT,
+    } satisfies SegmentPriorityDeps;
+  }
+
+  // Um `<p>` alto dividido por `<br>` em cinco segmentos, entre blocos soltos.
+  const SHARED_HTML =
+    '<body><main><p id="before">Before</p>' +
+    '<p id="tall">Far up<br>Near up<br>Seen part<br>Low one<br>Low two</p>' +
+    '<p id="after">After</p></main></body>';
+  const SHARED_RECTS: Readonly<Record<string, BlockRect>> = {
+    'Far up': rect(-900),
+    'Near up': rect(-100),
+    'Seen part': rect(300),
+    'Low one': rect(VIEWPORT + 10),
+    'Low two': rect(VIEWPORT + 900),
+  };
+
+  it('classifica cada trecho pela própria posição', () => {
+    const deps = segmentDeps(
+      { before: rect(-2000), tall: rect(-1000, 3000), after: rect(VIEWPORT + 1500) },
+      SHARED_RECTS,
+    );
+    expect(classify(SHARED_HTML, deps)).toEqual([
+      ['Seen part', PRIORITY_VISIBLE_MAIN],
+      ['Low one', PRIORITY_MAIN],
+      ['Low two', PRIORITY_MAIN],
+      ['After', PRIORITY_MAIN],
+      ['Near up', PRIORITY_MAIN],
+      ['Far up', PRIORITY_MAIN],
+      ['Before', PRIORITY_MAIN],
+    ]);
+  });
+
+  it('mede cada trecho do bloco compartilhado sem cache e não mede o bloco', () => {
+    const deps = segmentDeps({}, SHARED_RECTS);
+    classifySegments(segmentsOf(parse(SHARED_HTML)), deps);
+    expect(deps.measureSegment.mock.calls.map(([segment]) => segment.text)).toEqual([
+      'Far up',
+      'Near up',
+      'Seen part',
+      'Low one',
+      'Low two',
+    ]);
+    expect(deps.measure.mock.calls.map(([block]) => block.id)).toEqual(['before', 'after']);
+  });
+
+  it('bloco não compartilhado: o mesmo número de chamadas de measure de hoje', () => {
+    const html = '<body><p id="one">One</p><p id="two">Two</p><p id="three">Three</p></body>';
+    const without = fakeDeps();
+    classifySegments(segmentsOf(parse(html)), without);
+    const withSegment = segmentDeps({}, {});
+    classifySegments(segmentsOf(parse(html)), withSegment);
+    expect(without.measure).toHaveBeenCalledTimes(3);
+    expect(withSegment.measure).toHaveBeenCalledTimes(3);
+    expect(withSegment.measure.mock.calls.map(([block]) => block.id)).toEqual([
+      'one',
+      'two',
+      'three',
+    ]);
+    expect(withSegment.measureSegment).not.toHaveBeenCalled();
+  });
+
+  it('segmentos periféricos não contam para "compartilhado" nem são medidos', () => {
+    const html =
+      '<body><nav><p id="menu">Home<br>About<br>Contact</p></nav>' +
+      '<main><p id="solo">Solo</p></main></body>';
+    const deps = segmentDeps({ solo: rect(VIEWPORT + 10) }, {});
+    expect(classify(html, deps)).toEqual([
+      ['Solo', PRIORITY_MAIN],
+      ['Home', PRIORITY_PERIPHERAL],
+      ['About', PRIORITY_PERIPHERAL],
+      ['Contact', PRIORITY_PERIPHERAL],
+    ]);
+    expect(deps.measureSegment).not.toHaveBeenCalled();
+    expect(deps.measure.mock.calls.map(([block]) => block.id)).toEqual(['solo']);
+  });
+
+  it('sem measureSegment, o bloco compartilhado é medido uma vez e dá uma classe só', () => {
+    const deps = fakeDeps({
+      before: rect(-2000),
+      tall: rect(VIEWPORT + 10),
+      after: rect(100),
+    });
+    expect(classify(SHARED_HTML, deps)).toEqual([
+      ['After', PRIORITY_VISIBLE_MAIN],
+      ['Far up', PRIORITY_MAIN],
+      ['Near up', PRIORITY_MAIN],
+      ['Seen part', PRIORITY_MAIN],
+      ['Low one', PRIORITY_MAIN],
+      ['Low two', PRIORITY_MAIN],
+      ['Before', PRIORITY_MAIN],
+    ]);
+    expect(deps.measure.mock.calls.map(([block]) => block.id)).toEqual(['before', 'tall', 'after']);
   });
 });

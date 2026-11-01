@@ -20,7 +20,7 @@ import {
  * Reproduções da pausa de tradução observada ao rolar no Chrome real. Cada
  * teste descreve o comportamento CORRETO; o que ainda falha está marcado com
  * `test.fail()` (o Playwright o reporta como "expected to fail" enquanto o
- * defeito existir). A anotação sai no commit da correção (H1 já corrigido).
+ * defeito existir). A anotação sai no commit da correção (H1 e H2 já corrigidos).
  *
  * Sem esperas fixas: só `expect.poll`, quadros de animação da página e
  * janelas de observação com prazo. Nada de texto da página em log ou
@@ -237,12 +237,12 @@ test.describe('pausa de tradução ao rolar', () => {
     extensionId,
     ollama,
   }) => {
-    // Documenta o defeito H2: os parágrafos separados por <br><br> viram
+    // Reproduz o defeito H2: os parágrafos separados por <br><br> viram
     // segmentos distintos com o MESMO bloco (o <div>). A classificação e o
-    // observador olham o bloco, então todos contam como visíveis enquanto
-    // qualquer parte do div está na tela, e a fila segue a ordem do documento
-    // mesmo depois de rolar até o meio. A anotação sai no commit da correção.
-    test.fail();
+    // observador olhavam o bloco, então todos contavam como visíveis enquanto
+    // qualquer parte do div estava na tela, e a fila seguia a ordem do
+    // documento mesmo depois de rolar até o meio. Corrigido pela zona por
+    // trecho (classificação e rastreador por segmento do bloco compartilhado).
 
     const { driver, fixture } = await setUp(
       context,
@@ -309,12 +309,13 @@ test.describe('pausa de tradução ao rolar', () => {
       .map(({ text }) => markerOf(text))
       .filter((marker) => marker !== null);
     expect(new Set(paragraphs).size).toBe(40);
-    // A espera não entra em `visibleLatency`: nenhum bloco "entrou" na tela.
     recordState('H2 get-state final', state);
     recordState('H2 visibleLatency', { visibleLatency: state.visibleLatency ?? 'ausente' });
 
     expect(visible, 'depois de rolar até R20, o próximo pedido deveria ser visível').toContain(
       next,
     );
+    // Os trechos que entraram na tela pela rolagem são medidos.
+    expect(state.visibleLatency?.count ?? 0).toBeGreaterThanOrEqual(1);
   });
 });

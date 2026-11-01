@@ -954,8 +954,57 @@ visível) e H2 (capítulo separado por `<br>` não prioriza o visível).
 - Com janela 1, a escolha entre várias vítimas (`victimOf`) e a interrupção
   de periféricos não são alcançáveis; o código fica preparado para quando a
   janela crescer, com nova medição.
-- A H2 (`<br>`) é um defeito real em outros sites de novel e fica para
-  `fix/shared-block-priority`; o teste continua marcado como falha esperada.
+- A H2 (`<br>`) foi corrigida em `fix/shared-block-priority` (ADR-018).
 - **Cache de trechos repetidos adiado** para as Fases 6/7, com aprovação do
   responsável: numa página os repetidos são curtos e periféricos; entre
   capítulos exigiria guardar texto de páginas na memória do service worker.
+
+## ADR-018 — Prioridade por trecho em bloco compartilhado
+
+**Status:** Aceita (01/11/2026)
+
+**Contexto.** Muitos sites de novel põem o capítulo inteiro num único
+elemento, com parágrafos separados por `<br><br>`. O segmentador cria um
+segmento por parágrafo (ADR-013), mas todos compartilham o mesmo bloco, e a
+classificação inicial (ADR-015) e o `IntersectionObserver` (ADR-016) só olham
+elementos: o bloco inteiro "estava visível" e a tradução seguia a ordem do
+documento. O E2E H2 (`tests/e2e/scroll-pause.spec.ts`) reproduziu o defeito:
+depois de rolar até R20, o próximo pedido era R02.
+
+**Decisão.**
+
+- **Bloco compartilhado** = dois ou mais segmentos não periféricos com o mesmo
+  bloco. Os demais continuam exatamente como antes (mesmas medições e
+  eventos, com teste dedicado).
+- **Medição por trecho com `Range`** (`setStart` no primeiro nó, `setEnd` no
+  fim do último, `getBoundingClientRect`), um `Range` por medição, sem guardar
+  `Range` vivo e sem tocar o DOM. Regra única de zona em
+  `src/content/zone-rect.ts`.
+- **Rastreador** (`src/content/segment-zone-tracker.ts`): o
+  `IntersectionObserver` do bloco vira só portão (o bloco está perto da
+  tela?); `scroll` e `resize` passivos, no mundo isolado, só agendam uma
+  passada por `requestAnimationFrame`; a passada faz busca binária pela ordem
+  de documento até o primeiro trecho com `bottom > 0`, caminha até `2 ×
+  viewport` e respeita um teto de 64 medidas por quadro, revezando os blocos
+  e continuando no quadro seguinte. Trechos acima do primeiro visível viram
+  `out` sem medir. Só rolagem do documento ou de um contêiner que contém o
+  bloco provoca nova medição.
+- **Executor:** as mudanças por trecho entram no mesmo `applyZoneChanges` das
+  zonas por bloco, então reordenação, interrupção (ADR-017) e
+  `visibleLatency` valem sem código novo. O rastreamento começa no primeiro
+  aviso do observador para o bloco (antes disso a medição inicial vale); o
+  bloco é remedido depois de cada tradução aplicada nele.
+
+**Consequências.**
+
+- O E2E H2 passa (próximo pedido é um parágrafo visível; `visibleLatency`
+  registra a espera).
+- A medição inicial mede todos os trechos de blocos compartilhados de uma vez
+  (num capítulo de 2.000 linhas, 2.000 medições, uma única vez com o layout
+  limpo).
+- Quando a tradução de **outro** bloco desloca o layout, um bloco
+  compartilhado só é remedido na próxima rolagem ou mudança do portão.
+- A busca binária pressupõe trechos em ordem vertical (texto em fluxo
+  normal); `float`/`position` dentro do bloco degradam só a prioridade.
+- Uma sequência de trechos ocultos ou desconectados no fim do bloco é medida
+  a cada passada (limitado pelo teto).
