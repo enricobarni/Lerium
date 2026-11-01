@@ -13,10 +13,11 @@ import {
 } from './page-driver';
 
 /**
- * Reordenação da fila pela rolagem (Fase 5, ADR-015) de ponta a ponta, com a
+ * Reordenação da fila pela rolagem (Fase 5, ADR-016) de ponta a ponta, com a
  * fixture longa: com o primeiro `POST /api/chat` retido no mock (e
- * `MAX_UNITS_IN_FLIGHT` vagas), a rolagem só reordena a fila; o pedido
- * seguinte, depois da liberação, mostra a ordem nova. Sem esperas fixas: só
+ * `MAX_UNITS_IN_FLIGHT` vagas), a rolagem reordena a fila e, se um trecho
+ * fora da tela estiver em voo enquanto um visível espera, ele é interrompido
+ * uma vez (ADR-017); o pedido seguinte mostra a ordem nova. Sem esperas fixas: só
  * `expect.poll`, quadros de animação da página e janelas de observação com
  * prazo.
  */
