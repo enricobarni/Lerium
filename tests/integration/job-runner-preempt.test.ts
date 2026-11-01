@@ -1,0 +1,585 @@
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { createJobRunner, PREEMPT_DEBOUNCE_MS, type JobRunner } from '../../src/content/job-runner';
+import type { BlockRect } from '../../src/content/segment-priority';
+import type { VisibilityChange, VisibilityZone } from '../../src/content/visibility-watcher';
+import { PAGE_JOB_PORT_NAME, type JobUnitMessage } from '../../src/shared/page-messages';
+import type { PortLike } from '../../src/shared/port-like';
+
+/**
+ * Interrupção de unidade fora da tela quando há visível esperando: observador
+ * falso (só emite quando o teste manda), Port falsa e timers falsos.
+ */
+
+const JOB_IDS = ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'];
+
+const VIEWPORT_HEIGHT = 600;
+const VISIBLE_RECT: BlockRect = { top: 0, bottom: 20, width: 100, height: 20 };
+const BELOW_RECT: BlockRect = { top: 1000, bottom: 1020, width: 100, height: 20 };
+
+/** Bloco com `data-pos="below"` fica abaixo da viewport; o resto é visível. */
+const byPosition = (block: Element): BlockRect =>
+  block.getAttribute('data-pos') === 'below' ? BELOW_RECT : VISIBLE_RECT;
+
+const upperCase = (text: string): string =>
+  text.replace(/<\/?g\d+>|\p{L}+/gu, (match) =>
+    match.startsWith('<') ? match : match.toUpperCase(),
+  );
+
+const dropMarkers = (text: string): string => upperCase(text.replace(/<\/?g\d+>/gu, ''));
+
+function parse(body: string): Document {
+  return new DOMParser().parseFromString(
+    `<!doctype html><html><body>${body}</body></html>`,
+    'text/html',
+  );
+}
+
+interface CancelMessage {
+  readonly type: 'job:cancel-unit';
+  readonly jobId: string;
+  readonly unitId: string;
+}
+
+interface FakePort {
+  readonly port: PortLike;
+  readonly sent: JobUnitMessage[];
+  /** `unitId`s dos `job:cancel-unit`, em ordem. */
+  readonly cancels: CancelMessage[];
+  /** Enviadas sem resultado e sem cancelamento, em ordem de envio. */
+  readonly inFlight: JobUnitMessage[];
+  emit(message: unknown): void;
+  /** Responde a mais antiga em voo. */
+  reply(translate: (text: string) => string): void;
+  drop(): void;
+}
+
+function createFakePort(): FakePort {
+  const messageListeners = new Set<(message: unknown) => void>();
+  const disconnectListeners = new Set<() => void>();
+  const sent: JobUnitMessage[] = [];
+  const cancels: CancelMessage[] = [];
+  const inFlight: JobUnitMessage[] = [];
+  let disconnected = false;
+  const emit = (message: unknown): void => {
+    for (const listener of [...messageListeners]) listener(message);
+  };
+  return {
+    port: {
+      name: PAGE_JOB_PORT_NAME,
+      postMessage(message) {
+        if (disconnected) throw new Error('Attempting to use a disconnected port object');
+        const typed = message as JobUnitMessage | CancelMessage | { type: 'job:ping' };
+        if (typed.type === 'job:unit') {
+          sent.push(typed);
+          inFlight.push(typed);
+        } else if (typed.type === 'job:cancel-unit') {
+          cancels.push(typed);
+          const index = inFlight.findIndex((unit) => unit.unitId === typed.unitId);
+          if (index !== -1) inFlight.splice(index, 1);
+        }
+      },
+      disconnect() {
+        disconnected = true;
+      },
+      onMessage: {
+        addListener: (listener) => messageListeners.add(listener),
+        removeListener: (listener) => messageListeners.delete(listener),
+      },
+      onDisconnect: {
+        addListener: (listener) => disconnectListeners.add(listener),
+        removeListener: (listener) => disconnectListeners.delete(listener),
+      },
+    },
+    sent,
+    cancels,
+    inFlight,
+    emit,
+    reply(translate) {
+      const unit = inFlight.shift();
+      if (unit === undefined) throw new Error('nenhuma unidade em voo');
+      emit({
+        type: 'job:result',
+        jobId: unit.jobId,
+        unitId: unit.unitId,
+        ok: true,
+        text: translate(unit.text),
+      });
+    },
+    drop() {
+      disconnected = true;
+      for (const listener of [...disconnectListeners]) listener();
+    },
+  };
+}
+
+interface FakeWatcher {
+  readonly everObserved: Element[];
+  emit(changes: readonly VisibilityChange[]): void;
+}
+
+interface Harness {
+  readonly runner: JobRunner;
+  readonly port: () => FakePort;
+  readonly watcher: () => FakeWatcher;
+  /** Timers de interrupção pendentes (armados, nem disparados nem limpos). */
+  readonly pendingTimeouts: () => number;
+  /** Quantos timers de interrupção foram armados. */
+  readonly armed: () => number;
+}
+
+interface SetupOptions {
+  maxInFlight?: number;
+  withTimeout?: boolean;
+}
+
+function setup(document: Document, options: SetupOptions = {}): Harness {
+  const ports: FakePort[] = [];
+  const watchers: FakeWatcher[] = [];
+  const pending = new Set<unknown>();
+  let armed = 0;
+  let nextId = 0;
+  const runner = createJobRunner({
+    root: document,
+    connect: () => {
+      const fake = createFakePort();
+      ports.push(fake);
+      return fake.port;
+    },
+    randomUUID: () => JOB_IDS[nextId++] as string,
+    setInterval: (fn, ms) => setInterval(fn, ms),
+    clearInterval: (id) => clearInterval(id as Parameters<typeof clearInterval>[0]),
+    ...(options.withTimeout === false
+      ? {}
+      : {
+          setTimeout: (fn: () => void, ms: number) => {
+            armed += 1;
+            const id = setTimeout(() => {
+              pending.delete(id);
+              fn();
+            }, ms);
+            pending.add(id);
+            return id;
+          },
+          clearTimeout: (id: unknown) => {
+            pending.delete(id);
+            clearTimeout(id as Parameters<typeof clearTimeout>[0]);
+          },
+        }),
+    measure: byPosition,
+    viewportHeight: () => VIEWPORT_HEIGHT,
+    clock: () => Number.NaN,
+    maxInFlight: options.maxInFlight ?? 1,
+    createVisibilityWatcher: (onChange) => {
+      const fake: FakeWatcher = { everObserved: [], emit: (changes) => onChange(changes) };
+      watchers.push(fake);
+      return {
+        observe(block: Element) {
+          fake.everObserved.push(block);
+        },
+        unobserve() {},
+        disconnect() {},
+      };
+    },
+  });
+  const last = <T>(items: T[], what: string): T => {
+    const item = items[items.length - 1];
+    if (item === undefined) throw new Error(`nenhum ${what}`);
+    return item;
+  };
+  return {
+    runner,
+    port: () => last(ports, 'porta'),
+    watcher: () => last(watchers, 'observador'),
+    pendingTimeouts: () => pending.size,
+    armed: () => armed,
+  };
+}
+
+/** `seg-0#text@7` → `seg-0#text`. */
+const labelOf = (unitId: string): string => unitId.replace(/@\d+$/u, '');
+const labels = (fake: FakePort): string[] => fake.sent.map((unit) => labelOf(unit.unitId));
+const segmentsSent = (fake: FakePort): string[] =>
+  labels(fake).map((label) => label.replace(/#.*$/u, ''));
+const cancelled = (fake: FakePort): string[] =>
+  fake.cancels.map((cancel) => labelOf(cancel.unitId));
+
+const blocks = (document: Document): Element[] => [...document.querySelectorAll('p')];
+
+/** Lote com o bloco `index` (entre os `<p>`) na zona dada. */
+function changes(document: Document, ...pairs: [number, VisibilityZone][]): VisibilityChange[] {
+  const all = blocks(document);
+  return pairs.map(([index, zone]) => {
+    const block = all[index];
+    if (block === undefined) throw new Error(`bloco ${String(index)} não existe`);
+    return { block, zone };
+  });
+}
+
+function runToEnd(fake: FakePort, translate = upperCase): void {
+  while (fake.inFlight.length > 0) fake.reply(translate);
+}
+
+/** Um visível no topo e `count` parágrafos abaixo da viewport. */
+const page = (count: number): string =>
+  '<p>Top line.</p>' +
+  Array.from(
+    { length: count },
+    (_, index) => `<p data-pos="below">Line ${String(index + 1)}.</p>`,
+  ).join('');
+
+/**
+ * Cenário base: seg-0 (visível) respondido, seg-1 (classe 2) em voo, e seg-3
+ * entra na tela e espera na classe 0.
+ */
+function visibleWaitingBehindMain(options: SetupOptions = {}) {
+  const document = parse(page(3));
+  const harness = setup(document, options);
+  harness.runner.start();
+  const fake = harness.port();
+  fake.reply(upperCase);
+  expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1']);
+  harness.watcher().emit(changes(document, [3, 'visible']));
+  return { document, ...harness, fake };
+}
+
+const consoleMethods = ['log', 'info', 'warn', 'error', 'debug'] as const;
+let consoleSpies: MockInstance[] = [];
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  consoleSpies = consoleMethods.map((method) =>
+    vi.spyOn(console, method).mockImplementation(() => undefined),
+  );
+});
+
+afterEach(() => {
+  for (const spy of consoleSpies) {
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  }
+  expect(vi.getTimerCount()).toBe(0);
+  vi.useRealTimers();
+});
+
+describe('createJobRunner — interrupção de unidade fora da tela', () => {
+  it('PREEMPT_DEBOUNCE_MS é 500', () => {
+    expect(PREEMPT_DEBOUNCE_MS).toBe(500);
+  });
+
+  it('interrompe a unidade da classe 2 em voo quando um visível espera 500 ms', () => {
+    const { runner, fake, pendingTimeouts } = visibleWaitingBehindMain();
+    expect(pendingTimeouts()).toBe(1);
+
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
+    expect(fake.cancels).toEqual([
+      { type: 'job:cancel-unit', jobId: JOB_IDS[0], unitId: fake.sent[1]?.unitId },
+    ]);
+    // A vaga liberada vai para o visível.
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-3']);
+    expect(fake.inFlight.map((unit) => labelOf(unit.unitId))).toEqual(['seg-3#text']);
+    expect(pendingTimeouts()).toBe(0);
+    expect(runner.getState()).toMatchObject({ status: 'translating', done: 1, failed: 0 });
+
+    runToEnd(fake);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4, failed: 0 });
+  });
+
+  it('não interrompe antes de 500 ms', () => {
+    const { runner, fake } = visibleWaitingBehindMain();
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS - 1);
+    expect(fake.cancels).toEqual([]);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1']);
+    vi.advanceTimersByTime(1);
+    expect(cancelled(fake)).toEqual(['seg-1#text']);
+    runToEnd(fake);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4 });
+  });
+
+  it('não interrompe se o visível saiu da classe 0 antes do timer; o timer é limpo', () => {
+    const { runner, document, fake, watcher, pendingTimeouts } = visibleWaitingBehindMain();
+    vi.advanceTimersByTime(300);
+    watcher().emit(changes(document, [3, 'out']));
+    expect(pendingTimeouts()).toBe(0);
+    vi.advanceTimersByTime(10 * PREEMPT_DEBOUNCE_MS);
+    expect(fake.cancels).toEqual([]);
+    runToEnd(fake);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-2', 'seg-3']);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4 });
+  });
+
+  it('visível enviado antes do timer (a vaga abriu): o timer é limpo e nada é interrompido', () => {
+    const { runner, fake, pendingTimeouts } = visibleWaitingBehindMain();
+    vi.advanceTimersByTime(200);
+    fake.reply(upperCase); // seg-1 termina; seg-3 sai
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-3']);
+    expect(pendingTimeouts()).toBe(0);
+    vi.advanceTimersByTime(10 * PREEMPT_DEBOUNCE_MS);
+    expect(fake.cancels).toEqual([]);
+    runToEnd(fake);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4 });
+  });
+
+  it('a espera recomeça quando o visível armado sai: o próximo espera 500 ms inteiros', () => {
+    const { runner, document, fake, watcher } = visibleWaitingBehindMain();
+    vi.advanceTimersByTime(300);
+    watcher().emit(changes(document, [2, 'visible']));
+    watcher().emit(changes(document, [3, 'out']));
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS - 1);
+    expect(fake.cancels).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(cancelled(fake)).toEqual(['seg-1#text']);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-2']);
+    runToEnd(fake);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4 });
+  });
+
+  it('nunca interrompe unidade enviada na classe 1', () => {
+    const document = parse(page(4));
+    const { runner, port, watcher, armed } = setup(document);
+    runner.start();
+    const fake = port();
+    watcher().emit(changes(document, [1, 'near']));
+    fake.reply(upperCase); // seg-0; seg-1 sai na classe 1
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1']);
+    watcher().emit(changes(document, [4, 'visible']));
+    vi.advanceTimersByTime(10 * PREEMPT_DEBOUNCE_MS);
+    expect(fake.cancels).toEqual([]);
+    expect(armed()).toBe(0);
+    runToEnd(fake);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-4', 'seg-2', 'seg-3']);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 5 });
+  });
+
+  it('nunca interrompe unidade enviada na classe 0', () => {
+    const document = parse('<p>One.</p><p>Two.</p><p>Three.</p>');
+    const { runner, port, armed } = setup(document);
+    runner.start();
+    const fake = port();
+    expect(segmentsSent(fake)).toEqual(['seg-0']);
+    vi.advanceTimersByTime(10 * PREEMPT_DEBOUNCE_MS);
+    expect(fake.cancels).toEqual([]);
+    expect(armed()).toBe(0);
+    runToEnd(fake);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 3 });
+  });
+
+  it('não interrompe unidade cujo segmento subiu para a classe 0 depois do envio', () => {
+    // seg-1 (nó a nó, classe 2) tem uma unidade em voo e a outra na fila; o
+    // segmento entra na tela: interromper a unidade dele seria perder leitura.
+    const document = parse(
+      '<p>Top.</p><p data-pos="below">Far<!-- c --> away.</p><p data-pos="below">Two.</p>',
+    );
+    const { runner, port, watcher, armed } = setup(document);
+    runner.start();
+    const fake = port();
+    fake.reply(upperCase);
+    expect(labels(fake)).toEqual(['seg-0#text', 'seg-1#node-0']);
+    watcher().emit(changes(document, [1, 'visible']));
+    vi.advanceTimersByTime(10 * PREEMPT_DEBOUNCE_MS);
+    expect(fake.cancels).toEqual([]);
+    expect(armed()).toBe(0);
+    runToEnd(fake);
+    expect(labels(fake)).toEqual(['seg-0#text', 'seg-1#node-0', 'seg-1#node-1', 'seg-2#text']);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 3, failed: 0 });
+  });
+
+  it('interrompe periférico em voo (classe 3) e o reenvia no fim', () => {
+    // Fallback na classe 0 com o periférico em voo: as unidades dele esperam.
+    const document = parse('<nav><p>Menu.</p></nav><p>Far <i>away</i> text.</p>');
+    const { runner, port } = setup(document, { maxInFlight: 2 });
+    runner.start();
+    const fake = port();
+    expect(labels(fake)).toEqual(['seg-1#markers', 'seg-0#text']);
+    fake.reply(dropMarkers); // seg-1 → fallback na frente da classe 0; node-0 sai
+    expect(labels(fake)).toEqual(['seg-1#markers', 'seg-0#text', 'seg-1#node-0']);
+
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
+    expect(cancelled(fake)).toEqual(['seg-0#text']);
+    expect(labels(fake).slice(3)).toEqual(['seg-1#node-1']);
+    runToEnd(fake);
+    expect(labels(fake).slice(3)).toEqual(['seg-1#node-1', 'seg-1#node-2', 'seg-0#text']);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 2, failed: 0 });
+    expect(document.body.textContent).toBe('MENU.FAR AWAY TEXT.');
+  });
+
+  it('no máximo uma interrupção por unidade: o reenvio termina normalmente', () => {
+    const { runner, document, fake, watcher, armed } = visibleWaitingBehindMain();
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
+    expect(cancelled(fake)).toEqual(['seg-1#text']);
+    fake.reply(upperCase); // seg-3; seg-1 é reenviada
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-3', 'seg-1']);
+    const armedBefore = armed();
+
+    watcher().emit(changes(document, [2, 'visible']));
+    vi.advanceTimersByTime(10 * PREEMPT_DEBOUNCE_MS);
+    expect(cancelled(fake)).toEqual(['seg-1#text']);
+    expect(armed()).toBe(armedBefore);
+    runToEnd(fake);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-3', 'seg-1', 'seg-2']);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4, failed: 0 });
+  });
+
+  it('a interrompida volta à frente da classe e é reenviada depois do visível', () => {
+    const document = parse(page(4));
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    fake.reply(upperCase);
+    watcher().emit(changes(document, [4, 'visible']));
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
+    runToEnd(fake);
+    // seg-1 reenviada à frente de seg-2 e seg-3 (classe 2), depois de seg-4.
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-4', 'seg-1', 'seg-2', 'seg-3']);
+    expect(fake.sent[1]?.unitId).toBe(fake.sent[3]?.unitId);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 5, failed: 0 });
+    expect(document.body.textContent).toBe('TOP LINE.LINE 1.LINE 2.LINE 3.LINE 4.');
+  });
+
+  it('com o grupo ainda na fila, a interrompida entra à frente das irmãs, em ordem', () => {
+    const document = parse(
+      '<p>Top.</p><p data-pos="below">Far <i>away</i> text.</p>' +
+        '<p data-pos="below">Two.</p><p data-pos="below">Three.</p>',
+    );
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    fake.reply(upperCase);
+    fake.reply(dropMarkers); // fallback de seg-1 na frente da classe 2; node-0 sai
+    expect(labels(fake)).toEqual(['seg-0#text', 'seg-1#markers', 'seg-1#node-0']);
+    watcher().emit(changes(document, [3, 'visible']));
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
+    expect(cancelled(fake)).toEqual(['seg-1#node-0']);
+    runToEnd(fake);
+    expect(labels(fake)).toEqual([
+      'seg-0#text',
+      'seg-1#markers',
+      'seg-1#node-0',
+      'seg-3#text',
+      'seg-1#node-0',
+      'seg-1#node-1',
+      'seg-1#node-2',
+      'seg-2#text',
+    ]);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4, failed: 0 });
+    expect(document.body.textContent).toBe('TOP.FAR AWAY TEXT.TWO.THREE.');
+    expect(document.querySelector('i')?.textContent).toBe('AWAY');
+  });
+
+  it('janela 2: interrompe a mais recente e a recoloca à frente da irmã restante', () => {
+    const document = parse(
+      '<p>Top.</p><p data-pos="below">Far <i>away</i> text.</p>' +
+        '<p data-pos="below">Two.</p><p data-pos="below">Three.</p>',
+    );
+    const { runner, port, watcher } = setup(document, { maxInFlight: 2 });
+    runner.start();
+    const fake = port();
+    expect(labels(fake)).toEqual(['seg-0#text', 'seg-1#markers']);
+    fake.reply(upperCase); // seg-0; seg-2 sai
+    fake.reply(dropMarkers); // seg-1 → fallback; node-0 sai
+    fake.reply(upperCase); // seg-2; node-1 sai
+    expect(fake.inFlight.map((unit) => labelOf(unit.unitId))).toEqual([
+      'seg-1#node-0',
+      'seg-1#node-1',
+    ]);
+    watcher().emit(changes(document, [3, 'visible']));
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
+    expect(cancelled(fake)).toEqual(['seg-1#node-1']);
+    runToEnd(fake);
+    expect(labels(fake).slice(5)).toEqual(['seg-3#text', 'seg-1#node-1', 'seg-1#node-2']);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4, failed: 0 });
+    expect(document.body.textContent).toBe('TOP.FAR AWAY TEXT.TWO.THREE.');
+  });
+
+  it('resultado atrasado da interrompida é ignorado até o reenvio', () => {
+    const { runner, document, fake } = visibleWaitingBehindMain();
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
+    const cancelledId = fake.cancels[0]?.unitId;
+    expect(labelOf(cancelledId ?? '')).toBe('seg-1#text');
+    const before = runner.getState();
+
+    fake.emit({
+      type: 'job:result',
+      jobId: JOB_IDS[0],
+      unitId: cancelledId,
+      ok: true,
+      text: 'LATE',
+    });
+    fake.emit({
+      type: 'job:result',
+      jobId: JOB_IDS[0],
+      unitId: cancelledId,
+      ok: false,
+      error: 'cancelled',
+      retryable: false,
+    });
+    expect(runner.getState()).toEqual(before);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-3']);
+    expect(blocks(document)[1]?.textContent).toBe('Line 1.');
+
+    runToEnd(fake);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4, failed: 0 });
+    expect(document.body.textContent).toBe('TOP LINE.LINE 1.LINE 2.LINE 3.');
+  });
+
+  it('a interrompida volta a ser observada: entrando na tela, sobe para a classe 0', () => {
+    const { runner, document, fake, watcher } = visibleWaitingBehindMain({ maxInFlight: 1 });
+    const seg1Block = blocks(document)[1];
+    const observedBefore = watcher().everObserved.filter((block) => block === seg1Block).length;
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
+    expect(watcher().everObserved.filter((block) => block === seg1Block).length).toBe(
+      observedBefore + 1,
+    );
+    // seg-2 vai para a classe 1; seg-1 entra na tela e passa à frente dele.
+    // Sem observar de novo, seg-1 ficaria na classe 2, atrás de seg-2.
+    watcher().emit(changes(document, [2, 'near']));
+    watcher().emit(changes(document, [1, 'visible']));
+    runToEnd(fake);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-3', 'seg-1', 'seg-2']);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4 });
+  });
+
+  it('sem setTimeout nas dependências, nada é interrompido', () => {
+    const { runner, fake } = visibleWaitingBehindMain({ withTimeout: false });
+    vi.advanceTimersByTime(10 * PREEMPT_DEBOUNCE_MS);
+    expect(fake.cancels).toEqual([]);
+    runToEnd(fake);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-3', 'seg-2']);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4 });
+  });
+
+  const terminations: [string, (harness: ReturnType<typeof visibleWaitingBehindMain>) => void][] = [
+    ['cancel', ({ runner }) => runner.cancel()],
+    ['showOriginal', ({ runner }) => runner.showOriginal()],
+    ['dispose', ({ runner }) => runner.dispose()],
+    [
+      'job:fatal',
+      ({ fake }) => fake.emit({ type: 'job:fatal', jobId: JOB_IDS[0], error: 'network' }),
+    ],
+    ['desconexão', ({ fake }) => fake.drop()],
+    [
+      'novo start',
+      ({ runner, port }) => {
+        runner.start();
+        runner.cancel();
+        expect(port().cancels).toEqual([]);
+      },
+    ],
+  ];
+
+  it.each(terminations)('timer limpo no término por %s', (_name, terminate) => {
+    const harness = visibleWaitingBehindMain();
+    expect(harness.pendingTimeouts()).toBe(1);
+    terminate(harness);
+    expect(harness.pendingTimeouts()).toBe(0);
+    vi.advanceTimersByTime(10 * PREEMPT_DEBOUNCE_MS);
+    expect(harness.fake.cancels).toEqual([]);
+  });
+
+  it('timer limpo no fim normal (translated)', () => {
+    const { runner, fake, pendingTimeouts } = visibleWaitingBehindMain();
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
+    runToEnd(fake);
+    expect(runner.getState()).toMatchObject({ status: 'translated' });
+    expect(pendingTimeouts()).toBe(0);
+  });
+});

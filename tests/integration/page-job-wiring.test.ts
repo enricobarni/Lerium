@@ -5,9 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPageJobHandler } from '../../src/background/page-job';
 import { createTranslationGate, type TranslationGate } from '../../src/background/translation-gate';
 import { collectTextNodes } from '../../src/content/dom-collector';
-import { createJobRunner, type JobRunner, type JobState } from '../../src/content/job-runner';
+import {
+  createJobRunner,
+  PREEMPT_DEBOUNCE_MS,
+  type JobRunner,
+  type JobRunnerDeps,
+  type JobState,
+} from '../../src/content/job-runner';
 import { createPageApplier } from '../../src/content/page-applier';
 import { segmentTextNodes } from '../../src/content/segmenter';
+import type { VisibilityChange } from '../../src/content/visibility-watcher';
 import type {
   TranslationInput,
   TranslationProvider,
@@ -190,6 +197,29 @@ function createFakeProvider() {
 
 type FakeProvider = ReturnType<typeof createFakeProvider>;
 
+/**
+ * Como `createFakeProvider`, mas o aborto do sinal encerra a chamada já com
+ * `cancelled`, como o provedor real (o `fetch` abortado retorna).
+ */
+function createAbortableProvider(): FakeProvider & {
+  readonly aborted: () => readonly string[];
+} {
+  const base = createFakeProvider();
+  const aborted: string[] = [];
+  const provider: TranslationProvider = {
+    translate: (input, options) => {
+      const promise = base.provider.translate(input, options);
+      const call = base.calls[base.calls.length - 1] as PendingCall;
+      options?.signal?.addEventListener('abort', () => {
+        aborted.push(input.text);
+        call.resolve({ ok: false, error: 'cancelled', retryable: false });
+      });
+      return promise;
+    },
+  };
+  return { ...base, provider, aborted: () => aborted };
+}
+
 const ok = (text: string): TranslationResult => ({ ok: true, text, durationMs: 1 });
 const identity = (text: string): string => text;
 
@@ -207,8 +237,21 @@ const JOB_IDS = [
 ];
 let nextJobId = 0;
 
+/** Dependências do runner que um teste troca (janela, geometria, observador, timers). */
+type WireOptions = Partial<
+  Pick<
+    JobRunnerDeps,
+    'maxInFlight' | 'measure' | 'createVisibilityWatcher' | 'setTimeout' | 'clearTimeout'
+  >
+>;
+
 /** Um runner real, numa "aba", cujas Ports chegam ao `onConnect` do worker real. */
-function wireTab(tab: Tab, document: Document, onConnect: (port: PortLike) => void): Wired {
+function wireTab(
+  tab: Tab,
+  document: Document,
+  onConnect: (port: PortLike) => void,
+  options: WireOptions = {},
+): Wired {
   const pairs: PortPair[] = [];
   const states: JobState[] = [];
   const runner = createJobRunner({
@@ -226,12 +269,18 @@ function wireTab(tab: Tab, document: Document, onConnect: (port: PortLike) => vo
     viewportHeight: () => 600,
     clock: () => Number.NaN,
     maxInFlight: WINDOW,
+    ...options,
     onState: (state) => states.push(state),
   });
   return { runner, document, states, pairs };
 }
 
-function createWorker(gate: TranslationGate, provider: FakeProvider, tabs: readonly Tab[]) {
+function createWorker(
+  gate: TranslationGate,
+  provider: FakeProvider,
+  tabs: readonly Tab[],
+  maxUnitsPerPort = WINDOW,
+) {
   return createPageJobHandler({
     runtimeId: RUNTIME_ID,
     isInjectedDocument: (tabId, documentId) =>
@@ -239,7 +288,7 @@ function createWorker(gate: TranslationGate, provider: FakeProvider, tabs: reado
     loadSettings: () => Promise.resolve(SETTINGS),
     createProvider: () => provider.provider,
     gate,
-    maxUnitsPerPort: WINDOW,
+    maxUnitsPerPort,
     now: () => 0,
   });
 }
@@ -429,5 +478,94 @@ describe('job-runner ↔ page-job, janela 2 nos dois lados', () => {
     expect(tabB.document.body.textContent).toBe('BRAVO ONE.BRAVO TWO.BRAVO THREE.BRAVO FOUR.');
     expect(gate.inUse).toBe(0);
     expect(gate.waiting).toBe(0);
+  });
+});
+
+describe('job-runner ↔ page-job, interrupção de unidade fora da tela', () => {
+  it('cancel libera a vaga da port: nenhum busy, o visível é enviado e a interrompida volta', async () => {
+    const provider = createAbortableProvider();
+    const gate = createTranslationGate(1);
+    const worker = createWorker(gate, provider, [TAB_A], 1);
+    let onChange: ((changes: readonly VisibilityChange[]) => void) | undefined;
+    const document = parse(
+      '<body><p>Top line.</p><p data-pos="below">Below one.</p>' +
+        '<p data-pos="below">Below two.</p><p data-pos="below">Below three.</p></body>',
+    );
+    const tab = wireTab(TAB_A, document, worker, {
+      maxInFlight: 1,
+      measure: (block) =>
+        block.getAttribute('data-pos') === 'below'
+          ? { top: 1000, bottom: 1020, width: 100, height: 20 }
+          : { top: 0, bottom: 20, width: 100, height: 20 },
+      createVisibilityWatcher: (callback) => {
+        onChange = callback;
+        return { observe() {}, unobserve() {}, disconnect() {} };
+      },
+      setTimeout: (fn, ms) => setTimeout(fn, ms),
+      clearTimeout: (id) => clearTimeout(id as Parameters<typeof clearTimeout>[0]),
+    });
+    const all = (): readonly PortPair[] => tab.pairs;
+    const resolveActive = async (): Promise<void> => {
+      const call = provider.calls[provider.calls.length - 1] as PendingCall;
+      call.resolve(ok(call.input.text.toUpperCase()));
+      await flush(all);
+    };
+
+    tab.runner.start();
+    await flush(all);
+    await resolveActive(); // Top line.; Below one. sai (classe 2)
+    expect(provider.calls.map((call) => call.input.text)).toEqual(['Top line.', 'Below one.']);
+
+    // Below three. entra na tela e espera atrás de Below one.
+    const last = document.querySelectorAll('p')[3];
+    if (last === undefined || onChange === undefined) throw new Error('sem bloco ou observador');
+    onChange([{ block: last, zone: 'visible' }]);
+    await vi.advanceTimersByTimeAsync(PREEMPT_DEBOUNCE_MS);
+    await flush(all);
+
+    const [pair] = tab.pairs;
+    if (pair === undefined) throw new Error('sem port');
+    expect(pair.toWorker.map((message) => message.type)).toEqual([
+      'job:unit',
+      'job:unit',
+      'job:cancel-unit',
+      'job:unit',
+    ]);
+    expect(provider.aborted()).toEqual(['Below one.']);
+    // O visível chegou ao provedor: a vaga da port e a do semáforo voltaram.
+    expect(provider.calls.map((call) => call.input.text)).toEqual([
+      'Top line.',
+      'Below one.',
+      'Below three.',
+    ]);
+    expect(provider.active()).toBe(1);
+
+    while (provider.active() > 0) await resolveActive();
+
+    expect(provider.calls.map((call) => call.input.text)).toEqual([
+      'Top line.',
+      'Below one.',
+      'Below three.',
+      'Below one.',
+      'Below two.',
+    ]);
+    expect(pair.toContent.filter((message) => message.error === 'busy')).toEqual([]);
+    // A interrompida não teve resposta própria; só o reenvio respondeu.
+    expect(pair.toContent.filter((message) => message.type === 'job:result')).toHaveLength(4);
+    expect(pair.toContent.every((message) => message.ok !== false)).toBe(true);
+    // O par conta a interrompida como pendente para sempre (nunca tem
+    // resultado); o worker, que é quem recusaria, não mandou nenhum busy.
+    expect(pair.maxOutstanding()).toBe(2);
+    expect(gate.inUse).toBe(0);
+    expect(gate.waiting).toBe(0);
+    expect(tab.runner.getState()).toEqual({
+      status: 'translated',
+      view: 'translation',
+      total: 4,
+      done: 4,
+      failed: 0,
+      skipped: 0,
+    });
+    expect(document.body.textContent).toBe('TOP LINE.BELOW ONE.BELOW TWO.BELOW THREE.');
   });
 });
