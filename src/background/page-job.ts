@@ -298,10 +298,30 @@ export function createPageJobHandler(deps: PageJobDeps): (port: PortLike) => voi
       }
     };
 
+    /**
+     * O content desistiu da unidade: aborta o controller (corta a geração ou
+     * tira da fila do semáforo) e libera a vaga da port já, para a próxima
+     * `job:unit` não receber `busy`. Nada mais é postado sobre ela: o
+     * `onToken` e o fim de `translateUnit` checam `signal.aborted`. A vaga do
+     * semáforo global só volta no `finally` de `runUnit`, quando o provedor
+     * retornar, então o limite no Ollama se mantém.
+     */
+    const cancelUnit = (unitId: string): void => {
+      const entry = units.get(unitId);
+      if (entry === undefined) return;
+      units.delete(unitId);
+      entry.controller.abort();
+    };
+
     function onMessage(raw: unknown): void {
       if (disconnected) return;
       const message = parseContentToWorker(raw);
       if (message === null) return;
+      if (message.type === 'job:cancel-unit') {
+        // Cancelamento não fixa o jobId: sem job fixado, não há unidade.
+        if (message.jobId === jobId) cancelUnit(message.unitId);
+        return;
+      }
       if (jobId === null) jobId = message.jobId;
       else if (message.jobId !== jobId) return;
       const id = jobId;

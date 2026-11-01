@@ -43,7 +43,18 @@ export interface JobPingMessage {
   jobId: string;
 }
 
-export type ContentToWorkerMessage = JobUnitMessage | JobPingMessage;
+/**
+ * Desiste de uma unidade aceita (em voo ou na fila do semáforo): o worker
+ * aborta a geração, libera a vaga da port na hora e não responde mais nada
+ * sobre ela. Sem texto.
+ */
+export interface JobCancelUnitMessage {
+  type: 'job:cancel-unit';
+  jobId: string;
+  unitId: string;
+}
+
+export type ContentToWorkerMessage = JobUnitMessage | JobPingMessage | JobCancelUnitMessage;
 
 // ---------------------------------------------------------------------------
 // service worker → content
@@ -148,6 +159,11 @@ export function parseContentToWorker(input: unknown): ContentToWorkerMessage | n
     const { unitId, text } = input;
     if (!isUnitId(unitId) || !isTextWithin(text, MAX_UNIT_CHARS)) return null;
     return { type: 'job:unit', jobId, unitId, text };
+  }
+  if (type === 'job:cancel-unit') {
+    const { unitId } = input;
+    if (!isUnitId(unitId)) return null;
+    return { type: 'job:cancel-unit', jobId, unitId };
   }
   return null;
 }
