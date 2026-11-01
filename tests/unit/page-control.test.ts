@@ -8,6 +8,7 @@ import {
   parsePageCommandResponse,
   parsePageInjectRequest,
   parsePageInjectResponse,
+  parseVisibleLatency,
 } from '../../src/shared/page-control';
 
 const DOC_ID = '8F3C2B1A9E7D6C5B4A3F2E1D0C9B8A7F';
@@ -322,6 +323,61 @@ describe('parsePageCommandResponse', () => {
     if (parsed?.ok !== true) throw new Error('esperava sucesso');
     expect(Object.hasOwn(parsed.state, 'firstVisibleMs')).toBe(false);
     expect(Object.hasOwn(parsed.state, 'durationMs')).toBe(false);
+  });
+
+  it('aceita visibleLatency válido e copia só os três números', () => {
+    for (const visibleLatency of [
+      { count: 1, medianMs: 0, maxMs: 0 },
+      { count: 3, medianMs: 12.5, maxMs: 900 },
+    ]) {
+      const state = { ...STATE, visibleLatency };
+      expect(parsePageCommandResponse({ ok: true, state })).toEqual({ ok: true, state });
+    }
+    const parsed = parsePageCommandResponse({
+      ok: true,
+      state: { ...STATE, visibleLatency: { count: 2, medianMs: 5, maxMs: 9, extra: 'texto' } },
+    });
+    if (parsed?.ok !== true) throw new Error('esperava sucesso');
+    expect(parsed.state.visibleLatency).toEqual({ count: 2, medianMs: 5, maxMs: 9 });
+    expect(Object.hasOwn(parsed.state.visibleLatency ?? {}, 'extra')).toBe(false);
+    expect(parseVisibleLatency({ count: 1, medianMs: 1, maxMs: 1 })).toEqual({
+      count: 1,
+      medianMs: 1,
+      maxMs: 1,
+    });
+  });
+
+  it('omite visibleLatency quando ausente', () => {
+    const parsed = parsePageCommandResponse({ ok: true, state: STATE });
+    if (parsed?.ok !== true) throw new Error('esperava sucesso');
+    expect(Object.hasOwn(parsed.state, 'visibleLatency')).toBe(false);
+  });
+
+  it('recusa visibleLatency malformado', () => {
+    const valid = { count: 2, medianMs: 5, maxMs: 9 };
+    const invalid: unknown[] = [
+      null,
+      [],
+      'x',
+      7,
+      {},
+      { ...valid, count: 0 },
+      { ...valid, count: 1.5 },
+      { ...valid, count: -1 },
+      { ...valid, count: Number.MAX_SAFE_INTEGER + 1 },
+      { ...valid, count: '2' },
+    ];
+    for (const key of ['medianMs', 'maxMs']) {
+      for (const value of [Number.NaN, Infinity, -Infinity, -1, '1', null, undefined]) {
+        invalid.push({ ...valid, [key]: value });
+      }
+    }
+    for (const visibleLatency of invalid) {
+      expect(parseVisibleLatency(visibleLatency)).toBeNull();
+      expect(
+        parsePageCommandResponse({ ok: true, state: { ...STATE, visibleLatency } }),
+      ).toBeNull();
+    }
   });
 
   it('recusa tempos NaN, infinitos, negativos ou não numéricos', () => {

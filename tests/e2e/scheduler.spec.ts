@@ -125,6 +125,8 @@ test.describe('fila de prioridades', () => {
     const article = expectArticleBeforePeripheral(texts);
     // Nada acima da viewport: visível e abaixo dela, ambos em ordem de documento.
     expect(article.slice(1).map(markerOf)).toEqual(ALL_MARKERS);
+    // Sem rolagem, nada foi promovido: os visíveis desde o start não entram na medida.
+    expect((await driver.state(tabId)).visibleLatency).toBeUndefined();
   });
 
   test('depois de rolar: o meio visível sai primeiro, depois abaixo, depois acima', async ({

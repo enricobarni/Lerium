@@ -3,10 +3,13 @@
  * tradução (Fase 5).
  *
  * Classes (menor sai primeiro):
- * - `PRIORITY_VISIBLE_MAIN`: conteúdo principal visível na viewport.
- * - `PRIORITY_MAIN`: conteúdo principal fora da viewport.
- * - `PRIORITY_PERIPHERAL`: navegação, barras laterais, cabeçalho e rodapé da
- *   página.
+ * - `PRIORITY_VISIBLE_MAIN` (0): conteúdo principal visível na viewport.
+ * - `PRIORITY_NEAR` (1): conteúdo principal logo abaixo da viewport. Nunca
+ *   sai de `classifySegments`; só o executor usa, quando a rolagem aproxima
+ *   (ou afasta) um bloco da tela.
+ * - `PRIORITY_MAIN` (2): conteúdo principal fora da viewport.
+ * - `PRIORITY_PERIPHERAL` (3): navegação, barras laterais, cabeçalho e rodapé
+ *   da página.
  *
  * Só lê o DOM por `localName`/`getAttribute`, sem estilo computado (ADR-012).
  * A geometria vem de `deps.measure`, injetada (no content real, a partir de
@@ -18,13 +21,20 @@
 import type { TranslationSegment } from './segmenter';
 
 export const PRIORITY_VISIBLE_MAIN = 0;
-export const PRIORITY_MAIN = 1;
-export const PRIORITY_PERIPHERAL = 2;
-/** Número de classes, para `createPriorityQueue(PRIORITY_CLASSES)`. */
-export const PRIORITY_CLASSES = 3;
+export const PRIORITY_NEAR = 1;
+export const PRIORITY_MAIN = 2;
+export const PRIORITY_PERIPHERAL = 3;
+/** Número de classes, para `createGroupedPriorityQueue(PRIORITY_CLASSES)`. */
+export const PRIORITY_CLASSES = 4;
 
 export type SegmentPriority =
-  typeof PRIORITY_VISIBLE_MAIN | typeof PRIORITY_MAIN | typeof PRIORITY_PERIPHERAL;
+  | typeof PRIORITY_VISIBLE_MAIN
+  | typeof PRIORITY_NEAR
+  | typeof PRIORITY_MAIN
+  | typeof PRIORITY_PERIPHERAL;
+
+/** O que `classifySegments` produz: a classe `PRIORITY_NEAR` fica de fora. */
+export type InitialPriority = Exclude<SegmentPriority, typeof PRIORITY_NEAR>;
 
 /** Retângulo em coordenadas da viewport (como `DOMRect`). */
 export interface BlockRect {
@@ -41,7 +51,7 @@ export interface SegmentPriorityDeps {
 
 export interface ClassifiedSegment {
   readonly segment: TranslationSegment;
-  readonly priority: SegmentPriority;
+  readonly priority: InitialPriority;
   /** Índice do segmento na entrada (ordem de documento). */
   readonly order: number;
 }
@@ -137,13 +147,15 @@ interface AboveViewport {
  * Pré-condição: `segments` em ordem de documento, como devolve
  * `segmentTextNodes`. A saída tem os mesmos segmentos, ordenados assim:
  * 1. Classe 0 (visível), em ordem de documento.
- * 2. Classe 1 (principal fora da viewport): primeiro o grupo "abaixo", em
+ * 2. Classe 2 (principal fora da viewport): primeiro o grupo "abaixo", em
  *    ordem de documento: blocos sem área (largura ou altura 0, onde quer que
  *    estejam) e blocos que não estão acima da viewport (`bottom > 0`);
  *    depois o que está acima (`bottom <= 0`, com área), do mais próximo da
  *    viewport para o mais distante (`bottom` decrescente; empate pela ordem
  *    de documento).
- * 3. Classe 2 (periférico), em ordem de documento.
+ * 3. Classe 3 (periférico), em ordem de documento.
+ *
+ * A classe 1 (`PRIORITY_NEAR`) não é produzida aqui.
  *
  * Medida com valor não finito (`NaN`) não é visível e conta como "não acima".
  */

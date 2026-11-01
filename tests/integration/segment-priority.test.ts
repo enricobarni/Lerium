@@ -4,6 +4,7 @@ import {
   classifySegments,
   PRIORITY_CLASSES,
   PRIORITY_MAIN,
+  PRIORITY_NEAR,
   PRIORITY_PERIPHERAL,
   PRIORITY_VISIBLE_MAIN,
   type BlockRect,
@@ -58,9 +59,21 @@ function priorityOf(html: string, text: string): number {
 }
 
 describe('constantes de prioridade', () => {
-  it('são 0, 1, 2 e três classes', () => {
-    expect([PRIORITY_VISIBLE_MAIN, PRIORITY_MAIN, PRIORITY_PERIPHERAL]).toEqual([0, 1, 2]);
-    expect(PRIORITY_CLASSES).toBe(3);
+  it('são 0, 1, 2, 3 e quatro classes', () => {
+    expect([PRIORITY_VISIBLE_MAIN, PRIORITY_NEAR, PRIORITY_MAIN, PRIORITY_PERIPHERAL]).toEqual([
+      0, 1, 2, 3,
+    ]);
+    expect(PRIORITY_CLASSES).toBe(4);
+  });
+
+  it('classifySegments nunca produz a classe perto (só a rolagem a usa)', () => {
+    const html = '<body><p>Seen</p><p id="below">Below</p><nav><p>Menu</p></nav></body>';
+    const deps = fakeDeps({ below: rect(VIEWPORT + 10) });
+    expect(classify(html, deps).map(([, priority]) => priority)).toEqual([
+      PRIORITY_VISIBLE_MAIN,
+      PRIORITY_MAIN,
+      PRIORITY_PERIPHERAL,
+    ]);
   });
 });
 
