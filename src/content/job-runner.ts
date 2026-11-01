@@ -56,16 +56,20 @@
  * enviada por último. Qualquer tamanho de texto. O timer é limpo quando o
  * segmento sai da classe 0 ou da fila, quando não resta interrompível, e em
  * todo término. Sem a dependência, nada é interrompido.
- * Recolocação: se o grupo do segmento ainda está na fila, a interrompida
- * entra à frente das irmãs não enviadas (`prependToGroup`), sem mudar a
- * classe nem a posição do grupo; senão, volta como grupo novo (mesma chave)
- * na frente da classe atual do segmento.
+ * Só com janela efetiva 1 (`maxInFlight === 1`, o padrão): com janela maior a
+ * interrupção fica desligada (ver `preemptEnabled`).
+ * Recolocação: a vítima volta à FRENTE da sua classe, porque já estava em
+ * andamento (era a próxima do seu grupo e já tinha passado à frente das
+ * demais da classe); é diferente de quem sai pelo topo por rolagem, que vai
+ * ao FIM da classe 2. Se o grupo do segmento ainda está na fila, a
+ * interrompida entra à frente das irmãs não enviadas (`prependToGroup`), sem
+ * mudar a classe nem a posição do grupo; senão, volta como grupo novo (mesma
+ * chave) na frente da classe atual do segmento.
  * Resultado atrasado da interrompida (o service worker o postou antes de
  * receber o cancelamento) chega com a unidade fora da janela e é descartado.
  * Com janela 1 ele sempre chega antes do reenvio (a Port entrega em ordem e o
  * reenvio só sai depois do resultado de uma unidade enviada depois do
- * cancelamento); com janela maior, em tese, poderia chegar depois e ser tomado
- * pelo do reenvio.
+ * cancelamento).
  *
  * Sem `chrome`: a porta, o UUID, a geometria, os timers e o relógio são
  * injetados. Sem logs e sem texto no estado emitido (só contagens, tempos e
@@ -205,8 +209,8 @@ export interface JobRunnerDeps {
   clearInterval: (id: unknown) => void;
   /**
    * Timer da interrupção de unidade fora da tela (no content real:
-   * `window.setTimeout`/`clearTimeout`). Opcionais: sem `setTimeout`, nenhuma
-   * unidade é interrompida.
+   * `window.setTimeout`/`clearTimeout`). Opcionais: sem `setTimeout`, ou com
+   * `maxInFlight` > 1, nenhuma unidade é interrompida.
    */
   setTimeout?: (fn: () => void, ms: number) => unknown;
   clearTimeout?: (id: unknown) => void;
@@ -429,6 +433,10 @@ function placementFor(
 export function createJobRunner(deps: JobRunnerDeps): JobRunner {
   const applier = createPageApplier();
   const maxInFlight = deps.maxInFlight ?? MAX_UNITS_IN_FLIGHT;
+  // O `unitId` é reusado no reenvio da interrompida. Com janela > 1, um
+  // resultado atrasado da tentativa abortada poderia chegar depois do reenvio
+  // e fechá-lo com o texto velho; com janela 1 a ordem da Port impede isso.
+  const preemptEnabled = maxInFlight === 1;
   let state: JobState = { ...IDLE };
   let active: ActiveJob | null = null;
   let disposed = false;
@@ -527,7 +535,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
    * Só mexe no timer: não envia nem reordena.
    */
   const schedulePreempt = (job: ActiveJob): void => {
-    if (active !== job || deps.setTimeout === undefined) return;
+    if (active !== job || !preemptEnabled || deps.setTimeout === undefined) return;
     for (const segmentId of job.visibleWaiting) {
       if (!isWaitingVisible(job, segmentId)) job.visibleWaiting.delete(segmentId);
     }

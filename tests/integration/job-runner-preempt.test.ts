@@ -426,34 +426,30 @@ describe('createJobRunner — interrupção de unidade fora da tela', () => {
     expect(runner.getState()).toMatchObject({ status: 'translated', done: 4, failed: 0 });
   });
 
-  it('a vítima é escolhida pela classe atual: a enviada por último subiu para perto', () => {
-    const document = parse(page(4));
-    const { runner, port, watcher } = setup(document, { maxInFlight: 2 });
+  it('janela 2: a interrupção fica desligada e nunca envia job:cancel-unit', () => {
+    // Com janela > 1 o resultado atrasado da tentativa abortada poderia
+    // fechar o reenvio (mesmo `unitId`): nada é interrompido nem armado.
+    const document = parse(
+      '<p>Top.</p><p data-pos="below">Far <i>away</i> text.</p>' +
+        Array.from({ length: 4 }, (_, i) => `<p data-pos="below">Line ${String(i)}.</p>`).join(''),
+    );
+    const { runner, port, watcher, armed } = setup(document, { maxInFlight: 2 });
     runner.start();
     const fake = port();
     fake.reply(upperCase); // seg-0; seg-2 sai (seg-1 e seg-2 em voo, classe 2)
-    expect(fake.inFlight.map((unit) => labelOf(unit.unitId))).toEqual(['seg-1#text', 'seg-2#text']);
-    // Sem a rolagem, o empate iria para seg-2 (enviada por último).
-    watcher().emit(changes(document, [2, 'near']));
+    expect(fake.inFlight.map((unit) => labelOf(unit.unitId))).toEqual([
+      'seg-1#markers',
+      'seg-2#text',
+    ]);
+    watcher().emit(changes(document, [5, 'visible']));
+    vi.advanceTimersByTime(10 * PREEMPT_DEBOUNCE_MS);
+    fake.reply(dropMarkers); // seg-1 → fallback; node-0 sai
     watcher().emit(changes(document, [4, 'visible']));
-    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
-    expect(cancelled(fake)).toEqual(['seg-1#text']);
+    vi.advanceTimersByTime(10 * PREEMPT_DEBOUNCE_MS);
     runToEnd(fake);
-    expect(runner.getState()).toMatchObject({ status: 'translated', done: 5, failed: 0 });
-    expect(document.body.textContent).toBe('TOP LINE.LINE 1.LINE 2.LINE 3.LINE 4.');
-  });
-
-  it('empate na classe atual: interrompe a enviada por último', () => {
-    const document = parse(page(4));
-    const { runner, port, watcher } = setup(document, { maxInFlight: 2 });
-    runner.start();
-    const fake = port();
-    fake.reply(upperCase);
-    watcher().emit(changes(document, [4, 'visible']));
-    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
-    expect(cancelled(fake)).toEqual(['seg-2#text']);
-    runToEnd(fake);
-    expect(runner.getState()).toMatchObject({ status: 'translated', done: 5, failed: 0 });
+    expect(fake.cancels).toEqual([]);
+    expect(armed()).toBe(0);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 6, failed: 0 });
   });
 
   it('nunca interrompe unidade enviada na classe 0', () => {
@@ -487,25 +483,6 @@ describe('createJobRunner — interrupção de unidade fora da tela', () => {
     runToEnd(fake);
     expect(labels(fake)).toEqual(['seg-0#text', 'seg-1#node-0', 'seg-1#node-1', 'seg-2#text']);
     expect(runner.getState()).toMatchObject({ status: 'translated', done: 3, failed: 0 });
-  });
-
-  it('interrompe periférico em voo (classe 3) e o reenvia no fim', () => {
-    // Fallback na classe 0 com o periférico em voo: as unidades dele esperam.
-    const document = parse('<nav><p>Menu.</p></nav><p>Far <i>away</i> text.</p>');
-    const { runner, port } = setup(document, { maxInFlight: 2 });
-    runner.start();
-    const fake = port();
-    expect(labels(fake)).toEqual(['seg-1#markers', 'seg-0#text']);
-    fake.reply(dropMarkers); // seg-1 → fallback na frente da classe 0; node-0 sai
-    expect(labels(fake)).toEqual(['seg-1#markers', 'seg-0#text', 'seg-1#node-0']);
-
-    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
-    expect(cancelled(fake)).toEqual(['seg-0#text']);
-    expect(labels(fake).slice(3)).toEqual(['seg-1#node-1']);
-    runToEnd(fake);
-    expect(labels(fake).slice(3)).toEqual(['seg-1#node-1', 'seg-1#node-2', 'seg-0#text']);
-    expect(runner.getState()).toMatchObject({ status: 'translated', done: 2, failed: 0 });
-    expect(document.body.textContent).toBe('MENU.FAR AWAY TEXT.');
   });
 
   it('no máximo uma interrupção por unidade: o reenvio termina normalmente', () => {
@@ -654,31 +631,6 @@ describe('createJobRunner — interrupção de unidade fora da tela', () => {
     expect(watcher().unobserved.filter((block) => block === seg0Block)).toHaveLength(1);
     expect(runner.getState()).toMatchObject({ status: 'translated', done: 3, failed: 0 });
     expect(document.body.textContent).toBe('FAR AWAY TEXT.TWO.THREE.');
-  });
-
-  it('janela 2: interrompe a mais recente e a recoloca à frente da irmã restante', () => {
-    const document = parse(
-      '<p>Top.</p><p data-pos="below">Far <i>away</i> text.</p>' +
-        '<p data-pos="below">Two.</p><p data-pos="below">Three.</p>',
-    );
-    const { runner, port, watcher } = setup(document, { maxInFlight: 2 });
-    runner.start();
-    const fake = port();
-    expect(labels(fake)).toEqual(['seg-0#text', 'seg-1#markers']);
-    fake.reply(upperCase); // seg-0; seg-2 sai
-    fake.reply(dropMarkers); // seg-1 → fallback; node-0 sai
-    fake.reply(upperCase); // seg-2; node-1 sai
-    expect(fake.inFlight.map((unit) => labelOf(unit.unitId))).toEqual([
-      'seg-1#node-0',
-      'seg-1#node-1',
-    ]);
-    watcher().emit(changes(document, [3, 'visible']));
-    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
-    expect(cancelled(fake)).toEqual(['seg-1#node-1']);
-    runToEnd(fake);
-    expect(labels(fake).slice(5)).toEqual(['seg-3#text', 'seg-1#node-1', 'seg-1#node-2']);
-    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4, failed: 0 });
-    expect(document.body.textContent).toBe('TOP.FAR AWAY TEXT.TWO.THREE.');
   });
 
   it('resultado atrasado da interrompida é ignorado até o reenvio', () => {
