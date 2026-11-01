@@ -261,6 +261,28 @@ describe('createSegmentZoneTracker', () => {
     expect(t.zones().size).toBe(100);
   });
 
+  it('reveza blocos: um bloco que estoura o orçamento não deixa outro sem medir', () => {
+    const t = setup(800);
+    const a = t.makeBlock(200, 0); // janela de 80 trechos + busca: estoura o orçamento
+    const b = t.makeBlock(200, 1000);
+    t.tracker.track(a.block, a.segments);
+    t.tracker.track(b.block, b.segments);
+    t.tracker.setBlockZone(a.block, 'visible');
+    t.tracker.setBlockZone(b.block, 'near');
+
+    const bIds = new Set(b.segments.map((s) => s.segmentId));
+    for (let frame = 1; frame <= 50; frame++) {
+      if (frame === 25) t.tracker.setBlockZone(b.block, 'visible');
+      t.scrollTo(frame * 5);
+      t.flush();
+    }
+
+    const bChanges = t.batches.flat().filter((c) => bIds.has(c.segmentId));
+    expect(bChanges.length).toBeGreaterThan(0);
+    // B começa em 1000 - 250 = 750 px: o primeiro trecho está na tela.
+    expect(t.zones().get(b.segments[0]?.segmentId ?? '')).toBe('visible');
+  });
+
   it('rolagem coalescida: vários onScroll geram uma única passada', () => {
     const t = setup();
     const { block, segments } = t.makeBlock(15, 0);

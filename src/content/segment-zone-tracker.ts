@@ -12,7 +12,8 @@
  *   (pela ordem de documento) acha o primeiro trecho com `bottom > 0` e uma caminhada
  *   para frente mede até o primeiro trecho com `top >= 2 * vh`;
  * - no total, `MAX_ZONE_MEASURES_PER_FRAME` medições por quadro; ao estourar, o trabalho
- *   continua do mesmo ponto no quadro seguinte.
+ *   continua do mesmo ponto no quadro seguinte, depois dos demais blocos pendentes
+ *   (revezamento, para nenhum bloco monopolizar o orçamento).
  *
  * Trechos fora da janela medida viram `out` sem medição. A busca binária pressupõe que
  * os trechos de um bloco seguem a ordem vertical do documento (texto em fluxo normal).
@@ -226,7 +227,13 @@ export function createSegmentZoneTracker(
       if (processOpenBlock(state, progress, vh, budget, changes)) {
         pending.delete(block);
       } else {
+        // Revezamento: o bloco que gastou o orçamento vai para o fim da varredura e
+        // da fila, e o quadro seguinte começa pelo próximo. Sem isso, sob rolagem
+        // contínua, o primeiro bloco aberto consumiria todos os quadros.
+        pending.delete(block);
         pending.set(block, progress);
+        blocks.delete(block);
+        blocks.set(block, state);
         break;
       }
     }
