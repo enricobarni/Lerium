@@ -8,6 +8,7 @@ import {
   type TrackedSegment,
   type ZoneRect,
 } from '../../src/content/segment-zone-tracker';
+import { zoneOfRect as priorityZoneOfRect } from '../../src/content/segment-priority';
 
 const ZERO: ZoneRect = { top: 0, bottom: 0, width: 0, height: 0 };
 
@@ -100,6 +101,10 @@ describe('zoneOfRect', () => {
     expect(zoneOfRect({ top: 200, bottom: 220, width: 1, height: 20 }, 100)).toBe('out');
     expect(zoneOfRect({ top: -40, bottom: 0, width: 1, height: 40 }, 100)).toBe('out');
     expect(zoneOfRect(ZERO, 100)).toBe('out');
+  });
+
+  it('é a mesma regra da classificação inicial', () => {
+    expect(zoneOfRect).toBe(priorityZoneOfRect);
   });
 });
 

@@ -20,15 +20,11 @@
  * O módulo não altera o DOM nem lê texto: só repassa os nós a `measureText`.
  */
 
-export type SegmentZone = 'visible' | 'near' | 'out';
+import { hasArea, zoneOfRect, type RectZone, type ZoneRect } from './zone-rect';
 
-/** Retângulo em coordenadas da viewport (como `DOMRect`). */
-export interface ZoneRect {
-  readonly top: number;
-  readonly bottom: number;
-  readonly width: number;
-  readonly height: number;
-}
+export { zoneOfRect, type ZoneRect };
+
+export type SegmentZone = RectZone;
 
 export interface TrackedSegment {
   readonly segmentId: string;
@@ -64,19 +60,6 @@ export interface SegmentZoneTracker {
 }
 
 export const MAX_ZONE_MEASURES_PER_FRAME = 64;
-
-/** Largura e altura positivas (`NaN` não tem área). */
-function hasArea(rect: ZoneRect): boolean {
-  return rect.width > 0 && rect.height > 0;
-}
-
-/** Zona de um retângulo; sem área (inclusive `NaN` ou nó desconectado) é `out`. */
-export function zoneOfRect(rect: ZoneRect, viewportHeight: number): SegmentZone {
-  if (!hasArea(rect)) return 'out';
-  if (rect.top < viewportHeight && rect.bottom > 0) return 'visible';
-  if (rect.top >= viewportHeight && rect.top < 2 * viewportHeight) return 'near';
-  return 'out';
-}
 
 interface SegmentState {
   readonly segment: TrackedSegment;

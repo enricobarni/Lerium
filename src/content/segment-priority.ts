@@ -22,6 +22,9 @@
  */
 
 import type { TranslationSegment } from './segmenter';
+import { hasArea, zoneOfRect, type RectZone, type ZoneRect } from './zone-rect';
+
+export { zoneOfRect, type RectZone };
 
 export const PRIORITY_VISIBLE_MAIN = 0;
 export const PRIORITY_NEAR = 1;
@@ -39,13 +42,8 @@ export type SegmentPriority =
 /** O que `classifySegments` produz: a classe `PRIORITY_NEAR` fica de fora. */
 export type InitialPriority = Exclude<SegmentPriority, typeof PRIORITY_NEAR>;
 
-/** Retângulo em coordenadas da viewport (como `DOMRect`). */
-export interface BlockRect {
-  readonly top: number;
-  readonly bottom: number;
-  readonly width: number;
-  readonly height: number;
-}
+/** Retângulo em coordenadas da viewport: o mesmo tipo de `zone-rect.ts`. */
+export type BlockRect = ZoneRect;
 
 export interface SegmentPriorityDeps {
   measure(block: Element): BlockRect;
@@ -57,9 +55,6 @@ export interface SegmentPriorityDeps {
   measureSegment?(segment: TranslationSegment): BlockRect;
   viewportHeight: number;
 }
-
-/** Zona de um retângulo em relação à viewport. */
-export type RectZone = 'visible' | 'near' | 'out';
 
 export interface ClassifiedSegment {
   readonly segment: TranslationSegment;
@@ -135,25 +130,6 @@ function isPeripheral(block: Element): boolean {
     if ((name === 'header' || name === 'footer') && !isInsideSectioningScope(current)) return true;
   }
   return false;
-}
-
-/** Tem área (largura e altura positivas; `NaN` não tem). */
-function hasArea(rect: BlockRect): boolean {
-  return rect.width > 0 && rect.height > 0;
-}
-
-/**
- * Zona do retângulo, função pura:
- * - `visible`: tem área e cruza a faixa vertical `(0, viewportHeight)`;
- * - `near`: tem área e começa na primeira viewport abaixo da tela
- *   (`viewportHeight <= top < 2 * viewportHeight`);
- * - `out`: o resto (sem área, acima, mais abaixo ou com `NaN`).
- */
-export function zoneOfRect(rect: BlockRect, viewportHeight: number): RectZone {
-  if (!hasArea(rect)) return 'out';
-  if (rect.top < viewportHeight && rect.bottom > 0) return 'visible';
-  if (rect.top >= viewportHeight && rect.top < 2 * viewportHeight) return 'near';
-  return 'out';
 }
 
 /** Cruza a faixa vertical `(0, viewportHeight)` e tem área. */
