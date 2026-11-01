@@ -2,12 +2,16 @@
  * Entrada do content script (injetado sob demanda pelo service worker).
  * Só faz a ligação com `chrome`; a lógica fica em `controller.ts` e
  * `job-runner.ts`. Único arquivo de `src/content` que usa `chrome`.
+ *
+ * O indicador de progresso (`progress-overlay.ts`) só observa o estado do
+ * job: não participa da coleta, da aplicação nem da restauração.
  */
 
 import { PAGE_JOB_PORT_NAME } from '../shared/page-messages';
-import { createContentController, handlePageHide } from './controller';
+import { createContentController, handlePageHide, toPageStateView } from './controller';
 import { installOnce } from './install-once';
 import { createJobRunner } from './job-runner';
+import { createProgressOverlay } from './progress-overlay';
 import { createSegmentZoneTracker } from './segment-zone-tracker';
 import { createVisibilityWatcher } from './visibility-watcher';
 import type { ZoneRect } from './zone-rect';
@@ -37,6 +41,14 @@ function measureNodes(nodes: readonly Text[]): ZoneRect {
 const LISTEN_OPTIONS: AddEventListenerOptions = { passive: true, capture: true };
 
 installOnce(globalThis, INSTALL_KEY, () => {
+  const overlay = createProgressOverlay({
+    doc: document,
+    setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+    clearTimeout: (id) => window.clearTimeout(id as number),
+    requestFrame: (cb) => window.requestAnimationFrame(() => cb()),
+    cancelFrame: (id) => window.cancelAnimationFrame(id as number),
+  });
+
   const runner = createJobRunner({
     root: document,
     connect: () => chrome.runtime.connect({ name: PAGE_JOB_PORT_NAME }),
@@ -77,6 +89,13 @@ installOnce(globalThis, INSTALL_KEY, () => {
         },
         onChange,
       ),
+    onState: (state) => {
+      try {
+        overlay.update(toPageStateView(state));
+      } catch {
+        // O indicador é acessório: uma falha nele nunca interrompe o job.
+      }
+    },
   });
 
   const controller = createContentController({
@@ -92,5 +111,15 @@ installOnce(globalThis, INSTALL_KEY, () => {
     return false;
   });
 
-  window.addEventListener('pagehide', (event) => handlePageHide(event, controller));
+  // `handlePageHide` só repassa `pagehide` confiável. No descarregamento
+  // definitivo o runner é descartado sem emitir estado, então o indicador é
+  // descartado aqui; no bfcache, o cancelamento emitido já o esconde.
+  window.addEventListener('pagehide', (event) =>
+    handlePageHide(event, {
+      onPageHide(persisted) {
+        controller.onPageHide(persisted);
+        if (!persisted) overlay.dispose();
+      },
+    }),
+  );
 });
