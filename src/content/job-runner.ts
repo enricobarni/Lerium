@@ -30,7 +30,19 @@
  * Dentro de um lote, os movimentos são feitos em ordem de documento; os que
  * vão para a frente de uma classe (1 ou 2), do último para o primeiro, para
  * que a frente fique em ordem de documento. O callback só reordena: nunca envia
- * nem chama `pump`; a ordem nova vale na próxima vaga. O bloco continua
+ * nem chama `pump`; a ordem nova vale na próxima vaga.
+ * Bloco compartilhado (dois ou mais segmentos não periféricos no mesmo bloco,
+ * como em capítulos separados por `<br>`) com `deps.createSegmentZoneTracker`:
+ * o bloco continua observado, mas a zona dele não vale para os segmentos; ela
+ * vira o portão do rastreador (`setBlockZone`), que mede cada trecho e emite a
+ * zona por segmento, tratada pelas mesmas regras. O bloco só passa ao
+ * rastreador (`track`) na primeira zona que o observador informar: antes dela
+ * o portão seria `out` e o rastreador emitiria `out` para todos, tirando da
+ * classe 0 os que a medição do `start` viu na tela. Depois de aplicar um
+ * segmento dele, o bloco é medido de novo (`invalidate`: a tradução muda o
+ * layout); o segmento sai do rastreador junto com o `unobserve`. Sem o
+ * rastreador (ou sem o observador), todo bloco segue a regra do bloco.
+ * O bloco continua
  * observado enquanto resta unidade do segmento na fila OU em voo (inclusive do
  * fallback), e deixa de ser observado quando o plano é aplicado com sucesso ou
  * falha sem fallback (com `remaining > 0` há sempre unidade na fila ou em voo:
@@ -157,7 +169,11 @@ import {
   type BlockRect,
   type SegmentPriority,
 } from './segment-priority';
-import { segmentTextNodes } from './segmenter';
+import type {
+  SegmentZoneTracker,
+  TrackedSegment as ZoneTrackedSegment,
+} from './segment-zone-tracker';
+import { segmentTextNodes, type TranslationSegment } from './segmenter';
 import type { VisibilityChange, VisibilityWatcher, VisibilityZone } from './visibility-watcher';
 
 export type JobStatus = 'idle' | 'translating' | 'translated' | 'cancelled' | 'error';
@@ -222,6 +238,12 @@ export interface JobRunnerDeps {
   clearTimeout?: (id: unknown) => void;
   /** Geometria do bloco (no content real: `getBoundingClientRect`). */
   measure(block: Element): BlockRect;
+  /**
+   * Geometria do próprio trecho (no content real: um `Range` sobre os nós).
+   * Opcional: repassada a `classifySegments`, que só a usa em bloco
+   * compartilhado.
+   */
+  measureSegment?(segment: TranslationSegment): BlockRect;
   /** Altura da viewport (no content real: `window.innerHeight`). */
   viewportHeight(): number;
   /**
@@ -237,6 +259,15 @@ export interface JobRunnerDeps {
   createVisibilityWatcher?: (
     onChange: (changes: readonly VisibilityChange[]) => void,
   ) => VisibilityWatcher;
+  /**
+   * Cria o rastreador de zona por trecho de um job (no content real:
+   * `createSegmentZoneTracker`). Opcional, e só usado junto com
+   * `createVisibilityWatcher` e se houver bloco compartilhado: sem ele, a zona
+   * do bloco vale para todos os segmentos dele.
+   */
+  createSegmentZoneTracker?: (
+    onChange: (changes: readonly SegmentZoneChange[]) => void,
+  ) => SegmentZoneTracker;
   /** Limite da janela; só para teste. Padrão `MAX_UNITS_IN_FLIGHT`. */
   maxInFlight?: number;
   onState?(state: JobState): void;
@@ -324,6 +355,13 @@ interface ActiveJob {
   /** Bloco observado → segmentos dele ainda observados. */
   readonly blocks: Map<Element, Set<string>>;
   watcher: VisibilityWatcher | undefined;
+  /**
+   * Blocos compartilhados com zona por trecho → segmentos a entregar ao
+   * rastreador na primeira zona do bloco (`undefined` depois de entregues).
+   * Vazio sem rastreador.
+   */
+  readonly shared: Map<Element, { pending: ZoneTrackedSegment[] | undefined }>;
+  zoneTracker: SegmentZoneTracker | undefined;
   /** Latências medidas (ms), na ordem em que os segmentos foram aplicados. */
   readonly latencies: number[];
   /** Única fonte do que está em voo: `unitId` → unidade e plano a que pertence. */
@@ -492,11 +530,13 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     const segment = job.tracked.get(segmentId);
     if (segment === undefined || !segment.observed) return;
     segment.observed = false;
+    if (job.shared.has(segment.block)) job.zoneTracker?.untrack(segmentId);
     const ids = job.blocks.get(segment.block);
     if (ids === undefined) return;
     ids.delete(segmentId);
     if (ids.size > 0) return;
     job.blocks.delete(segment.block);
+    job.shared.delete(segment.block);
     job.watcher?.unobserve(segment.block);
   };
 
@@ -659,13 +699,30 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     schedulePreempt(job);
   };
 
-  /** Mudanças por bloco viram mudanças por segmento: a zona vale para todos os do bloco. */
+  /**
+   * Mudanças por bloco viram mudanças por segmento: a zona vale para todos os
+   * do bloco. Bloco compartilhado com rastreador: a zona só vira o portão dele
+   * (o rastreador emite por trecho, depois, num quadro de animação).
+   */
   const handleVisibility = (job: ActiveJob, changes: readonly VisibilityChange[]): void => {
     if (active !== job) return;
     const perSegment: SegmentZoneChange[] = [];
     for (const { block, zone } of changes) {
       const ids = job.blocks.get(block);
       if (ids === undefined) continue;
+      const shared = job.shared.get(block);
+      if (shared !== undefined && job.zoneTracker !== undefined) {
+        if (shared.pending !== undefined) {
+          // Primeira zona do bloco: só agora o portão é conhecido (ver o topo).
+          job.zoneTracker.track(
+            block,
+            shared.pending.filter(({ segmentId }) => ids.has(segmentId)),
+          );
+          shared.pending = undefined;
+        }
+        job.zoneTracker.setBlockZone(block, zone);
+        continue;
+      }
       for (const segmentId of ids) perSegment.push({ segmentId, zone });
     }
     applyZoneChanges(job, perSegment);
@@ -693,6 +750,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     if (active === job) active = null;
     job.watcher?.disconnect();
     job.watcher = undefined;
+    job.zoneTracker?.disconnect();
+    job.zoneTracker = undefined;
+    job.shared.clear();
     job.blocks.clear();
     job.tracked.clear();
     job.queue.clear();
@@ -724,6 +784,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     // Com fallback o plano continua (nó a nó): o bloco segue observado.
     if (result.ok || result.fallback === undefined) unobserve(job, segmentId);
     if (result.ok) {
+      // A tradução muda o layout do bloco: os trechos que restam são medidos de novo.
+      const block = job.tracked.get(segmentId)?.block;
+      if (block !== undefined && job.shared.has(block)) job.zoneTracker?.invalidate(block);
       const next: JobState = { ...state, done: state.done + 1 };
       if (task.priority === PRIORITY_VISIBLE_MAIN && state.firstVisibleMs === undefined) {
         const firstVisibleMs = elapsed();
@@ -850,14 +913,30 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       applier.clear();
 
       const segments = segmentTextNodes(collectTextNodes(deps.root));
+      const { measureSegment } = deps;
       const classified = classifySegments(segments, {
         measure: (block) => deps.measure(block),
+        ...(measureSegment === undefined
+          ? {}
+          : { measureSegment: (segment: TranslationSegment) => measureSegment(segment) }),
         viewportHeight: deps.viewportHeight(),
       });
       const queue = createGroupedPriorityQueue<string, QueuedUnit>(PRIORITY_CLASSES);
       const tracked = new Map<string, TrackedSegment>();
       const blocks = new Map<Element, Set<string>>();
       const visibleWaiting = new Set<string>();
+      // Bloco compartilhado: 2+ segmentos não periféricos (mesma regra de
+      // `classifySegments`, contando também os que serão pulados).
+      const shared = new Map<Element, { pending: ZoneTrackedSegment[] | undefined }>();
+      const zonePerSegment =
+        deps.createVisibilityWatcher !== undefined && deps.createSegmentZoneTracker !== undefined;
+      const mainCount = new Map<Element, number>();
+      if (zonePerSegment) {
+        for (const { segment, priority } of classified) {
+          if (priority === PRIORITY_PERIPHERAL) continue;
+          mainCount.set(segment.block, (mainCount.get(segment.block) ?? 0) + 1);
+        }
+      }
       let skipped = 0;
       for (const { segment, priority, order } of classified) {
         const plan = applier.plan(segment);
@@ -880,6 +959,19 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         const ids = blocks.get(segment.block);
         if (ids === undefined) blocks.set(segment.block, new Set([plan.segmentId]));
         else ids.add(plan.segmentId);
+        if ((mainCount.get(segment.block) ?? 0) >= 2) {
+          const entry: ZoneTrackedSegment = {
+            segmentId: plan.segmentId,
+            nodes: segment.nodes,
+            order,
+          };
+          const blockEntry = shared.get(segment.block);
+          if (blockEntry?.pending === undefined) {
+            shared.set(segment.block, { pending: [entry] });
+          } else {
+            blockEntry.pending.push(entry);
+          }
+        }
       }
       const base: JobState = {
         status: 'translating',
@@ -910,6 +1002,8 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         tracked,
         blocks,
         watcher: undefined,
+        shared,
+        zoneTracker: undefined,
         latencies: [],
         window: createInFlightWindow<InFlightUnit>(maxInFlight),
         visibleWaiting,
@@ -937,6 +1031,11 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         const watcher = deps.createVisibilityWatcher((changes) => handleVisibility(job, changes));
         job.watcher = watcher;
         for (const block of blocks.keys()) watcher.observe(block);
+        if (shared.size > 0 && deps.createSegmentZoneTracker !== undefined) {
+          job.zoneTracker = deps.createSegmentZoneTracker((changes) =>
+            applyZoneChanges(job, changes),
+          );
+        }
       }
       emit(base);
       pump(job);
