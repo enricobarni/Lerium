@@ -504,6 +504,37 @@ describe('createJobRunner — reordenação por visibilidade', () => {
     runToEnd(fake);
   });
 
+  it('a zona do bloco vale para cada segmento dele, em ordem de documento', () => {
+    const document = parse(
+      '<p>Top.</p><p data-pos="below">Far.</p><p data-pos="below">First half.<br>Second half.</p>',
+    );
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    expect(segmentsSent(fake)).toEqual(['seg-0']);
+    watcher().emit(changes(document, [2, 'visible']));
+    runToEnd(fake);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-2', 'seg-3', 'seg-1']);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4 });
+  });
+
+  it('bloco compartilhado com um segmento em voo: só o da fila se move', () => {
+    const document = parse(
+      '<p>Top.</p><p data-pos="below">Far.</p><p data-pos="below">First half.<br>Second half.</p>',
+    );
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    watcher().emit(changes(document, [2, 'visible']));
+    fake.reply(upperCase);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-2']);
+    // seg-2 em voo só muda de classe; seg-3, na fila, vai ao fim da classe 2.
+    watcher().emit(changes(document, [2, 'out']));
+    runToEnd(fake);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-2', 'seg-1', 'seg-3']);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4 });
+  });
+
   it('com tudo em voo, a zona só atualiza a classe: nada se move nem é medido', () => {
     const document = parse(page(3));
     let now = 0;

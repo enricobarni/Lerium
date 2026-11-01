@@ -400,6 +400,12 @@ function itemsOf(task: SegmentTask): QueuedUnit[] {
   return task.plan.units.map((unit) => ({ task, unit }));
 }
 
+/** Zona nova de um segmento; o executor reordena a fila a partir de lotes delas. */
+export interface SegmentZoneChange {
+  readonly segmentId: string;
+  readonly zone: VisibilityZone;
+}
+
 /** Destino de um segmento na fila depois de uma mudança de zona. */
 interface Placement {
   readonly priority: SegmentPriority;
@@ -597,19 +603,16 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
   };
 
   /**
-   * Reordena a fila conforme as zonas novas. Só mexe na fila: não envia, não
-   * aplica e não chama `pump` (a próxima vaga que abrir já pega a ordem nova).
+   * Reordena a fila conforme as zonas novas de cada segmento. Só mexe na fila:
+   * não envia, não aplica e não chama `pump` (a próxima vaga que abrir já pega
+   * a ordem nova). Segmento desconhecido ou não mais observado é ignorado.
    */
-  const handleVisibility = (job: ActiveJob, changes: readonly VisibilityChange[]): void => {
+  const applyZoneChanges = (job: ActiveJob, changes: readonly SegmentZoneChange[]): void => {
     if (active !== job) return;
     const touched: { segmentId: string; segment: TrackedSegment; zone: VisibilityZone }[] = [];
-    for (const { block, zone } of changes) {
-      const ids = job.blocks.get(block);
-      if (ids === undefined) continue;
-      for (const segmentId of ids) {
-        const segment = job.tracked.get(segmentId);
-        if (segment?.observed === true) touched.push({ segmentId, segment, zone });
-      }
+    for (const { segmentId, zone } of changes) {
+      const segment = job.tracked.get(segmentId);
+      if (segment?.observed === true) touched.push({ segmentId, segment, zone });
     }
     touched.sort((a, b) => a.segment.order - b.segment.order);
 
@@ -654,6 +657,18 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     }
     // Só o timer: a interrupção, se vier, sai do disparo dele.
     schedulePreempt(job);
+  };
+
+  /** Mudanças por bloco viram mudanças por segmento: a zona vale para todos os do bloco. */
+  const handleVisibility = (job: ActiveJob, changes: readonly VisibilityChange[]): void => {
+    if (active !== job) return;
+    const perSegment: SegmentZoneChange[] = [];
+    for (const { block, zone } of changes) {
+      const ids = job.blocks.get(block);
+      if (ids === undefined) continue;
+      for (const segmentId of ids) perSegment.push({ segmentId, zone });
+    }
+    applyZoneChanges(job, perSegment);
   };
 
   /**
