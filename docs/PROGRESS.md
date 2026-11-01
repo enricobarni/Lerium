@@ -6,7 +6,8 @@
 ## Estado atual
 
 - **Fase:** 5 — Experiência progressiva e desempenho (em andamento)
-- **Tarefa:** `feat/viewport-priority` (reordenação durante a rolagem e latência do que entrou na tela)
+- **Tarefa:** `perf/scroll-translation` (pausa observada na rolagem, cache de segmentos repetidos; escolhida antes de `feat/progress-overlay` por causa do problema relatado pelo responsável)
+- **Aceite manual de `feat/viewport-priority`** (31/10/2026): `firstVisibleMs` 2–4 s e `visibleLatency` 3–5 s no Chrome real; pausa ocasional da tela com o popup avançando (ver ADR-016)
 - **Fase 4:** concluída — PRs #17–#22 mesclados; Gate cumprido (E2E de ida e volta byte a byte e aceite manual do responsável no Chrome real)
 - **Fase 3:** concluída — PRs #13–#16 mesclados; gate cumprido (18/18 execuções com o modelo real); ADR-011 aceita após conferência do model card pelo responsável
 - **Versão:** `0.2.0` (primeira que traduz páginas; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.2.0` pendente de criação pelo responsável. Versão anterior: `0.1.0`. Tag `v0.1.0` em `ab06507` (validado: lint, typecheck, 398 testes, build, 8 E2E) e release [Lerium 0.1.0](https://github.com/enricobarni/Lerium/releases/tag/v0.1.0) publicadas pelo responsável.

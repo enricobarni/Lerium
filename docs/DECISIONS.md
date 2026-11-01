@@ -895,3 +895,12 @@ antes do visível no mesmo quadro, gerando zonas transitórias que inflavam a
   já passou pelo leitor.
 - A ordem relativa dos callbacks dos dois observadores não é garantida; o
   código não depende dela.
+
+**Medição no Chrome real** (responsável, 31/10/2026, `translategemma:4b` no
+i5-13420H, capítulo de novel, rolando durante a tradução): `firstVisibleMs`
+de 2 a 4 s e `visibleLatency` de 3 a 5 s, próximos do tempo de uma única
+tradução. Percepção: “um pouco mais rápido, mas sem grande diferença”. Houve
+uma pausa de alguns segundos em que a tela parou de mudar enquanto o popup
+seguia avançando; hipótese registrada: uma unidade longa fora da tela
+ocupando a única vaga (nenhuma unidade em voo é interrompida). Investigada
+em `perf/scroll-translation`.
