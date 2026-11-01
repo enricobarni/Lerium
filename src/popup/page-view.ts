@@ -1,4 +1,21 @@
 import type { PageInjectErrorKind, PageStateError, PageStateView } from '../shared/page-control';
+import {
+  BUSY_MESSAGE,
+  CANCELLED_MESSAGE,
+  COMMAND_FAILED_MESSAGE,
+  INVALID_CONFIG_MESSAGE,
+  NO_TEXT_MESSAGE,
+  NOTHING_TRANSLATED_MESSAGE,
+  partialMessage,
+  PREPARE_FAILED_MESSAGE,
+  READY_MESSAGE,
+  SHOWING_ORIGINAL_MESSAGE,
+  STATE_ERROR_MESSAGES,
+  TRANSLATED_MESSAGE,
+  TRANSLATING_ANNOUNCE,
+  translatingMessage,
+  UNSUPPORTED_MESSAGE,
+} from '../shared/page-status-text';
 
 /**
  * Traduz o estado da página em mensagens e botões do popup. Módulo puro, sem
@@ -14,6 +31,25 @@ export type PageViewInput =
   | { kind: 'command_error' }
   | { kind: 'state'; state: PageStateView }
   | { kind: 'busy' };
+
+// Os textos vivem em `shared` (também usados pelo indicador na página); o
+// popup os reexporta para quem já os importava daqui.
+export {
+  BUSY_MESSAGE,
+  CANCELLED_MESSAGE,
+  COMMAND_FAILED_MESSAGE,
+  INVALID_CONFIG_MESSAGE,
+  NO_TEXT_MESSAGE,
+  NOTHING_TRANSLATED_MESSAGE,
+  partialMessage,
+  PREPARE_FAILED_MESSAGE,
+  READY_MESSAGE,
+  SHOWING_ORIGINAL_MESSAGE,
+  TRANSLATED_MESSAGE,
+  TRANSLATING_ANNOUNCE,
+  translatingMessage,
+  UNSUPPORTED_MESSAGE,
+};
 
 export type PageTone = 'info' | 'success' | 'warning' | 'error';
 
@@ -40,34 +76,6 @@ export interface PageViewModel {
    */
   announce: string;
 }
-
-export const READY_MESSAGE = 'Pronto para traduzir esta página.';
-export const BUSY_MESSAGE = 'Preparando a página…';
-export const TRANSLATING_ANNOUNCE = 'Traduzindo a página.';
-export const TRANSLATED_MESSAGE = 'Página traduzida.';
-export const NOTHING_TRANSLATED_MESSAGE = 'Nenhum trecho foi traduzido.';
-export const NO_TEXT_MESSAGE = 'Não há texto para traduzir nesta página.';
-export const SHOWING_ORIGINAL_MESSAGE = 'Mostrando o texto original.';
-export const CANCELLED_MESSAGE = 'Tradução cancelada.';
-export const UNSUPPORTED_MESSAGE =
-  'Esta página não pode ser traduzida. Páginas do Chrome, da Chrome Web Store, PDFs e ' +
-  'outras extensões não são suportados.';
-export const PREPARE_FAILED_MESSAGE =
-  'Não foi possível preparar a página. Recarregue e tente de novo.';
-export const COMMAND_FAILED_MESSAGE =
-  'Não foi possível falar com a página. Recarregue a página e tente de novo.';
-export const INVALID_CONFIG_MESSAGE = 'Configuração inválida. Revise as configurações.';
-
-const STATE_ERROR_MESSAGES: Readonly<Record<PageStateError, string>> = Object.freeze({
-  network: 'O Ollama não respondeu. Verifique se ele está aberto e tente de novo.',
-  forbidden:
-    'O Ollama recusou o Lerium. Libere a origem do Lerium em OLLAMA_ORIGINS ' +
-    '(veja as configurações).',
-  model_missing: 'O modelo configurado não está instalado no Ollama.',
-  invalid_config: INVALID_CONFIG_MESSAGE,
-  settings_unavailable: INVALID_CONFIG_MESSAGE,
-  interrupted: 'A tradução foi interrompida. Tente de novo.',
-});
 
 /** Erros do job cuja correção está nas configurações. */
 const STATE_ERRORS_FIXED_IN_OPTIONS: Readonly<Record<PageStateError, boolean>> = Object.freeze({
@@ -97,16 +105,6 @@ const INJECT_ERRORS_FIXED_IN_OPTIONS: Readonly<Record<PageInjectErrorKind, boole
     injection_failed: false,
     invalid_request: false,
   });
-
-const trechos = (count: number): string => (count === 1 ? 'trecho' : 'trechos');
-
-export const translatingMessage = (processed: number, total: number): string =>
-  total === 0 ? 'Traduzindo…' : `Traduzindo… ${processed} de ${total} ${trechos(total)}.`;
-
-export const partialMessage = (untranslated: number): string =>
-  untranslated === 1
-    ? `${TRANSLATED_MESSAGE} 1 trecho continua no original.`
-    : `${TRANSLATED_MESSAGE} ${untranslated} trechos continuam no original.`;
 
 const NO_BUTTONS: PageButtons = Object.freeze({
   translate: false,
