@@ -11,8 +11,8 @@ import type { LanguageCode } from '../../src/core/types';
  * (ADR-007/ADR-009): requisição sem `Origin` passa; com `Origin` fora de
  * `allowedOrigins` recebe 403 SEM cabeçalhos CORS.
  *
- * Também serve as fixtures de capítulo em `GET /fixture/novel-chapter.html` e
- * `GET /fixture/long-chapter.html`: a origem já está em `host_permissions`,
+ * Também serve as fixtures de capítulo em `GET /fixture/*.html` (ver
+ * `FIXTURE_FILES`): a origem já está em `host_permissions`,
  * então `executeScript` funciona sem gesto do usuário. `POST /api/chat`
  * "traduz" com ROT13 (ver `fakeTranslate`).
  */
@@ -22,11 +22,17 @@ export const MOCK_PORT = 11434;
 export const FIXTURE_PATH = '/fixture/novel-chapter.html';
 /** Capítulo com mais de três alturas de viewport, nav, header, aside e footer de site. */
 export const LONG_FIXTURE_PATH = '/fixture/long-chapter.html';
+/** Capítulo curto por parágrafo, com um parágrafo longo (`LONG`) logo abaixo da viewport inicial. */
+export const LONG_PARAGRAPH_FIXTURE_PATH = '/fixture/long-paragraph-chapter.html';
 
 /** Caminho servido → arquivo em `tests/fixtures`. */
 const FIXTURE_FILES: ReadonlyMap<string, string> = new Map([
   [FIXTURE_PATH, fileURLToPath(new URL('../fixtures/novel-chapter.html', import.meta.url))],
   [LONG_FIXTURE_PATH, fileURLToPath(new URL('../fixtures/long-chapter.html', import.meta.url))],
+  [
+    LONG_PARAGRAPH_FIXTURE_PATH,
+    fileURLToPath(new URL('../fixtures/long-paragraph-chapter.html', import.meta.url)),
+  ],
 ]);
 
 /** Par de idiomas que o mock espera no prompt (o mesmo gravado pelos testes). */
