@@ -31,10 +31,10 @@
  * vão para a frente de uma classe (1 ou 2), do último para o primeiro, para
  * que a frente fique em ordem de documento. O callback só reordena: nunca envia
  * nem chama `pump`; a ordem nova vale na próxima vaga. O bloco continua
- * observado enquanto resta unidade do segmento na fila OU em voo, e deixa de
- * ser observado quando o plano é aplicado (com `remaining > 0` há sempre
- * unidade na fila ou em voo: a interrompida volta à fila no mesmo passo em
- * que sai da janela). Com o grupo fora da fila (tudo em voo), a zona nova só
+ * observado enquanto resta unidade do segmento na fila OU em voo (inclusive do
+ * fallback), e deixa de ser observado quando o plano é aplicado com sucesso ou
+ * falha sem fallback (com `remaining > 0` há sempre unidade na fila ou em voo:
+ * a interrompida volta à fila no mesmo passo em que sai da janela). Com o grupo fora da fila (tudo em voo), a zona nova só
  * atualiza a classe atual registrada do segmento, sem mexer na fila: é ela
  * que decide se a unidade em voo pode ser interrompida. O observador é
  * desconectado em todo término; eventos depois disso são ignorados. Sem a
@@ -186,10 +186,9 @@ export interface JobState {
    * visíveis desde o `start` não entram (são o `firstVisibleMs`). Sair da
    * tela com o grupo ainda na fila, ou falhar, descarta a medida.
    *
-   * Exceção: com `markers_invalid`, o fallback nó a nó não é observado de novo
-   * (o bloco deixa de ser observado quando o plano original é aplicado).
-   * Sair da tela com o fallback na fila NÃO descarta a medida; ela vai até o
-   * fallback ser aplicado.
+   * Com `markers_invalid`, o fallback nó a nó continua no mesmo bloco
+   * observado: a medida segue aberta até ele ser aplicado e, como em qualquer
+   * grupo, sair da tela com ele na fila a descarta.
    */
   visibleLatency?: VisibleLatency;
 }
@@ -299,7 +298,7 @@ interface TrackedSegment {
    * nenhuma: a primeira que vier é comparada com `visible`, não com `zone`.
    */
   awaitingFirstZone: boolean;
-  /** Ainda observado: o plano não foi aplicado (há unidade na fila ou em voo). */
+  /** Ainda observado: o plano (ou o fallback) não foi aplicado nem falhou. */
   observed: boolean;
   /** `clock()` de quando foi promovido por entrar na tela; some se sair dela. */
   promotedAt?: number;
@@ -690,8 +689,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
   /** Aplica o plano completo; fallback volta à frente da classe atual do segmento. */
   const applyTask = (job: ActiveJob, task: SegmentTask): void => {
     const { segmentId } = task.plan;
-    unobserve(job, segmentId);
     const result = applier.apply(segmentId, task.results);
+    // Com fallback o plano continua (nó a nó): o bloco segue observado.
+    if (result.ok || result.fallback === undefined) unobserve(job, segmentId);
     if (result.ok) {
       const next: JobState = { ...state, done: state.done + 1 };
       if (task.priority === PRIORITY_VISIBLE_MAIN && state.firstVisibleMs === undefined) {
@@ -702,8 +702,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       if (visibleLatency !== undefined) next.visibleLatency = visibleLatency;
       emit(next);
     } else if (result.fallback !== undefined) {
-      // O fallback não é observado de novo: já sai à frente da classe atual.
-      // A medida de latência continua aberta até ele ser aplicado.
+      // O fallback sai à frente da classe atual e o bloco segue observado (sem
+      // evento inicial novo: a observação nunca parou), então a rolagem o move
+      // como a qualquer grupo. A medida de latência segue as mesmas regras.
       // A chave está livre: o plano completou, nada dele resta na fila.
       const priority = priorityOf(job, task);
       job.queue.pushFront(segmentId, itemsOf(createTask(result.fallback, task.priority)), priority);

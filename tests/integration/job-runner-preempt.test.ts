@@ -571,6 +571,91 @@ describe('createJobRunner — interrupção de unidade fora da tela', () => {
     expect(document.querySelector('i')?.textContent).toBe('AWAY');
   });
 
+  it('fallback na classe 2 que entra na tela sobe para a classe 0 e não é interrompido', () => {
+    const document = parse(
+      '<p>Top.</p><p data-pos="below">Far <i>away</i> text.</p>' +
+        '<p data-pos="below">Two.</p><p data-pos="below">Three.</p>',
+    );
+    const { runner, port, watcher, armed, pendingTimeouts } = setup(document);
+    runner.start();
+    const fake = port();
+    const seg1Block = blocks(document)[1] as Element;
+    fake.reply(upperCase);
+    fake.reply(dropMarkers); // fallback de seg-1 na frente da classe 2; node-0 sai
+    expect(labels(fake)).toEqual(['seg-0#text', 'seg-1#markers', 'seg-1#node-0']);
+    // O bloco segue observado com o fallback na fila (sem observação nova).
+    expect(watcher().unobserved).not.toContain(seg1Block);
+    expect(watcher().everObserved.filter((block) => block === seg1Block)).toHaveLength(1);
+
+    // seg-3 entra na tela: node-0 (classe 2) é interrompível, o timer arma.
+    watcher().emit(changes(document, [3, 'visible']));
+    expect(armed()).toBe(1);
+    vi.advanceTimersByTime(300);
+    // O fallback entra na tela: o grupo sobe para o fim da classe 0 e node-0
+    // deixa de ser interrompível; o timer é limpo.
+    watcher().emit(changes(document, [1, 'visible']));
+    expect(pendingTimeouts()).toBe(0);
+    watcher().emit(changes(document, [2, 'near']));
+    vi.advanceTimersByTime(10 * PREEMPT_DEBOUNCE_MS);
+    expect(fake.cancels).toEqual([]);
+    expect(armed()).toBe(1);
+
+    runToEnd(fake);
+    // Classe 0 (seg-3, depois o fallback) antes da classe 1 (seg-2).
+    expect(labels(fake)).toEqual([
+      'seg-0#text',
+      'seg-1#markers',
+      'seg-1#node-0',
+      'seg-3#text',
+      'seg-1#node-1',
+      'seg-1#node-2',
+      'seg-2#text',
+    ]);
+    expect(watcher().unobserved.filter((block) => block === seg1Block)).toHaveLength(1);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4, failed: 0 });
+    expect(document.body.textContent).toBe('TOP.FAR AWAY TEXT.TWO.THREE.');
+  });
+
+  it('fallback na classe 0 que sai da tela deixa de contar como visível esperando', () => {
+    const document = parse(
+      '<p>Far <i>away</i> text.</p><p data-pos="below">Two.</p><p data-pos="below">Three.</p>',
+    );
+    const { runner, port, watcher, armed } = setup(document);
+    runner.start();
+    const fake = port();
+    const seg0Block = blocks(document)[0] as Element;
+    // Primeira zona do observador: confirma a medição (classe 0).
+    watcher().emit(changes(document, [0, 'visible']));
+    fake.reply(dropMarkers); // fallback na frente da classe 0; node-0 sai
+    expect(labels(fake)).toEqual(['seg-0#markers', 'seg-0#node-0']);
+    // Sem evento novo do observador o fallback não é rebaixado: o bloco não
+    // foi observado de novo e não há "primeira zona" a reinterpretar.
+    expect(watcher().everObserved.filter((block) => block === seg0Block)).toHaveLength(1);
+    expect(watcher().unobserved).not.toContain(seg0Block);
+    expect(armed()).toBe(0);
+
+    watcher().emit(changes(document, [2, 'near']));
+    // Passou pelo topo: o fallback vai para o fim da classe 2 e node-0 fica
+    // interrompível, mas não resta visível esperando: nada é armado.
+    watcher().emit(changes(document, [0, 'out']));
+    vi.advanceTimersByTime(10 * PREEMPT_DEBOUNCE_MS);
+    expect(fake.cancels).toEqual([]);
+    expect(armed()).toBe(0);
+
+    runToEnd(fake);
+    expect(labels(fake)).toEqual([
+      'seg-0#markers',
+      'seg-0#node-0',
+      'seg-2#text',
+      'seg-1#text',
+      'seg-0#node-1',
+      'seg-0#node-2',
+    ]);
+    expect(watcher().unobserved.filter((block) => block === seg0Block)).toHaveLength(1);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 3, failed: 0 });
+    expect(document.body.textContent).toBe('FAR AWAY TEXT.TWO.THREE.');
+  });
+
   it('janela 2: interrompe a mais recente e a recoloca à frente da irmã restante', () => {
     const document = parse(
       '<p>Top.</p><p data-pos="below">Far <i>away</i> text.</p>' +
