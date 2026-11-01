@@ -434,6 +434,122 @@ describe('createSegmentZoneTracker', () => {
     expect(zones.get('s2')).toBe('visible');
   });
 
+  it('rolagem durante a continuação recomeça a passada com a nova posição', () => {
+    const t = setup(2000); // janela de 4000 px: 200 trechos de 20 px
+    const { block, segments } = t.makeBlock(300, 0);
+    t.tracker.track(block, segments);
+    t.tracker.setBlockZone(block, 'visible');
+    t.flush(); // passada parcial: orçamento estourado
+    expect(t.pendingFrames()).toBe(1);
+    expect(t.zones().get('s0')).toBe('visible');
+
+    t.scrollTo(1000); // primeiro trecho na tela: s50
+    let frames = 0;
+    while (t.pendingFrames() > 0 && frames < 20) {
+      t.measureText.mockClear();
+      t.flush();
+      expect(t.measureText.mock.calls.length).toBeLessThanOrEqual(MAX_ZONE_MEASURES_PER_FRAME);
+      frames++;
+    }
+    expect(t.pendingFrames()).toBe(0);
+    const zones = t.zones();
+    expect(zones.size).toBe(300);
+    for (let i = 0; i < 300; i++) {
+      const expected = i < 50 ? 'out' : i < 150 ? 'visible' : i < 250 ? 'near' : 'out';
+      expect(zones.get(`s${i}`), `s${i}`).toBe(expected);
+    }
+  });
+
+  describe('retângulos zerados no meio da busca', () => {
+    /** 20 trechos; a busca começa em mid = 10; s10 e s11 zerados, s12 é o vizinho com área. */
+    function zeroedAtMid(scrollY: number) {
+      const t = setup();
+      const { block, segments } = t.makeBlock(20, 0);
+      for (const index of [10, 11]) {
+        const node = segments[index]?.nodes[0];
+        if (node === undefined) throw new Error('sem nó');
+        t.layout.set(node, 'zero');
+      }
+      t.tracker.track(block, segments);
+      t.tracker.setBlockZone(block, 'visible');
+      t.scrollTo(scrollY);
+      t.flush();
+      const neighbor = segments[12]?.nodes[0] as Text;
+      expect(t.measureText).toHaveBeenCalledWith([neighbor]);
+      expect(t.pendingFrames()).toBe(0);
+      return t.zones();
+    }
+
+    it('vizinho com bottom <= 0 manda a busca para depois dele', () => {
+      const zones = zeroedAtMid(280); // s12: bottom = 260 - 280 < 0; primeiro na tela: s14
+      for (let i = 0; i < 14; i++) expect(zones.get(`s${i}`), `s${i}`).toBe('out');
+      expect(zones.get('s14')).toBe('visible');
+      expect(zones.get('s18')).toBe('visible');
+      expect(zones.get('s19')).toBe('near');
+    });
+
+    it('vizinho com bottom > 0 manda a busca para antes do mid', () => {
+      const zones = zeroedAtMid(100); // s12: bottom = 160 > 0; primeiro na tela: s5
+      for (let i = 0; i < 5; i++) expect(zones.get(`s${i}`), `s${i}`).toBe('out');
+      for (let i = 5; i < 10; i++) expect(zones.get(`s${i}`), `s${i}`).toBe('visible');
+      expect(zones.get('s10')).toBe('out');
+      expect(zones.get('s11')).toBe('out');
+      expect(zones.get('s12')).toBe('near');
+      expect(zones.get('s14')).toBe('near');
+      expect(zones.get('s15')).toBe('out');
+      expect(zones.size).toBe(20);
+    });
+  });
+
+  it('todos os trechos acima da tela: janela vazia, todos out', () => {
+    const t = setup();
+    const { block, segments } = t.makeBlock(10, 0);
+    t.tracker.track(block, segments);
+    t.tracker.setBlockZone(block, 'visible');
+    t.scrollTo(1000);
+    t.flush();
+    expect(t.pendingFrames()).toBe(0);
+    expect(t.measureText.mock.calls.length).toBeLessThanOrEqual(Math.ceil(Math.log2(10)));
+    const zones = t.zones();
+    expect(zones.size).toBe(10);
+    expect([...zones.values()].every((z) => z === 'out')).toBe(true);
+  });
+
+  it('todos os trechos abaixo de 2 * vh: mede só a busca e o primeiro, todos out', () => {
+    const t = setup(); // limite da caminhada: top >= 200
+    const { block, segments } = t.makeBlock(10, 500);
+    t.tracker.track(block, segments);
+    t.tracker.setBlockZone(block, 'near');
+    t.flush();
+    expect(t.pendingFrames()).toBe(0);
+    expect(t.measureText.mock.calls.length).toBeLessThanOrEqual(Math.ceil(Math.log2(10)) + 1);
+    const zones = t.zones();
+    expect(zones.size).toBe(10);
+    expect([...zones.values()].every((z) => z === 'out')).toBe(true);
+  });
+
+  it('três blocos disputando o orçamento sob rolagem: todos são medidos', () => {
+    const t = setup(800);
+    const blocks = [t.makeBlock(200, 0), t.makeBlock(200, 400), t.makeBlock(200, 900)];
+    for (const { block, segments } of blocks) {
+      t.tracker.track(block, segments);
+      t.tracker.setBlockZone(block, 'visible');
+    }
+    t.measureText.mockClear();
+    for (let frame = 1; frame <= 30; frame++) {
+      t.scrollTo(frame * 10);
+      t.measureText.mockClear();
+      t.flush();
+      expect(t.measureText.mock.calls.length).toBeLessThanOrEqual(MAX_ZONE_MEASURES_PER_FRAME);
+    }
+    const zones = t.zones();
+    // Rolagem final 300: o primeiro trecho de cada bloco na tela.
+    expect(zones.get(blocks[0]?.segments[15]?.segmentId ?? '')).toBe('visible');
+    expect(zones.get(blocks[1]?.segments[0]?.segmentId ?? '')).toBe('visible');
+    expect(zones.get(blocks[2]?.segments[0]?.segmentId ?? '')).toBe('visible');
+    expect(zones.get(blocks[0]?.segments[0]?.segmentId ?? '')).toBe('out');
+  });
+
   it('track é idempotente por segmentId', () => {
     const t = setup();
     const { block, segments } = t.makeBlock(3, 0);
