@@ -389,4 +389,37 @@ describe('parsePageCommandResponse', () => {
       }
     }
   });
+
+  it('aceita preempted inteiro seguro >= 0', () => {
+    for (const preempted of [0, 1, 7, Number.MAX_SAFE_INTEGER]) {
+      const state = { ...STATE, preempted };
+      expect(parsePageCommandResponse({ ok: true, state })).toEqual({ ok: true, state });
+    }
+  });
+
+  it('omite preempted quando ausente', () => {
+    const parsed = parsePageCommandResponse({ ok: true, state: STATE });
+    if (parsed?.ok !== true) throw new Error('esperava sucesso');
+    expect(Object.hasOwn(parsed.state, 'preempted')).toBe(false);
+  });
+
+  it('recusa preempted negativo, fracionário, inseguro ou não numérico', () => {
+    for (const preempted of [
+      -1,
+      0.5,
+      1.5,
+      Number.MAX_SAFE_INTEGER + 1,
+      Number.NaN,
+      Infinity,
+      -Infinity,
+      '1',
+      '',
+      null,
+      true,
+      {},
+      [],
+    ]) {
+      expect(parsePageCommandResponse({ ok: true, state: { ...STATE, preempted } })).toBeNull();
+    }
+  });
 });

@@ -57,6 +57,7 @@ export function toPageStateView(state: JobState): PageStateView {
     done: state.done,
     failed: state.failed,
     skipped: state.skipped,
+    preempted: state.preempted,
   };
   if (state.error !== undefined) view.error = state.error;
   if (state.firstVisibleMs !== undefined) view.firstVisibleMs = state.firstVisibleMs;

@@ -87,6 +87,11 @@ export interface PageStateView {
   done: number;
   failed: number;
   skipped: number;
+  /**
+   * Unidades fora da tela interrompidas para dar a vez a um trecho visível
+   * (inteiro >= 0). Opcional no contrato: ausente vale como desconhecido.
+   */
+  preempted?: number;
   error?: PageStateError;
   /**
    * Ms do início do job ao primeiro segmento visível aplicado (número finito
@@ -226,6 +231,7 @@ function parseStateView(input: unknown): PageStateView | null {
     done,
     failed,
     skipped,
+    preempted,
     error,
     firstVisibleMs,
     durationMs,
@@ -234,6 +240,10 @@ function parseStateView(input: unknown): PageStateView | null {
   if (!isOneOf(STATUSES, status) || !isOneOf(VIEWS, view)) return null;
   if (!isCount(total) || !isCount(done) || !isCount(failed) || !isCount(skipped)) return null;
   const state: PageStateView = { status, view, total, done, failed, skipped };
+  if (preempted !== undefined) {
+    if (!isCount(preempted)) return null;
+    state.preempted = preempted;
+  }
   if (error !== undefined) {
     if (!isOneOf(STATE_ERRORS, error)) return null;
     state.error = error;

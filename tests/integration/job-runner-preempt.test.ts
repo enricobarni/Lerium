@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { createJobRunner, PREEMPT_DEBOUNCE_MS, type JobRunner } from '../../src/content/job-runner';
+import {
+  createJobRunner,
+  PREEMPT_DEBOUNCE_MS,
+  type JobRunner,
+  type JobState,
+} from '../../src/content/job-runner';
 import type { BlockRect } from '../../src/content/segment-priority';
 import type { VisibilityChange, VisibilityZone } from '../../src/content/visibility-watcher';
 import { PAGE_JOB_PORT_NAME, type JobUnitMessage } from '../../src/shared/page-messages';
@@ -126,6 +131,8 @@ interface Harness {
   readonly pendingTimeouts: () => number;
   /** Quantos timers de interrupção foram armados. */
   readonly armed: () => number;
+  /** Estados emitidos por `onState`, em ordem. */
+  readonly states: JobState[];
 }
 
 interface SetupOptions {
@@ -137,6 +144,7 @@ function setup(document: Document, options: SetupOptions = {}): Harness {
   const ports: FakePort[] = [];
   const watchers: FakeWatcher[] = [];
   const pending = new Set<unknown>();
+  const states: JobState[] = [];
   let armed = 0;
   let nextId = 0;
   const runner = createJobRunner({
@@ -170,6 +178,7 @@ function setup(document: Document, options: SetupOptions = {}): Harness {
     viewportHeight: () => VIEWPORT_HEIGHT,
     clock: () => Number.NaN,
     maxInFlight: options.maxInFlight ?? 1,
+    onState: (state) => states.push(state),
     createVisibilityWatcher: (onChange) => {
       const fake: FakeWatcher = {
         everObserved: [],
@@ -199,6 +208,7 @@ function setup(document: Document, options: SetupOptions = {}): Harness {
     watcher: () => last(watchers, 'observador'),
     pendingTimeouts: () => pending.size,
     armed: () => armed,
+    states,
   };
 }
 
@@ -289,6 +299,38 @@ describe('createJobRunner — interrupção de unidade fora da tela', () => {
 
     runToEnd(fake);
     expect(runner.getState()).toMatchObject({ status: 'translated', done: 4, failed: 0 });
+  });
+
+  it('conta as interrupções no estado, emite ao interromper e zera no start', () => {
+    const document = parse(page(3));
+    const harness = setup(document);
+    harness.runner.start();
+    const fake = harness.port();
+    expect(harness.runner.getState().preempted).toBe(0);
+    fake.reply(upperCase);
+    harness.watcher().emit(changes(document, [3, 'visible']));
+    const before = harness.states.length;
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
+    // Um estado emitido pela interrupção, ainda traduzindo.
+    expect(harness.states.slice(before)).toEqual([
+      {
+        status: 'translating',
+        view: 'translation',
+        total: 4,
+        done: 1,
+        failed: 0,
+        skipped: 0,
+        preempted: 1,
+      },
+    ]);
+    runToEnd(fake);
+    expect(harness.runner.getState()).toMatchObject({ status: 'translated', preempted: 1 });
+    expect(harness.states.map((state) => state.preempted)).toEqual([0, 0, 1, 1, 1, 1, 1]);
+
+    harness.runner.start();
+    expect(harness.runner.getState()).toMatchObject({ status: 'translating', preempted: 0 });
+    runToEnd(harness.port());
+    expect(harness.runner.getState()).toMatchObject({ status: 'translated', preempted: 0 });
   });
 
   it('não interrompe antes de 500 ms', () => {

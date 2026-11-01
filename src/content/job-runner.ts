@@ -116,6 +116,7 @@
  * `MAX_SEGMENT_CHARS`; `done` os aplicados; `failed` os que o applier
  * recusou (depois do fallback, se houve). Um segmento com fallback conta uma
  * vez só, pelo resultado final.
+ * `preempted` conta as unidades interrompidas (cada interrupção emite estado).
  *
  * Visualização (`view`): o que o DOM mostra. Começa em `original` (nada foi
  * aplicado); `start` passa a `translation`; `showOriginal` cancela o job em
@@ -170,6 +171,11 @@ export interface JobState {
   done: number;
   failed: number;
   skipped: number;
+  /**
+   * Unidades interrompidas neste job (`job:cancel-unit` enviado com sucesso);
+   * inteiro >= 0, zerado a cada `start`.
+   */
+  preempted: number;
   /** Código do erro (`JobFatalErrorKind` ou `interrupted`); nunca texto da página. */
   error?: JobErrorKind;
   /** Ms do início ao primeiro segmento visível aplicado; ausente até acontecer. */
@@ -357,6 +363,7 @@ const IDLE: JobState = {
   done: 0,
   failed: 0,
   skipped: 0,
+  preempted: 0,
 };
 
 /** Cópia do estado, inclusive do resumo de latência (quem recebe não altera o interno). */
@@ -585,6 +592,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       return;
     }
     requeue(job, victim.task, victim.unit);
+    emit({ ...state, preempted: state.preempted + 1 });
     pump(job);
   };
 
@@ -865,6 +873,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         done: 0,
         failed: 0,
         skipped,
+        preempted: 0,
       };
       if (queue.size === 0) {
         emit(finished({ ...base, status: 'translated' }));

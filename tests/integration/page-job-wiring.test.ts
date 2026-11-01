@@ -382,6 +382,7 @@ describe('job-runner ↔ page-job, janela 2 nos dois lados', () => {
       done: 9,
       failed: 0,
       skipped: 0,
+      preempted: 0,
     });
     expect(tab.states.some((state) => state.status === 'error')).toBe(false);
     expect(tab.document.body.textContent).toBe(
@@ -565,6 +566,7 @@ describe('job-runner ↔ page-job, interrupção de unidade fora da tela', () =>
       done: 4,
       failed: 0,
       skipped: 0,
+      preempted: 1,
     });
     expect(document.body.textContent).toBe('TOP LINE.BELOW ONE.BELOW TWO.BELOW THREE.');
   });
