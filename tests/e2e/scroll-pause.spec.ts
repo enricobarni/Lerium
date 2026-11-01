@@ -18,9 +18,9 @@ import {
 
 /**
  * Reproduções da pausa de tradução observada ao rolar no Chrome real. Cada
- * teste descreve o comportamento CORRETO e hoje falha: está marcado com
+ * teste descreve o comportamento CORRETO; o que ainda falha está marcado com
  * `test.fail()` (o Playwright o reporta como "expected to fail" enquanto o
- * defeito existir). A anotação sai no commit da correção.
+ * defeito existir). A anotação sai no commit da correção (H1 já corrigido).
  *
  * Sem esperas fixas: só `expect.poll`, quadros de animação da página e
  * janelas de observação com prazo. Nada de texto da página em log ou
@@ -134,11 +134,10 @@ test.describe('pausa de tradução ao rolar', () => {
     extensionId,
     ollama,
   }) => {
-    // Documenta o defeito H1: com MAX_UNITS_IN_FLIGHT = 1 e nenhuma unidade em
-    // voo interrompida, a unidade LONG (fora da tela quando saiu) ocupa a única
-    // vaga, e os parágrafos que a rolagem tornou visíveis esperam ela terminar.
-    // Hoje nenhum pedido chega na janela; a anotação sai no commit da correção.
-    test.fail();
+    // Reproduz o defeito H1: com MAX_UNITS_IN_FLIGHT = 1, a unidade LONG (fora
+    // da tela quando saiu) ocupava a única vaga, e os parágrafos que a rolagem
+    // tornou visíveis esperavam ela terminar. Corrigido pela interrupção da
+    // unidade em voo cujo segmento está agora fora da tela (classe atual).
 
     const { driver, fixture } = await setUp(
       context,

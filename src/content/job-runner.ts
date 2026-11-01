@@ -30,9 +30,13 @@
  * Dentro de um lote, os movimentos são feitos em ordem de documento; os que
  * vão para a frente de uma classe (1 ou 2), do último para o primeiro, para
  * que a frente fique em ordem de documento. O callback só reordena: nunca envia
- * nem chama `pump`; a ordem nova vale na próxima vaga. O bloco deixa de ser
- * observado quando o grupo sai da fila (última unidade enviada) ou é
- * aplicado, e o observador é
+ * nem chama `pump`; a ordem nova vale na próxima vaga. O bloco continua
+ * observado enquanto resta unidade do segmento na fila OU em voo, e deixa de
+ * ser observado quando o plano é aplicado (com `remaining > 0` há sempre
+ * unidade na fila ou em voo: a interrompida volta à fila no mesmo passo em
+ * que sai da janela). Com o grupo fora da fila (tudo em voo), a zona nova só
+ * atualiza a classe atual registrada do segmento, sem mexer na fila: é ela
+ * que decide se a unidade em voo pode ser interrompida. O observador é
  * desconectado em todo término; eventos depois disso são ignorados. Sem a
  * dependência, a ordem é a da classificação inicial. Periféricos nunca são
  * observados e a fila é finita, então eles sempre saem (sem aging).
@@ -43,19 +47,19 @@
  * uma unidade interrompível, arma-se um timer de `PREEMPT_DEBOUNCE_MS`
  * (do mais antigo dos que esperam). Quando ele dispara e esse segmento ainda
  * está na classe 0 da fila, uma unidade é interrompida: `job:cancel-unit`,
- * sai da janela e volta à frente da classe atual do segmento, à frente das
- * unidades dele ainda não enviadas (em ordem de plano), e `pump` envia o
- * visível. Interrompível: classe do segmento no envio ≥ 2 (resto ou
- * periférico), classe atual do segmento ainda ≥ 2 e nunca interrompida antes
- * (no máximo uma vez por unidade; ao reenviar, ela termina normalmente). Entre
- * as interrompíveis, a de maior classe no envio e, no empate, a mais recente.
- * Qualquer tamanho de texto. O timer é limpo quando o segmento sai da classe
- * 0 ou da fila, quando não resta interrompível, e em todo término. Sem a
- * dependência, nada é interrompido.
- * Como a fila não remove nem insere dentro de um grupo, o grupo refeito entra
- * com uma chave nova (`keys`) e o antigo, se ainda estava na fila, fica velho
- * (`generation`): seus itens são descartados quando saem. O segmento volta a
- * ser observado se o grupo dele já tinha saído da fila.
+ * sai da janela e volta à fila, e `pump` envia o visível. Interrompível: a
+ * classe ATUAL do segmento é ≥ 2 (resto ou periférico) e a unidade nunca foi
+ * interrompida antes (no máximo uma vez por unidade; ao reenviar, ela termina
+ * normalmente). A classe do envio não conta: ela fica velha quando o leitor
+ * rola, e a regra é nunca cortar o que ele vai ler em seguida (classe 0 ou 1
+ * agora). Entre as interrompíveis, a de maior classe atual e, no empate, a
+ * enviada por último. Qualquer tamanho de texto. O timer é limpo quando o
+ * segmento sai da classe 0 ou da fila, quando não resta interrompível, e em
+ * todo término. Sem a dependência, nada é interrompido.
+ * Recolocação: se o grupo do segmento ainda está na fila, a interrompida
+ * entra à frente das irmãs não enviadas (`prependToGroup`), sem mudar a
+ * classe nem a posição do grupo; senão, volta como grupo novo (mesma chave)
+ * na frente da classe atual do segmento.
  * Resultado atrasado da interrompida (o service worker o postou antes de
  * receber o cancelamento) chega com a unidade fora da janela e é descartado.
  * Com janela 1 ele sempre chega antes do reenvio (a Port entrega em ordem e o
@@ -256,27 +260,20 @@ interface SegmentTask {
   /** Classe da classificação inicial (base do `firstVisibleMs`). */
   readonly priority: SegmentPriority;
   readonly results: Map<string, string | null>;
-  /** Unidades do plano ainda sem resultado. */
+  /** Unidades do plano ainda sem resultado (na fila ou em voo). */
   remaining: number;
-  /** Unidades na fila (não enviadas ou interrompidas), em ordem de plano. */
-  readonly unsent: TranslationUnit[];
-  /** Versão do grupo do plano na fila; itens de versão anterior são velhos. */
-  generation: number;
 }
 
 /** Item da fila; `unit` `null` = plano sem unidades, aplicado ao sair da fila. */
 interface QueuedUnit {
   readonly task: SegmentTask;
   readonly unit: TranslationUnit | null;
-  /** `task.generation` quando o item entrou na fila. */
-  readonly generation: number;
 }
 
-/** Unidade em voo: plano, unidade e classe do segmento no envio. */
+/** Unidade em voo e o plano a que pertence. */
 interface InFlightUnit {
   readonly task: SegmentTask;
   readonly unit: TranslationUnit;
-  readonly sentPriority: SegmentPriority;
 }
 
 /** Timer de interrupção armado para o segmento visível que espera há mais tempo. */
@@ -290,7 +287,10 @@ interface TrackedSegment {
   readonly block: Element;
   /** Índice na ordem de documento. */
   readonly order: number;
-  /** Classe atual na fila (muda com a rolagem); o fallback herda esta. */
+  /**
+   * Classe atual (muda com a rolagem, também com tudo em voo); é a classe do
+   * grupo quando ele está na fila. Decide a interrupção; o fallback herda esta.
+   */
   priority: SegmentPriority;
   /** Última zona informada pelo observador (começa em `out`, como ele). */
   zone: VisibilityZone;
@@ -299,7 +299,7 @@ interface TrackedSegment {
    * nenhuma: a primeira que vier é comparada com `visible`, não com `zone`.
    */
   awaitingFirstZone: boolean;
-  /** Ainda observado: o grupo do segmento está na fila. */
+  /** Ainda observado: o plano não foi aplicado (há unidade na fila ou em voo). */
   observed: boolean;
   /** `clock()` de quando foi promovido por entrar na tela; some se sair dela. */
   promotedAt?: number;
@@ -319,18 +319,14 @@ interface ActiveJob {
   readonly latencies: number[];
   /** Única fonte do que está em voo: `unitId` → unidade e plano a que pertence. */
   readonly window: InFlightWindow<InFlightUnit>;
-  /** `segmentId` → chave atual do grupo na fila; ausente = o próprio `segmentId`. */
-  readonly keys: Map<string, string>;
-  /** Contador das chaves novas de grupos refeitos por interrupção. */
-  keySeq: number;
   /**
    * Segmentos que entraram na classe 0 com o grupo na fila, do mais antigo ao
    * mais novo. Podado sob demanda: quem saiu da classe 0 ou da fila sai daqui.
    */
   readonly visibleWaiting: Set<string>;
   /**
-   * Em voo interrompíveis (classe no envio ≥ 2, nunca interrompidas), em ordem
-   * de envio. Só um índice: vale o que a janela diz.
+   * Em voo nunca interrompidas, em ordem de envio; a classe atual do segmento
+   * decide na hora. Só um índice: vale o que a janela diz.
    */
   readonly preemptible: Map<string, InFlightUnit>;
   /** `unitId`s já interrompidos uma vez: nunca de novo. */
@@ -385,33 +381,13 @@ function createTask(plan: SegmentPlan, priority: SegmentPriority): SegmentTask {
     priority,
     results: new Map(),
     remaining: plan.units.length,
-    unsent: [...plan.units],
-    generation: 0,
   };
 }
 
-/**
- * Itens do grupo do plano (as unidades ainda na fila, em ordem); plano sem
- * unidades vira um item `null`.
- */
+/** Itens do grupo do plano (as unidades, em ordem); plano sem unidades vira um item `null`. */
 function itemsOf(task: SegmentTask): QueuedUnit[] {
-  const { generation } = task;
-  if (task.plan.units.length === 0) return [{ task, unit: null, generation }];
-  return task.unsent.map((unit) => ({ task, unit, generation }));
-}
-
-/** Tira `unit` das não enviadas do plano. */
-function markSent(task: SegmentTask, unit: TranslationUnit): void {
-  const index = task.unsent.indexOf(unit);
-  if (index !== -1) task.unsent.splice(index, 1);
-}
-
-/** Devolve `unit` às não enviadas do plano, na posição dela no plano. */
-function markUnsent(task: SegmentTask, unit: TranslationUnit): void {
-  const { units } = task.plan;
-  const order = units.indexOf(unit);
-  const at = task.unsent.findIndex((other) => units.indexOf(other) > order);
-  task.unsent.splice(at === -1 ? task.unsent.length : at, 0, unit);
+  if (task.plan.units.length === 0) return [{ task, unit: null }];
+  return task.plan.units.map((unit) => ({ task, unit }));
 }
 
 /** Destino de um segmento na fila depois de uma mudança de zona. */
@@ -505,33 +481,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
   };
 
   /**
-   * Volta a observar um segmento cujo grupo tinha saído da fila. Bloco novo no
-   * observador recebe a zona inicial dele; bloco já observado por outro
-   * segmento não a reemite, então este herda a zona do irmão.
+   * Classe atual do segmento: a registrada pela rolagem (a da fila, se o
+   * grupo está nela); periférico, a da classificação.
    */
-  const observeAgain = (job: ActiveJob, segmentId: string): void => {
-    const segment = job.tracked.get(segmentId);
-    if (segment === undefined || segment.observed) return;
-    segment.observed = true;
-    const ids = job.blocks.get(segment.block);
-    if (ids === undefined) {
-      job.blocks.set(segment.block, new Set([segmentId]));
-      job.watcher?.observe(segment.block);
-      return;
-    }
-    for (const id of ids) {
-      const sibling = job.tracked.get(id);
-      if (sibling === undefined) continue;
-      segment.zone = sibling.zone;
-      break;
-    }
-    ids.add(segmentId);
-  };
-
-  /** Chave atual do grupo do segmento na fila. */
-  const keyOf = (job: ActiveJob, segmentId: string): string => job.keys.get(segmentId) ?? segmentId;
-
-  /** Classe atual do segmento (a da fila, se o grupo está nela; senão a última). */
   const priorityOf = (job: ActiveJob, task: SegmentTask): SegmentPriority =>
     job.tracked.get(task.plan.segmentId)?.priority ?? task.priority;
 
@@ -542,19 +494,25 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
   };
 
   const isWaitingVisible = (job: ActiveJob, segmentId: string): boolean =>
-    job.queue.priorityOf(keyOf(job, segmentId)) === PRIORITY_VISIBLE_MAIN;
+    job.queue.priorityOf(segmentId) === PRIORITY_VISIBLE_MAIN;
 
-  /** A interrompível de maior classe no envio; no empate, a enviada por último. */
+  /**
+   * A interrompível de maior classe atual; no empate, a enviada por último.
+   * Classe atual 0 ou 1 é o que o leitor vê ou vai ver: nunca é cortada.
+   */
   const victimOf = (job: ActiveJob): InFlightUnit | undefined => {
     let victim: InFlightUnit | undefined;
+    let victimPriority: SegmentPriority = PRIORITY_MAIN;
     for (const [unitId, inFlight] of job.preemptible) {
       if (job.window.get(unitId) !== inFlight) {
         job.preemptible.delete(unitId);
         continue;
       }
-      // O segmento subiu de classe depois do envio (rolagem): agora é leitura.
-      if (priorityOf(job, inFlight.task) < PRIORITY_MAIN) continue;
-      if (victim === undefined || inFlight.sentPriority >= victim.sentPriority) victim = inFlight;
+      const priority = priorityOf(job, inFlight.task);
+      if (priority >= victimPriority) {
+        victim = inFlight;
+        victimPriority = priority;
+      }
     }
     return victim;
   };
@@ -587,24 +545,16 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
   };
 
   /**
-   * Refaz o grupo do segmento com a unidade interrompida à frente das não
-   * enviadas, na frente da classe atual dele (regras no topo do arquivo).
+   * Devolve a interrompida à fila: à frente das irmãs se o grupo ainda está
+   * nela; senão, grupo novo na frente da classe atual (regras no topo do
+   * arquivo). A classe atual é ≥ 2 (`victimOf`): não há visível a marcar, e o
+   * bloco continua observado (o plano não foi aplicado).
    */
   const requeue = (job: ActiveJob, task: SegmentTask, unit: TranslationUnit): void => {
     const { segmentId } = task.plan;
-    let key = keyOf(job, segmentId);
-    if (job.queue.has(key)) {
-      // O grupo antigo fica na fila, velho; a chave nova é só deste job.
-      job.keySeq += 1;
-      key = `${segmentId}~${String(job.keySeq)}`;
-      job.keys.set(segmentId, key);
-    }
-    markUnsent(task, unit);
-    task.generation += 1;
-    const priority = priorityOf(job, task);
-    job.queue.pushFront(key, itemsOf(task), priority);
-    observeAgain(job, segmentId);
-    if (priority === PRIORITY_VISIBLE_MAIN) markVisibleWaiting(job, segmentId);
+    const item: QueuedUnit = { task, unit };
+    if (job.queue.prependToGroup(segmentId, [item])) return;
+    job.queue.pushFront(segmentId, [item], priorityOf(job, task));
   };
 
   /** Disparo do timer: interrompe uma unidade se o visível ainda espera. */
@@ -654,13 +604,17 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       // Antes da primeira zona do observador, vale o que a medição viu.
       const from = segment.awaitingFirstZone ? 'visible' : segment.zone;
       segment.awaitingFirstZone = false;
-      const placement = job.queue.has(keyOf(job, segmentId))
-        ? placementFor(segment.priority, from, zone)
-        : undefined;
+      const placement = placementFor(segment.priority, from, zone);
       // Saiu da tela antes de ser aplicado: a medida de latência não vale.
       if (from === 'visible' && zone !== 'visible') delete segment.promotedAt;
       segment.zone = zone;
       if (placement === undefined) continue;
+      if (!job.queue.has(segmentId)) {
+        // Tudo do segmento em voo: só a classe atual muda (ela decide a
+        // interrupção); nada se move na fila e a latência não é medida.
+        segment.priority = placement.priority;
+        continue;
+      }
       (placement.position === 'back' ? toBack : toFront).push({ segmentId, segment, placement });
     }
     // Fins em ordem de documento (FIFO entre lotes). As frentes (classes 1 e
@@ -672,7 +626,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       moves.push(toFront[index] as (typeof toFront)[number]);
     }
     for (const { segmentId, segment, placement } of moves) {
-      job.queue.move(keyOf(job, segmentId), placement.priority, placement.position);
+      job.queue.move(segmentId, placement.priority, placement.position);
       segment.priority = placement.priority;
       if (placement.priority === PRIORITY_VISIBLE_MAIN) {
         markVisibleWaiting(job, segmentId);
@@ -717,7 +671,6 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     job.preemptible.clear();
     job.preempted.clear();
     job.visibleWaiting.clear();
-    job.keys.clear();
     if (job.timer !== undefined) deps.clearInterval(job.timer);
     job.timer = undefined;
     job.port.onMessage.removeListener(job.onMessage);
@@ -751,13 +704,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     } else if (result.fallback !== undefined) {
       // O fallback não é observado de novo: já sai à frente da classe atual.
       // A medida de latência continua aberta até ele ser aplicado.
-      // A chave atual está livre: o plano completou, nada dele resta na fila.
+      // A chave está livre: o plano completou, nada dele resta na fila.
       const priority = priorityOf(job, task);
-      job.queue.pushFront(
-        keyOf(job, segmentId),
-        itemsOf(createTask(result.fallback, task.priority)),
-        priority,
-      );
+      job.queue.pushFront(segmentId, itemsOf(createTask(result.fallback, task.priority)), priority);
       if (priority === PRIORITY_VISIBLE_MAIN) markVisibleWaiting(job, segmentId);
     } else {
       const segment = job.tracked.get(segmentId);
@@ -786,16 +735,10 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         return;
       }
       const { task, unit } = item;
-      // Item de um grupo refeito por interrupção: a unidade está no grupo novo.
-      if (item.generation !== task.generation) continue;
-      // Grupo esvaziado: a posição dele não muda mais, então para de observar.
-      const { segmentId } = task.plan;
-      if (!job.queue.has(keyOf(job, segmentId))) unobserve(job, segmentId);
       if (unit === null) {
         applyTask(job, task);
         continue;
       }
-      markSent(task, unit);
       if (!isSendableUnit(unit)) {
         // O service worker descartaria em silêncio e não haveria resposta.
         settle(job, task, unit.unitId, null);
@@ -807,7 +750,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         settle(job, task, unit.unitId, null);
         continue;
       }
-      const inFlight: InFlightUnit = { task, unit, sentPriority: priorityOf(job, task) };
+      const inFlight: InFlightUnit = { task, unit };
       if (!job.window.tryAcquire(unit.unitId, inFlight)) {
         // Inalcançável: há vaga (checado acima) e o id não está em voo. Se
         // acontecer, é erro de programação; falhar o job como `interrupted`
@@ -827,9 +770,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         if (active === job) fail(job, INTERRUPTED);
         return;
       }
-      if (inFlight.sentPriority >= PRIORITY_MAIN && !job.preempted.has(unit.unitId)) {
-        job.preemptible.set(unit.unitId, inFlight);
-      }
+      if (!job.preempted.has(unit.unitId)) job.preemptible.set(unit.unitId, inFlight);
     }
   };
 
@@ -938,8 +879,6 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         watcher: undefined,
         latencies: [],
         window: createInFlightWindow<InFlightUnit>(maxInFlight),
-        keys: new Map(),
-        keySeq: 0,
         visibleWaiting,
         preemptible: new Map(),
         preempted: new Set(),

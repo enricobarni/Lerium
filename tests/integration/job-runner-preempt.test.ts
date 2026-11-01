@@ -114,6 +114,7 @@ function createFakePort(): FakePort {
 
 interface FakeWatcher {
   readonly everObserved: Element[];
+  readonly unobserved: Element[];
   emit(changes: readonly VisibilityChange[]): void;
 }
 
@@ -170,13 +171,19 @@ function setup(document: Document, options: SetupOptions = {}): Harness {
     clock: () => Number.NaN,
     maxInFlight: options.maxInFlight ?? 1,
     createVisibilityWatcher: (onChange) => {
-      const fake: FakeWatcher = { everObserved: [], emit: (changes) => onChange(changes) };
+      const fake: FakeWatcher = {
+        everObserved: [],
+        unobserved: [],
+        emit: (changes) => onChange(changes),
+      };
       watchers.push(fake);
       return {
         observe(block: Element) {
           fake.everObserved.push(block);
         },
-        unobserve() {},
+        unobserve(block: Element) {
+          fake.unobserved.push(block);
+        },
         disconnect() {},
       };
     },
@@ -333,7 +340,10 @@ describe('createJobRunner — interrupção de unidade fora da tela', () => {
     expect(runner.getState()).toMatchObject({ status: 'translated', done: 4 });
   });
 
-  it('nunca interrompe unidade enviada na classe 1', () => {
+  it('não interrompe unidade cujo segmento está na classe 1 agora', () => {
+    // Vale a classe ATUAL, não a do envio: seg-1 saiu na classe 1 e segue
+    // perto (nenhuma zona nova), então é o que o leitor lê em seguida. Se
+    // ele sair para `out`, passa a ser interrompível (teste abaixo).
     const document = parse(page(4));
     const { runner, port, watcher, armed } = setup(document);
     runner.start();
@@ -348,6 +358,102 @@ describe('createJobRunner — interrupção de unidade fora da tela', () => {
     runToEnd(fake);
     expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-4', 'seg-2', 'seg-3']);
     expect(runner.getState()).toMatchObject({ status: 'translated', done: 5 });
+  });
+
+  it('interrompe unidade enviada na classe 1 cujo segmento foi para fora da tela', () => {
+    const document = parse(page(4));
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    watcher().emit(changes(document, [1, 'near']));
+    fake.reply(upperCase); // seg-0; seg-1 sai na classe 1
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1']);
+    // Rolagem: seg-1 (todo em voo) sai da faixa perto; seg-4 entra na tela.
+    watcher().emit(changes(document, [1, 'out']));
+    watcher().emit(changes(document, [4, 'visible']));
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS - 1);
+    expect(fake.cancels).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(cancelled(fake)).toEqual(['seg-1#text']);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-4']);
+    runToEnd(fake);
+    // Grupo novo na frente da classe 2 (a atual), antes de seg-2 e seg-3.
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-4', 'seg-1', 'seg-2', 'seg-3']);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 5, failed: 0 });
+    expect(document.body.textContent).toBe('TOP LINE.LINE 1.LINE 2.LINE 3.LINE 4.');
+  });
+
+  it.each([
+    ['perto (classe 1)', 'near'],
+    ['na tela (classe 0)', 'visible'],
+  ] as const)(
+    'não interrompe unidade enviada na classe 2 cujo segmento subiu para %s',
+    (_name, zone) => {
+      const document = parse(page(3));
+      const { runner, port, watcher, armed } = setup(document);
+      runner.start();
+      const fake = port();
+      fake.reply(upperCase);
+      expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1']);
+      // seg-1 está todo em voo: a zona nova só muda a classe atual dele.
+      watcher().emit(changes(document, [1, zone]));
+      watcher().emit(changes(document, [3, 'visible']));
+      vi.advanceTimersByTime(10 * PREEMPT_DEBOUNCE_MS);
+      expect(fake.cancels).toEqual([]);
+      expect(armed()).toBe(0);
+      runToEnd(fake);
+      expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-3', 'seg-2']);
+      expect(runner.getState()).toMatchObject({ status: 'translated', done: 4, failed: 0 });
+    },
+  );
+
+  it('subiu e voltou para fora: interrompível de novo pela classe atual', () => {
+    const document = parse(page(3));
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    fake.reply(upperCase);
+    watcher().emit(changes(document, [1, 'visible']));
+    watcher().emit(changes(document, [3, 'visible']));
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
+    expect(fake.cancels).toEqual([]);
+    // seg-1 passou pelo topo (visible → out): classe 2 de novo.
+    watcher().emit(changes(document, [1, 'out']));
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
+    expect(cancelled(fake)).toEqual(['seg-1#text']);
+    runToEnd(fake);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-3', 'seg-1', 'seg-2']);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4, failed: 0 });
+  });
+
+  it('a vítima é escolhida pela classe atual: a enviada por último subiu para perto', () => {
+    const document = parse(page(4));
+    const { runner, port, watcher } = setup(document, { maxInFlight: 2 });
+    runner.start();
+    const fake = port();
+    fake.reply(upperCase); // seg-0; seg-2 sai (seg-1 e seg-2 em voo, classe 2)
+    expect(fake.inFlight.map((unit) => labelOf(unit.unitId))).toEqual(['seg-1#text', 'seg-2#text']);
+    // Sem a rolagem, o empate iria para seg-2 (enviada por último).
+    watcher().emit(changes(document, [2, 'near']));
+    watcher().emit(changes(document, [4, 'visible']));
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
+    expect(cancelled(fake)).toEqual(['seg-1#text']);
+    runToEnd(fake);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 5, failed: 0 });
+    expect(document.body.textContent).toBe('TOP LINE.LINE 1.LINE 2.LINE 3.LINE 4.');
+  });
+
+  it('empate na classe atual: interrompe a enviada por último', () => {
+    const document = parse(page(4));
+    const { runner, port, watcher } = setup(document, { maxInFlight: 2 });
+    runner.start();
+    const fake = port();
+    fake.reply(upperCase);
+    watcher().emit(changes(document, [4, 'visible']));
+    vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
+    expect(cancelled(fake)).toEqual(['seg-2#text']);
+    runToEnd(fake);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 5, failed: 0 });
   });
 
   it('nunca interrompe unidade enviada na classe 0', () => {
@@ -521,18 +627,25 @@ describe('createJobRunner — interrupção de unidade fora da tela', () => {
     expect(document.body.textContent).toBe('TOP LINE.LINE 1.LINE 2.LINE 3.');
   });
 
-  it('a interrompida volta a ser observada: entrando na tela, sobe para a classe 0', () => {
+  it('o bloco segue observado em voo e na volta à fila; sai só ao aplicar', () => {
     const { runner, document, fake, watcher } = visibleWaitingBehindMain({ maxInFlight: 1 });
-    const seg1Block = blocks(document)[1];
-    const observedBefore = watcher().everObserved.filter((block) => block === seg1Block).length;
+    const seg1Block = blocks(document)[1] as Element;
+    const timesObserved = (): number =>
+      watcher().everObserved.filter((block) => block === seg1Block).length;
+    // Em voo desde o envio de seg-1: observado uma vez só, nunca liberado.
+    expect(timesObserved()).toBe(1);
+    expect(watcher().unobserved).not.toContain(seg1Block);
     vi.advanceTimersByTime(PREEMPT_DEBOUNCE_MS);
-    expect(watcher().everObserved.filter((block) => block === seg1Block).length).toBe(
-      observedBefore + 1,
-    );
+    expect(timesObserved()).toBe(1);
+    expect(watcher().unobserved).not.toContain(seg1Block);
     // seg-2 vai para a classe 1; seg-1 entra na tela e passa à frente dele.
-    // Sem observar de novo, seg-1 ficaria na classe 2, atrás de seg-2.
     watcher().emit(changes(document, [2, 'near']));
     watcher().emit(changes(document, [1, 'visible']));
+    fake.reply(upperCase); // seg-3; seg-1 é reenviada
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-3', 'seg-1']);
+    expect(watcher().unobserved).not.toContain(seg1Block);
+    fake.reply(upperCase); // seg-1 aplicado
+    expect(watcher().unobserved.filter((block) => block === seg1Block)).toHaveLength(1);
     runToEnd(fake);
     expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-3', 'seg-1', 'seg-2']);
     expect(runner.getState()).toMatchObject({ status: 'translated', done: 4 });

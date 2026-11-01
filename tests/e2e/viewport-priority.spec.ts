@@ -205,23 +205,45 @@ test.describe('reordenação por rolagem', () => {
     expect(await driver.state(tabId)).toMatchObject({ failed: 0, skipped: 0 });
   });
 
-  test('rolar para baixo e para cima com pedidos retidos: sem rajada nem pedido extra', async ({
+  test('rolar para baixo e para cima com pedidos retidos: sem rajada, no máximo uma interrupção', async ({
     context,
     serviceWorker,
     extensionId,
     ollama,
   }) => {
+    // Antes, a rolagem só reordenava e nenhum pedido extra podia chegar. Com a
+    // interrupção pela classe atual, o h1 retido termina a rolagem acima da
+    // tela (classe atual ≥ 2) enquanto um parágrafo visível espera mais que
+    // PREEMPT_DEBOUNCE_MS: o h1 pode ser abortado uma vez e o visível sai. O
+    // teste continua protegendo "rolar não gera rajada": no máximo um pedido
+    // extra, só do que está visível no fim, e a janela nunca passa do limite.
     const { driver, fixture } = await setUp(context, serviceWorker, extensionId, ollama);
     const { page, tabId } = fixture;
     await startHeldAtTop(driver, fixture, ollama);
+    const heldText = await chatTextAt(ollama, 0);
 
     // ~30 parágrafos para baixo e de volta, um quadro por passo.
     const down = Array.from({ length: 31 }, (_, i) => i + 4);
     await scrollThrough(page, [...down, ...[...down].reverse()]);
     await frames(page);
-    expect(ollama.chatRequests()).toHaveLength(1);
-    expect(await ollama.waitForChatRequest(QUIET_WINDOW_MS)).toBe(false);
-    expect(ollama.chatRequests()).toHaveLength(1);
+    const visibleAtEnd = await visibleTexts(page);
+    expect(visibleAtEnd.length).toBeGreaterThan(0);
+    expect(visibleAtEnd).not.toContain(heldText);
+
+    // Janela de observação: chega no máximo um pedido extra (a interrupção) e,
+    // depois dele, mais nenhum.
+    if (await ollama.waitForChatRequest(QUIET_WINDOW_MS)) {
+      expect(await ollama.waitForChatRequest(QUIET_WINDOW_MS)).toBe(false);
+    }
+    const duringHold = ollama.chatRequests();
+    expect(duringHold.length).toBeLessThanOrEqual(2);
+    if (duringHold.length === 2) {
+      // O extra é de um parágrafo visível agora, e o retido (o h1) foi abortado.
+      expect(visibleAtEnd).toContain(await chatTextAt(ollama, 1));
+      await expect
+        .poll(() => ollama.chatRequests().find(({ seq }) => seq === 0)?.aborted)
+        .toBe(true);
+    }
     expect(ollama.openChats).toBe(MAX_UNITS_IN_FLIGHT);
     expect(ollama.peakOpen).toBeLessThanOrEqual(MAX_UNITS_IN_FLIGHT);
     expect(await driver.state(tabId)).toMatchObject({ status: 'translating', done: 0 });
@@ -231,11 +253,25 @@ test.describe('reordenação por rolagem', () => {
     expect(await driver.state(tabId)).toMatchObject({ failed: 0, skipped: 0 });
     expect(ollama.peakOpen).toBeGreaterThanOrEqual(1);
     expect(ollama.peakOpen).toBeLessThanOrEqual(MAX_UNITS_IN_FLIGHT);
-    // A reordenação não duplica nem perde unidades: cada texto sai uma vez só.
-    const texts = ollama.chatRequests().map(({ text }) => text);
-    expect(texts).not.toContain(null);
-    expect(new Set(texts).size).toBe(texts.length);
-    for (const chat of ollama.chatRequests()) expect(chat).toMatchObject({ aborted: false });
+
+    const chats = ollama.chatRequests();
+    // Só o h1 retido pode ter sido abortado, uma vez; nenhum outro pedido.
+    const aborted = chats.filter((chat) => chat.aborted);
+    expect(aborted.length).toBeLessThanOrEqual(1);
+    for (const chat of aborted) {
+      expect(chat.seq).toBe(0);
+      expect(normalize(chat.text ?? '')).toBe(heldText);
+    }
+    // Cada texto é traduzido exatamente uma vez (o h1 pode ter um pedido
+    // abortado a mais, seguido do reenvio): sem duplicata nem perda.
+    const completed = chats.filter((chat) => !chat.aborted).map(({ text }) => text);
+    expect(completed).not.toContain(null);
+    expect(new Set(completed).size).toBe(completed.length);
+    expect(chats.length).toBe(completed.length + aborted.length);
+    if (aborted.length === 1) {
+      expect(completed.map((text) => normalize(text!))).toContain(heldText);
+      expect(chats.filter((chat) => normalize(chat.text ?? '') === heldText)).toHaveLength(2);
+    }
   });
 
   test('rolando durante o job até o fim: periféricos traduzidos e ida e volta byte a byte', async ({

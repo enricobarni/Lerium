@@ -460,27 +460,34 @@ describe('createJobRunner — reordenação por visibilidade', () => {
     expect(runner.getState()).toMatchObject({ status: 'translated', done: 4 });
   });
 
-  it('unobserve só quando a última unidade do grupo sai da fila', () => {
+  it('unobserve só quando o plano é aplicado: o bloco segue observado com a unidade em voo', () => {
     const document = parse('<p>Top.</p><p data-pos="below">Hello<!--x--> world</p>');
     const { runner, port, watcher } = setup(document);
     runner.start();
     const fake = port();
     const [top, perNode] = blocks(document) as [Element, Element];
-    expect(watcher().unobserved).toEqual([top]);
+    // seg-0 saiu da fila, mas está em voo: a classe atual dele ainda conta.
+    expect(labels(fake)).toEqual(['seg-0#text']);
+    expect(watcher().unobserved).toEqual([]);
+    expect(watcher().observed.has(top)).toBe(true);
 
     fake.reply(upperCase);
     expect(labels(fake)).toEqual(['seg-0#text', 'seg-1#node-0']);
+    expect(watcher().unobserved).toEqual([top]);
     // Uma unidade do grupo ainda na fila: continua observado e movível.
     expect(watcher().observed.has(perNode)).toBe(true);
     fake.reply(upperCase);
     expect(labels(fake)).toEqual(['seg-0#text', 'seg-1#node-0', 'seg-1#node-1']);
+    // Grupo fora da fila, última unidade em voo: continua observado.
+    expect(watcher().unobserved).toEqual([top]);
+    expect(watcher().observed.has(perNode)).toBe(true);
+    fake.reply(upperCase);
     expect(watcher().unobserved).toEqual([top, perNode]);
     expect(watcher().observed.size).toBe(0);
-    fake.reply(upperCase);
     expect(runner.getState()).toMatchObject({ status: 'translated', done: 2 });
   });
 
-  it('bloco com dois segmentos sai só quando os dois saem da fila', () => {
+  it('bloco com dois segmentos sai só quando os dois são aplicados', () => {
     const document = parse('<p>Top.</p><p data-pos="below">First half.<br>Second half.</p>');
     const { runner, port, watcher } = setup(document);
     runner.start();
@@ -489,9 +496,28 @@ describe('createJobRunner — reordenação por visibilidade', () => {
     fake.reply(upperCase);
     expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1']);
     expect(watcher().observed.has(shared)).toBe(true);
+    fake.reply(upperCase); // seg-1 aplicado; seg-2 (mesmo bloco) em voo
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-2']);
+    expect(watcher().observed.has(shared)).toBe(true);
     fake.reply(upperCase);
     expect(watcher().observed.has(shared)).toBe(false);
     runToEnd(fake);
+  });
+
+  it('com tudo em voo, a zona só atualiza a classe: nada se move nem é medido', () => {
+    const document = parse(page(3));
+    let now = 0;
+    const { runner, port, watcher, states } = setup(document, { clock: () => (now += 10) });
+    runner.start();
+    const fake = port();
+    fake.reply(upperCase);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1']);
+    // seg-1 (em voo) entra na tela; seg-2 e seg-3 seguem na classe 2.
+    watcher().emit(changes(document, [1, 'visible']));
+    runToEnd(fake);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-2', 'seg-3']);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4 });
+    expect(states.at(-1)?.visibleLatency).toBeUndefined();
   });
 
   describe('disconnect em todo término; eventos depois são ignorados', () => {
