@@ -178,6 +178,12 @@ export function createSegmentZoneTracker(
       progress.phase = 'walk';
       progress.start = progress.lo;
       progress.next = progress.lo;
+      // Acima da janela: `out` já, sem medir. Sob rolagem contínua a passada pode
+      // nunca chegar ao fim, e esses trechos não podem esperar por ela.
+      for (let index = 0; index < progress.start; index++) {
+        const segment = list[index];
+        if (segment !== undefined) emit(segment, 'out', changes);
+      }
     }
 
     const limit = 2 * vh;
@@ -190,10 +196,11 @@ export function createSegmentZoneTracker(
       if (rect.top >= limit) break;
     }
 
-    // Fora da janela [start, next): `out` sem medir.
-    list.forEach((segment, index) => {
-      if (index < progress.start || index >= progress.next) emit(segment, 'out', changes);
-    });
+    // Abaixo da janela: `out` sem medir (os de cima já saíram ao fim da busca).
+    for (let index = progress.next; index < list.length; index++) {
+      const segment = list[index];
+      if (segment !== undefined) emit(segment, 'out', changes);
+    }
     return true;
   }
 

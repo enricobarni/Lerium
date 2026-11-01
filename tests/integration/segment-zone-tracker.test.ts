@@ -282,6 +282,36 @@ describe('createSegmentZoneTracker', () => {
     expect(t.zones().get('s2')).toBe('out');
   });
 
+  it('rolagem contínua: trechos acima da tela viram out mesmo sem a passada terminar', () => {
+    // Janela de 1600 px = 80 trechos + busca > 64 medidas: a passada não cabe num quadro.
+    const vh = 800;
+    const t = setup(vh);
+    const { block, segments } = t.makeBlock(100, 0);
+    t.tracker.track(block, segments);
+    t.tracker.setBlockZone(block, 'visible');
+    while (t.pendingFrames() > 0) t.flush();
+
+    for (let frame = 1; frame <= 100; frame++) {
+      const scrollY = frame * 10;
+      t.scrollTo(scrollY);
+      t.flush();
+      const zones = t.zones();
+      // Trecho i tem bottom = (i + 1) * 20 - scrollY; bottom <= 0 → acima da tela.
+      const firstOnScreen = Math.floor(scrollY / 20);
+      for (let i = 0; i < firstOnScreen; i++) {
+        expect(zones.get(`s${i}`), `quadro ${frame}, s${i}`).toBe('out');
+      }
+      expect(zones.get(`s${firstOnScreen}`), `quadro ${frame}`).toBe('visible');
+    }
+
+    // Ao fim (rolagem 1000): 0..49 acima, 50..89 visíveis, 90..99 perto.
+    const zones = t.zones();
+    for (let i = 0; i < 100; i++) {
+      const expected = i < 50 ? 'out' : i < 90 ? 'visible' : 'near';
+      expect(zones.get(`s${i}`), `s${i}`).toBe(expected);
+    }
+  });
+
   it('invalidate reagenda e remede o bloco', () => {
     const t = setup();
     const { block, segments } = t.makeBlock(10, 0);
