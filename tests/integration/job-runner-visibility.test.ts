@@ -298,7 +298,7 @@ describe('createJobRunner — reordenação por visibilidade', () => {
     ]);
   });
 
-  it('sair de near para out estando na classe 1 vai ao fim da classe 2', () => {
+  it('sair de near para out estando na classe 1 vai à frente da classe 2', () => {
     const document = parse(page(3));
     const { runner, port, watcher } = setup(document);
     runner.start();
@@ -306,7 +306,31 @@ describe('createJobRunner — reordenação por visibilidade', () => {
     watcher().emit(changes(document, [1, 'near'], [2, 'near']));
     watcher().emit(changes(document, [1, 'out']));
     runToEnd(fake);
-    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-2', 'seg-3', 'seg-1']);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-2', 'seg-1', 'seg-3']);
+  });
+
+  it('deslocamento de layout que tira da faixa perto por baixo mantém a ordem de documento', () => {
+    const document = parse(page(3));
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    watcher().emit(changes(document, [1, 'near']));
+    watcher().emit(changes(document, [2, 'near']));
+    // O conteúdo acima cresceu: seg-2 saiu da faixa perto pela borda de baixo.
+    watcher().emit(changes(document, [2, 'out']));
+    runToEnd(fake);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-2', 'seg-3']);
+  });
+
+  it('vários near → out no mesmo lote vão à frente da classe 2 em ordem de documento', () => {
+    const document = parse(page(5));
+    const { runner, port, watcher } = setup(document);
+    runner.start();
+    const fake = port();
+    watcher().emit(changes(document, [4, 'near'], [5, 'near']));
+    watcher().emit(changes(document, [5, 'out'], [4, 'out']));
+    runToEnd(fake);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-4', 'seg-5', 'seg-1', 'seg-2', 'seg-3']);
   });
 
   it('frente da classe 1 no mesmo lote fica em ordem de documento', () => {

@@ -19,15 +19,17 @@
  *   para baixo, a ordem de entrada é a ordem de documento);
  * - sair de `visible` para `near` (rolou para cima) → frente da classe 1;
  * - sair de `visible` para `out` (passou pelo topo) → fim da classe 2;
- * - sair de `near` para `out` estando na classe 1 → fim da classe 2.
+ * - sair de `near` para `out` estando na classe 1 → frente da classe 2 (a
+ *   faixa perto fica abaixo da viewport: sair dela sem passar por `visible`
+ *   é sair por baixo, e o bloco é o mais perto da tela dos de fora abaixo).
  * Segmento que começou na classe 0 pela medição do `start`: se a primeira
  * zona que o observador informa para ele não é `visible` (a página rolou
  * entre a medição e o primeiro callback), ela conta como saída de `visible`
  * (`near` → frente da classe 1; `out` → fim da classe 2), para que ele não
  * fique na classe 0 à frente dos que estão de fato na tela.
  * Dentro de um lote, os movimentos são feitos em ordem de documento; os que
- * vão para a frente da classe 1, do último para o primeiro, para que a
- * frente fique em ordem de documento. O callback só reordena: nunca envia
+ * vão para a frente de uma classe (1 ou 2), do último para o primeiro, para
+ * que a frente fique em ordem de documento. O callback só reordena: nunca envia
  * nem chama `pump`; a ordem nova vale na próxima vaga. O bloco deixa de ser
  * observado quando o grupo sai da fila (última unidade enviada) ou é
  * aplicado, e o observador é
@@ -344,7 +346,10 @@ function placementFor(
     return { priority: PRIORITY_NEAR, position: 'back' };
   }
   if (to === 'out' && from === 'near' && priority === PRIORITY_NEAR) {
-    return { priority: PRIORITY_MAIN, position: 'back' };
+    // A faixa perto fica abaixo da viewport: sair dela sem passar por
+    // `visible` é sair por baixo (deslocamento de layout ou rolagem para
+    // cima), e o bloco é o mais perto da tela entre os de fora abaixo dela.
+    return { priority: PRIORITY_MAIN, position: 'front' };
   }
   return undefined;
 }
@@ -434,10 +439,10 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       if (placement === undefined) continue;
       (placement.position === 'back' ? toBack : toFront).push({ segmentId, segment, placement });
     }
-    // Fins em ordem de documento (FIFO entre lotes). A frente da classe 1 é
-    // preenchida do último para o primeiro do lote, para ficar em ordem de
-    // documento; entre lotes ela é LIFO de propósito: rolando para cima, o
-    // bloco que saiu da tela por último é o mais perto dela.
+    // Fins em ordem de documento (FIFO entre lotes). As frentes (classes 1 e
+    // 2) são preenchidas do último para o primeiro do lote, para ficar em
+    // ordem de documento; entre lotes elas são LIFO de propósito: o bloco que
+    // saiu da zona por último é o mais perto dela.
     const moves = [...toBack];
     for (let index = toFront.length - 1; index >= 0; index -= 1) {
       moves.push(toFront[index] as (typeof toFront)[number]);
