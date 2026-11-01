@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import {
   createVisibilityWatcher,
   NEAR_ROOT_MARGIN,
+  type ObservedEntry,
   type ObserverFactory,
   type VisibilityChange,
   type VisibilityWatcher,
@@ -10,12 +11,16 @@ import {
 type Callback = Parameters<ObserverFactory>[0];
 type Options = Parameters<ObserverFactory>[1];
 
+/** Geometria opcional que a entrada real já traz pré-calculada. */
+type Geometry = Pick<ObservedEntry, 'boundingClientRect' | 'rootBounds'>;
+type FakeEntry = readonly [Element, boolean] | readonly [Element, boolean, Geometry];
+
 interface FakeObserver {
   readonly callback: Callback;
   readonly options: Options;
   readonly observed: Set<Element>;
   readonly calls: { observe: number; unobserve: number; disconnect: number };
-  emit(entries: readonly [Element, boolean][]): void;
+  emit(entries: readonly FakeEntry[]): void;
 }
 
 function createFakeFactory(): { factory: ObserverFactory; observers: FakeObserver[] } {
@@ -29,7 +34,13 @@ function createFakeFactory(): { factory: ObserverFactory; observers: FakeObserve
       observed,
       calls,
       emit: (entries) =>
-        callback(entries.map(([target, isIntersecting]) => ({ target, isIntersecting }))),
+        callback(
+          entries.map(([target, isIntersecting, geometry]) => ({
+            target,
+            isIntersecting,
+            ...geometry,
+          })),
+        ),
     });
     return {
       observe(el) {
@@ -91,6 +102,12 @@ afterEach(() => {
 const zones = (batch: VisibilityChange[] | undefined): [Element, string][] =>
   (batch ?? []).map((change) => [change.block, change.zone]);
 
+/** Geometria de um bloco cuja borda de baixo está em `bottom`, com o topo da raiz em `rootTop`. */
+const at = (bottom: number, rootTop: number | null = 0): Geometry => ({
+  boundingClientRect: { bottom },
+  rootBounds: rootTop === null ? null : { top: rootTop },
+});
+
 describe('createVisibilityWatcher', () => {
   it('cria dois observadores com threshold 0 e as margens corretas', () => {
     expect(NEAR_ROOT_MARGIN).toBe('0px 0px 100% 0px');
@@ -105,36 +122,68 @@ describe('createVisibilityWatcher', () => {
     expect(batches).toEqual([]);
   });
 
-  it('entrar na faixa próxima emite near', () => {
-    watcher.observe(a);
-    nearObs.emit([[a, true]]);
-    expect(batches).toHaveLength(1);
-    expect(zones(batches[0])).toEqual([[a, 'near']]);
+  describe('zona inicial', () => {
+    it('só é emitida quando os dois observadores entregaram a primeira entrada', () => {
+      watcher.observe(a);
+      nearObs.emit([[a, true]]);
+      expect(batches).toEqual([]);
+      visibleObs.emit([[a, false]]);
+      expect(batches.map(zones)).toEqual([[[a, 'near']]]);
+    });
+
+    it('near antes de visible emite um único visible, sem near transitório', () => {
+      watcher.observe(a);
+      nearObs.emit([[a, true]]);
+      visibleObs.emit([[a, true]]);
+      expect(batches.map(zones)).toEqual([[[a, 'visible']]]);
+    });
+
+    it('visible antes de near emite um único visible quando near chega', () => {
+      watcher.observe(a);
+      visibleObs.emit([[a, true]]);
+      expect(batches).toEqual([]);
+      nearObs.emit([[a, true]]);
+      expect(batches.map(zones)).toEqual([[[a, 'visible']]]);
+    });
+
+    it('primeiras entradas sem interseção emitem out', () => {
+      watcher.observe(a);
+      visibleObs.emit([[a, false]]);
+      nearObs.emit([[a, false]]);
+      expect(batches.map(zones)).toEqual([[[a, 'out']]]);
+    });
+
+    it('unobserve seguido de observe exige as duas entradas iniciais de novo', () => {
+      watcher.observe(a);
+      visibleObs.emit([[a, false]]);
+      nearObs.emit([[a, true]]);
+      expect(batches).toHaveLength(1);
+      watcher.unobserve(a);
+      watcher.observe(a);
+      visibleObs.emit([[a, true]]);
+      expect(batches).toHaveLength(1);
+      nearObs.emit([[a, true]]);
+      expect(batches).toHaveLength(2);
+      expect(zones(batches[1])).toEqual([[a, 'visible']]);
+    });
   });
 
   it('entrar na viewport emite visible', () => {
     watcher.observe(a);
-    nearObs.emit([[a, true]]);
-    visibleObs.emit([[a, true]]);
-    expect(batches).toHaveLength(2);
-    expect(zones(batches[1])).toEqual([[a, 'visible']]);
-  });
-
-  it('visible vence mesmo antes de a faixa próxima notificar', () => {
-    watcher.observe(a);
-    visibleObs.emit([[a, true]]);
-    expect(zones(batches[0])).toEqual([[a, 'visible']]);
-    nearObs.emit([[a, true]]);
-    expect(batches).toHaveLength(1);
-  });
-
-  it('sair da viewport ficando na faixa próxima emite near', () => {
-    watcher.observe(a);
-    nearObs.emit([[a, true]]);
-    visibleObs.emit([[a, true]]);
     visibleObs.emit([[a, false]]);
-    expect(batches).toHaveLength(3);
-    expect(zones(batches[2])).toEqual([[a, 'near']]);
+    nearObs.emit([[a, true]]);
+    visibleObs.emit([[a, true]]);
+    expect(batches.map(zones)).toEqual([[[a, 'near']], [[a, 'visible']]]);
+  });
+
+  it('sair da viewport por baixo ficando na faixa próxima emite near', () => {
+    watcher.observe(a);
+    nearObs.emit([[a, true]]);
+    visibleObs.emit([[a, true]]);
+    // Borda de baixo abaixo do topo da raiz: o bloco desceu, não subiu.
+    visibleObs.emit([[a, false, at(900)]]);
+    expect(batches).toHaveLength(2);
+    expect(zones(batches[1])).toEqual([[a, 'near']]);
   });
 
   it('sair de tudo emite out', () => {
@@ -143,31 +192,70 @@ describe('createVisibilityWatcher', () => {
     visibleObs.emit([[a, true]]);
     visibleObs.emit([[a, false]]);
     nearObs.emit([[a, false]]);
-    expect(batches).toHaveLength(4);
-    expect(zones(batches[3])).toEqual([[a, 'out']]);
+    expect(batches.map(zones)).toEqual([[[a, 'visible']], [[a, 'near']], [[a, 'out']]]);
+  });
+
+  describe('bloco acima da viewport', () => {
+    it('sair pelo topo vai direto para out, sem passar por near', () => {
+      watcher.observe(a);
+      nearObs.emit([[a, true]]);
+      visibleObs.emit([[a, true]]);
+      visibleObs.emit([[a, false, at(-5)]]);
+      expect(batches.map(zones)).toEqual([[[a, 'visible']], [[a, 'out']]]);
+      // A entrada atrasada da faixa próxima não muda nada.
+      nearObs.emit([[a, false, at(-5)]]);
+      expect(batches).toHaveLength(2);
+    });
+
+    it('borda de baixo exatamente no topo da raiz conta como acima', () => {
+      watcher.observe(a);
+      nearObs.emit([[a, true]]);
+      visibleObs.emit([[a, true]]);
+      visibleObs.emit([[a, false, at(40, 40)]]);
+      expect(zones(batches[1])).toEqual([[a, 'out']]);
+    });
+
+    it('sem rootBounds, o topo da raiz é 0', () => {
+      watcher.observe(a);
+      nearObs.emit([[a, true]]);
+      visibleObs.emit([[a, true]]);
+      visibleObs.emit([[a, false, at(0, null)]]);
+      expect(zones(batches[1])).toEqual([[a, 'out']]);
+    });
+
+    it('entrada que ainda intersecta não é tratada como acima', () => {
+      watcher.observe(a);
+      nearObs.emit([[a, true]]);
+      visibleObs.emit([[a, true, at(-5)]]);
+      expect(batches.map(zones)).toEqual([[[a, 'visible']]]);
+    });
   });
 
   it('não emite quando a zona não muda', () => {
     watcher.observe(a);
-    // Entradas iniciais sem interseção: o bloco já começa em out.
     visibleObs.emit([[a, false]]);
     nearObs.emit([[a, false]]);
-    expect(batches).toEqual([]);
+    expect(batches).toHaveLength(1); // zona inicial out
     nearObs.emit([[a, true]]);
     nearObs.emit([[a, true]]);
-    expect(batches).toHaveLength(1);
+    expect(batches).toHaveLength(2);
     // Mudança que se desfaz dentro do mesmo lote não emite.
     nearObs.emit([
       [a, false],
       [a, true],
     ]);
-    expect(batches).toHaveLength(1);
+    expect(batches).toHaveLength(2);
   });
 
   it('emite um lote com vários blocos na ordem das entradas, só com os que mudaram', () => {
     watcher.observe(a);
     watcher.observe(b);
     watcher.observe(c);
+    visibleObs.emit([
+      [a, false],
+      [b, false],
+      [c, false],
+    ]);
     nearObs.emit([[b, true]]);
     nearObs.emit([
       [c, true],
@@ -175,6 +263,7 @@ describe('createVisibilityWatcher', () => {
       [a, true],
     ]);
     expect(batches).toHaveLength(2);
+    expect(zones(batches[0])).toEqual([[b, 'near']]);
     expect(zones(batches[1])).toEqual([
       [c, 'near'],
       [a, 'near'],
@@ -184,12 +273,24 @@ describe('createVisibilityWatcher', () => {
   it('callbacks dos dois observadores no mesmo quadro emitem lotes separados', () => {
     watcher.observe(a);
     watcher.observe(b);
+    visibleObs.emit([
+      [a, false],
+      [b, false],
+    ]);
+    nearObs.emit([
+      [a, false],
+      [b, false],
+    ]);
     nearObs.emit([
       [a, true],
       [b, true],
     ]);
     visibleObs.emit([[a, true]]);
     expect(batches.map(zones)).toEqual([
+      [
+        [a, 'out'],
+        [b, 'out'],
+      ],
       [
         [a, 'near'],
         [b, 'near'],
@@ -200,11 +301,13 @@ describe('createVisibilityWatcher', () => {
 
   it('ignora entradas de blocos não observados', () => {
     nearObs.emit([[a, true]]);
+    visibleObs.emit([[a, true]]);
     expect(batches).toEqual([]);
   });
 
   it('observe é idempotente e não reinicia o estado', () => {
     watcher.observe(a);
+    visibleObs.emit([[a, false]]);
     nearObs.emit([[a, true]]);
     watcher.observe(a);
     expect(visibleObs.calls.observe).toBe(1);
@@ -215,6 +318,7 @@ describe('createVisibilityWatcher', () => {
 
   it('unobserve remove dos dois observadores e esquece o estado', () => {
     watcher.observe(a);
+    visibleObs.emit([[a, false]]);
     nearObs.emit([[a, true]]);
     watcher.unobserve(a);
     expect(visibleObs.observed.has(a)).toBe(false);
@@ -222,9 +326,11 @@ describe('createVisibilityWatcher', () => {
     // Entrada atrasada do bloco removido é ignorada.
     visibleObs.emit([[a, true]]);
     expect(batches).toHaveLength(1);
-    // Observar de novo recomeça em out.
+    // Observar de novo recomeça sem zona: só emite com as duas entradas iniciais.
     watcher.observe(a);
     nearObs.emit([[a, true]]);
+    expect(batches).toHaveLength(1);
+    visibleObs.emit([[a, false]]);
     expect(batches).toHaveLength(2);
     expect(zones(batches[1])).toEqual([[a, 'near']]);
     // unobserve de bloco desconhecido não toca nos observadores.

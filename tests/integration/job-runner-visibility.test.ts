@@ -648,6 +648,21 @@ describe('createJobRunner — latência do trecho que entrou na tela', () => {
     );
   });
 
+  it('segmento visível desde o start com primeira zona visible não entra na medida', () => {
+    const clock = fakeClock();
+    const document = parse('<p>One.</p><p>Two.</p><p>Three.</p><p data-pos="below">Four.</p>');
+    const { runner, port, watcher } = setup(document, { clock: clock.read });
+    runner.start();
+    const fake = port();
+    // Zona inicial do observador: confirma o que a medição viu.
+    watcher().emit(changes(document, [1, 'visible'], [2, 'visible'], [3, 'out']));
+    clock.advance(40);
+    runToEnd(fake);
+    expect(segmentsSent(fake)).toEqual(['seg-0', 'seg-1', 'seg-2', 'seg-3']);
+    expect(runner.getState()).toMatchObject({ status: 'translated', done: 4 });
+    expect(Object.hasOwn(runner.getState(), 'visibleLatency')).toBe(false);
+  });
+
   it('mediana de quantidade par é a média dos dois do meio', () => {
     const clock = fakeClock();
     const document = parse(page(2));
