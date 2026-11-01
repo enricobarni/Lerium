@@ -1,4 +1,5 @@
 import type { Page, Worker } from '@playwright/test';
+import { PREEMPT_DEBOUNCE_MS } from '../../src/content/job-runner';
 import { MAX_UNITS_IN_FLIGHT } from '../../src/shared/page-messages';
 import { EXTENSION_ORIGIN, expect, test } from './fixtures';
 import { fakeTranslate, type MockOllama } from './mock-ollama';
@@ -12,10 +13,11 @@ import {
 } from './page-driver';
 
 /**
- * Reordenação da fila pela rolagem (Fase 5, ADR-015) de ponta a ponta, com a
+ * Reordenação da fila pela rolagem (Fase 5, ADR-016) de ponta a ponta, com a
  * fixture longa: com o primeiro `POST /api/chat` retido no mock (e
- * `MAX_UNITS_IN_FLIGHT` vagas), a rolagem só reordena a fila; o pedido
- * seguinte, depois da liberação, mostra a ordem nova. Sem esperas fixas: só
+ * `MAX_UNITS_IN_FLIGHT` vagas), a rolagem reordena a fila e, se um trecho
+ * fora da tela estiver em voo enquanto um visível espera, ele é interrompido
+ * uma vez (ADR-017); o pedido seguinte mostra a ordem nova. Sem esperas fixas: só
  * `expect.poll`, quadros de animação da página e janelas de observação com
  * prazo.
  */
@@ -205,37 +207,75 @@ test.describe('reordenação por rolagem', () => {
     expect(await driver.state(tabId)).toMatchObject({ failed: 0, skipped: 0 });
   });
 
-  test('rolar para baixo e para cima com pedidos retidos: sem rajada nem pedido extra', async ({
+  test('rolar para baixo e para cima com pedidos retidos: sem rajada, exatamente uma interrupção', async ({
     context,
     serviceWorker,
     extensionId,
     ollama,
   }) => {
+    // A rolagem só reordena; o único pedido extra vem da interrupção pela
+    // classe atual: o h1 retido termina a rolagem acima da tela (classe 2)
+    // enquanto parágrafos visíveis esperam mais que PREEMPT_DEBOUNCE_MS, então
+    // ele é abortado uma vez e um visível sai. O teste continua protegendo
+    // "rolar não gera rajada": exatamente um pedido extra, só do que está
+    // visível no fim, e a janela nunca passa do limite.
     const { driver, fixture } = await setUp(context, serviceWorker, extensionId, ollama);
     const { page, tabId } = fixture;
     await startHeldAtTop(driver, fixture, ollama);
+    const heldText = await chatTextAt(ollama, 0);
 
     // ~30 parágrafos para baixo e de volta, um quadro por passo.
     const down = Array.from({ length: 31 }, (_, i) => i + 4);
     await scrollThrough(page, [...down, ...[...down].reverse()]);
     await frames(page);
-    expect(ollama.chatRequests()).toHaveLength(1);
+    const visibleAtEnd = await visibleTexts(page);
+    expect(visibleAtEnd.length).toBeGreaterThan(0);
+    expect(visibleAtEnd).not.toContain(heldText);
+
+    // A interrupção vem depois do debounce, com prazo: o h1 é abortado e um
+    // visível chega como segundo pedido.
+    await expect
+      .poll(() => ollama.chatRequests().length, { timeout: 10 * PREEMPT_DEBOUNCE_MS })
+      .toBe(2);
+    await expect
+      .poll(() => ollama.chatRequests().find(({ seq }) => seq === 0)?.aborted, {
+        timeout: 10_000,
+      })
+      .toBe(true);
+    expect(visibleAtEnd).toContain(await chatTextAt(ollama, 1));
+    // Depois da interrupção, nenhum outro pedido.
     expect(await ollama.waitForChatRequest(QUIET_WINDOW_MS)).toBe(false);
-    expect(ollama.chatRequests()).toHaveLength(1);
+    const duringHold = ollama.chatRequests();
+    expect(duringHold).toHaveLength(2);
+    expect(duringHold.filter((chat) => chat.aborted).map(({ seq }) => seq)).toEqual([0]);
     expect(ollama.openChats).toBe(MAX_UNITS_IN_FLIGHT);
     expect(ollama.peakOpen).toBeLessThanOrEqual(MAX_UNITS_IN_FLIGHT);
-    expect(await driver.state(tabId)).toMatchObject({ status: 'translating', done: 0 });
+    expect(await driver.state(tabId)).toMatchObject({
+      status: 'translating',
+      done: 0,
+      preempted: 1,
+    });
 
     ollama.releaseChat();
     await expect.poll(statusOf(driver, tabId), { timeout: 20_000 }).toBe('translated');
-    expect(await driver.state(tabId)).toMatchObject({ failed: 0, skipped: 0 });
+    expect(await driver.state(tabId)).toMatchObject({ failed: 0, skipped: 0, preempted: 1 });
     expect(ollama.peakOpen).toBeGreaterThanOrEqual(1);
     expect(ollama.peakOpen).toBeLessThanOrEqual(MAX_UNITS_IN_FLIGHT);
-    // A reordenação não duplica nem perde unidades: cada texto sai uma vez só.
-    const texts = ollama.chatRequests().map(({ text }) => text);
-    expect(texts).not.toContain(null);
-    expect(new Set(texts).size).toBe(texts.length);
-    for (const chat of ollama.chatRequests()) expect(chat).toMatchObject({ aborted: false });
+
+    const chats = ollama.chatRequests();
+    // Só o h1 retido foi abortado, exatamente uma vez; nenhum outro pedido.
+    const aborted = chats.filter((chat) => chat.aborted);
+    expect(aborted).toHaveLength(1);
+    expect(aborted[0]?.seq).toBe(0);
+    expect(normalize(aborted[0]?.text ?? '')).toBe(heldText);
+    // Cada texto é traduzido exatamente uma vez (o h1 tem um pedido abortado a
+    // mais, seguido do reenvio): sem duplicata nem perda.
+    const completed = chats.filter((chat) => !chat.aborted).map(({ text }) => text);
+    expect(completed).not.toContain(null);
+    expect(new Set(completed).size).toBe(completed.length);
+    expect(chats.length).toBe(completed.length + 1);
+    expect(completed.map((text) => normalize(text!))).toContain(heldText);
+    expect(chats.filter((chat) => normalize(chat.text ?? '') === heldText)).toHaveLength(2);
   });
 
   test('rolando durante o job até o fim: periféricos traduzidos e ida e volta byte a byte', async ({

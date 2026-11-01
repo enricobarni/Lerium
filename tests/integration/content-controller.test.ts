@@ -156,6 +156,7 @@ const IDLE_STATE: JobState = {
   done: 0,
   failed: 0,
   skipped: 0,
+  preempted: 0,
 };
 
 const upperCase = (text: string): string => text.toUpperCase();
@@ -354,6 +355,7 @@ describe('createContentController — comandos', () => {
         done: 0,
         failed: 0,
         skipped: 0,
+        preempted: 0,
       },
     });
     expect(parsePageCommandResponse(started)).toEqual(started);
@@ -369,6 +371,7 @@ describe('createContentController — comandos', () => {
         done: 2,
         failed: 0,
         skipped: 0,
+        preempted: 0,
       },
     });
 
@@ -407,6 +410,7 @@ describe('createContentController — comandos', () => {
     expect(Object.keys(state ?? {}).sort()).toEqual([
       'done',
       'failed',
+      'preempted',
       'skipped',
       'status',
       'total',
@@ -463,6 +467,19 @@ describe('toPageStateView', () => {
     const view = toPageStateView(IDLE_STATE);
     expect(Object.hasOwn(view, 'firstVisibleMs')).toBe(false);
     expect(Object.hasOwn(view, 'durationMs')).toBe(false);
+  });
+
+  it('copia preempted, que atravessa o parser do popup', () => {
+    const state: JobState = {
+      ...IDLE_STATE,
+      status: 'translated',
+      view: 'translation',
+      preempted: 3,
+    };
+    const view = toPageStateView(state);
+    expect(view).toEqual(state);
+    expect(parsePageCommandResponse({ ok: true, state: view })).toEqual({ ok: true, state });
+    expect(toPageStateView(IDLE_STATE).preempted).toBe(0);
   });
 
   it('copia visibleLatency válido em objeto novo e descarta o inválido', () => {
@@ -522,7 +539,12 @@ describe('toPageStateView', () => {
     );
     expect(response).toEqual({
       ok: true,
-      state: expect.objectContaining({ status: 'translated', firstVisibleMs: 40, durationMs: 40 }),
+      state: expect.objectContaining({
+        status: 'translated',
+        firstVisibleMs: 40,
+        durationMs: 40,
+        preempted: 0,
+      }),
     });
   });
 });

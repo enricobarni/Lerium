@@ -298,6 +298,7 @@ describe('createJobRunner — fluxo completo', () => {
       done: 0,
       failed: 0,
       skipped: 0,
+      preempted: 0,
     });
     const fake = port();
     expect(fake.inFlight).toHaveLength(1);
@@ -322,6 +323,7 @@ describe('createJobRunner — fluxo completo', () => {
       done: 3,
       failed: 0,
       skipped: 0,
+      preempted: 0,
     });
     expect(fake.disconnected()).toBe(true);
     expect(fake.listenerCount()).toBe(0);
@@ -350,7 +352,15 @@ describe('createJobRunner — fluxo completo', () => {
     runner.start();
     port().runToEnd(upperCase);
     const keys = new Set(states.flatMap((state) => Object.keys(state)));
-    expect([...keys].sort()).toEqual(['done', 'failed', 'skipped', 'status', 'total', 'view']);
+    expect([...keys].sort()).toEqual([
+      'done',
+      'failed',
+      'preempted',
+      'skipped',
+      'status',
+      'total',
+      'view',
+    ]);
     expect(JSON.stringify(states)).not.toMatch(/hello|plain|world/i);
   });
 
@@ -366,6 +376,7 @@ describe('createJobRunner — fluxo completo', () => {
       done: 0,
       failed: 0,
       skipped: 0,
+      preempted: 0,
     });
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -465,6 +476,7 @@ describe('createJobRunner — validação de mensagens', () => {
       done: 3,
       failed: 0,
       skipped: 0,
+      preempted: 0,
     });
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -494,6 +506,7 @@ describe('createJobRunner — falhas de unidade e fallback', () => {
       done: 2,
       failed: 0,
       skipped: 0,
+      preempted: 0,
     });
     expect(fake.maxInFlight()).toBe(1);
   });
@@ -518,6 +531,7 @@ describe('createJobRunner — falhas de unidade e fallback', () => {
       done: 1,
       failed: 2,
       skipped: 0,
+      preempted: 0,
     });
     expect(unitsOf(fake)).toHaveLength(4);
   });
@@ -558,6 +572,7 @@ describe('createJobRunner — falhas de unidade e fallback', () => {
       done: 1,
       failed: 1,
       skipped: 0,
+      preempted: 0,
     });
   });
 
@@ -581,6 +596,7 @@ describe('createJobRunner — falhas de unidade e fallback', () => {
       done: 0,
       failed: 1,
       skipped: 0,
+      preempted: 0,
     });
     expect(fake.disconnected()).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
@@ -624,6 +640,7 @@ describe('createJobRunner — falhas de unidade e fallback', () => {
       done: 0,
       failed: 0,
       skipped: 1,
+      preempted: 0,
     });
     fake.runToEnd(upperCase);
     expect(unitsOf(fake)).toHaveLength(1);
@@ -635,6 +652,7 @@ describe('createJobRunner — falhas de unidade e fallback', () => {
       done: 1,
       failed: 0,
       skipped: 1,
+      preempted: 0,
     });
   });
 });
@@ -663,6 +681,7 @@ describe('createJobRunner — término anormal', () => {
       done: 1,
       failed: 0,
       skipped: 0,
+      preempted: 0,
     });
     expect(fake.disconnected()).toBe(true);
     expect(fake.listenerCount()).toBe(0);
@@ -718,6 +737,7 @@ describe('createJobRunner — término anormal', () => {
       done: 1,
       failed: 0,
       skipped: 0,
+      preempted: 0,
     });
     expect(vi.getTimerCount()).toBe(0);
 
@@ -782,6 +802,7 @@ describe('createJobRunner — visualização', () => {
       done: 0,
       failed: 0,
       skipped: 0,
+      preempted: 0,
     });
     runner.start();
     expect(states[0]).toMatchObject({ status: 'translating', view: 'translation' });
@@ -816,7 +837,15 @@ describe('createJobRunner — visualização', () => {
     const count = states.length;
     runner.showOriginal();
     expect(states.slice(count)).toEqual([
-      { status: 'cancelled', view: 'original', total: 3, done: 1, failed: 0, skipped: 0 },
+      {
+        status: 'cancelled',
+        view: 'original',
+        total: 3,
+        done: 1,
+        failed: 0,
+        skipped: 0,
+        preempted: 0,
+      },
     ]);
   });
 
@@ -966,6 +995,7 @@ describe('createJobRunner — sequências reais do service worker', () => {
       done: 1,
       failed: 1,
       skipped: 0,
+      preempted: 0,
     });
     expect(states).toHaveLength(count);
     expect(unitsOf(fake)).toHaveLength(3);
@@ -996,6 +1026,7 @@ describe('createJobRunner — sequências reais do service worker', () => {
       done: 0,
       failed: 0,
       skipped: 0,
+      preempted: 0,
     });
     expect(serialize(document)).toBe(before);
     expect(fake.disconnected()).toBe(true);
@@ -1038,6 +1069,7 @@ describe('createJobRunner — sequências reais do service worker', () => {
       done: 0,
       failed: 0,
       skipped: 0,
+      preempted: 0,
     });
     current.runToEnd(upperCase);
     expect(bodyHtml(document)).not.toContain('TARDIO');
@@ -1061,6 +1093,7 @@ describe('createJobRunner — sequências reais do service worker', () => {
       done: 1,
       failed: 0,
       skipped: 0,
+      preempted: 0,
     });
     expect(states[states.length - 1]?.status).toBe('cancelled');
     expect(unitsOf(fake)).toHaveLength(1);
@@ -1109,6 +1142,7 @@ describe('createJobRunner — sequências reais do service worker', () => {
       done: 0,
       failed: 0,
       skipped: 0,
+      preempted: 0,
     });
 
     current.runToEnd(upperCase);
@@ -1127,6 +1161,7 @@ describe('createJobRunner — sequências reais do service worker', () => {
       done: 3,
       failed: 0,
       skipped: 0,
+      preempted: 0,
     });
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -1278,6 +1313,7 @@ describe('createJobRunner — escalonador', () => {
       done: 3,
       failed: 0,
       skipped: 0,
+      preempted: 0,
     });
     expect(fake.disconnected()).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
@@ -1353,6 +1389,7 @@ describe('createJobRunner — escalonador', () => {
       done: 0,
       failed: 0,
       skipped: 0,
+      preempted: 0,
     });
     expect(fake.disconnected()).toBe(true);
     expect(fake.listenerCount()).toBe(0);

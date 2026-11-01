@@ -880,6 +880,162 @@ describe('createPageJobHandler — várias unidades e semáforo global', () => {
     });
   });
 
+  describe('job:cancel-unit', () => {
+    const cancel = (unitId: string, jobId = JOB_ID) => ({
+      type: 'job:cancel-unit',
+      jobId,
+      unitId,
+    });
+
+    it('aborta a unidade em voo, não posta nada dela e libera a port na hora', async () => {
+      let clock = 0;
+      const gate = createTranslationGate(1);
+      const { port, calls } = setup({ gate, now: () => clock });
+      port.emit(unit('a'));
+      await flush();
+      expect(calls).toHaveLength(1);
+      const { signal, onToken } = calls[0]!.options!;
+      expect(signal!.aborted).toBe(false);
+
+      port.emit(cancel('a'));
+      expect(signal!.aborted).toBe(true);
+      // Vaga da port livre de forma síncrona: a próxima não recebe busy.
+      port.emit(unit('b'));
+      expect(port.sent).toEqual([]);
+      await flush();
+      // A vaga global segue com "a" até o provedor retornar: "b" espera.
+      expect(calls).toHaveLength(1);
+      expect(gate.inUse).toBe(1);
+      expect(gate.waiting).toBe(1);
+
+      // Progresso tardio da cancelada não é postado.
+      clock = PROGRESS_INTERVAL_MS * 2;
+      onToken!('abc');
+      expect(port.sent).toEqual([]);
+
+      // O provedor da abortada retorna: nenhum resultado dela; "b" entra.
+      calls[0]!.resolve(ok('A'));
+      await flush();
+      expect(port.sent).toEqual([]);
+      expect(calls).toHaveLength(2);
+      expect(calls[1]!.input.text).toBe(UNIT_TEXT);
+      expect(gate.inUse).toBe(1);
+      expect(gate.waiting).toBe(0);
+
+      calls[1]!.resolve(ok('B'));
+      await flush();
+      expect(port.sent).toEqual([
+        { type: 'job:result', jobId: JOB_ID, unitId: 'b', ok: true, text: 'B' },
+      ]);
+      expect(gate.inUse).toBe(0);
+      expect(port.disconnect).not.toHaveBeenCalled();
+    });
+
+    it('resultado de erro da cancelada também é descartado', async () => {
+      const gate = createTranslationGate(1);
+      const { port, calls } = setup({ gate });
+      port.emit(unit('a'));
+      await flush();
+      port.emit(cancel('a'));
+      // Mesmo um erro fatal da abortada não derruba o job.
+      calls[0]!.resolve({ ok: false, error: 'network', retryable: true });
+      await flush();
+      expect(port.sent).toEqual([]);
+      expect(port.disconnect).not.toHaveBeenCalled();
+      expect(gate.inUse).toBe(0);
+    });
+
+    it('unidade na fila do semáforo sai da fila sem chamar o provedor', async () => {
+      const gate = createTranslationGate(1);
+      const { port, calls } = setup({ gate, maxUnitsPerPort: 2 });
+      port.emit(unit('a'));
+      port.emit(unit('b'));
+      await flush();
+      expect(calls).toHaveLength(1);
+      expect(gate.waiting).toBe(1);
+
+      port.emit(cancel('b'));
+      expect(gate.waiting).toBe(0);
+      expect(calls[0]!.options!.signal!.aborted).toBe(false);
+
+      calls[0]!.resolve(ok('A'));
+      await flush();
+      expect(calls).toHaveLength(1);
+      expect(port.sent).toEqual([
+        { type: 'job:result', jobId: JOB_ID, unitId: 'a', ok: true, text: 'A' },
+      ]);
+      expect(gate.inUse).toBe(0);
+    });
+
+    it('unidade cancelada pode ser pedida de novo', async () => {
+      const gate = createTranslationGate(1);
+      const { port, calls } = setup({ gate });
+      port.emit(unit('a'));
+      await flush();
+      port.emit(cancel('a'));
+      port.emit(unit('a'));
+      calls[0]!.resolve(ok('velho'));
+      await flush();
+      expect(calls).toHaveLength(2);
+      expect(calls[1]!.options!.signal!.aborted).toBe(false);
+      calls[1]!.resolve(ok('novo'));
+      await flush();
+      expect(port.sent).toEqual([
+        { type: 'job:result', jobId: JOB_ID, unitId: 'a', ok: true, text: 'novo' },
+      ]);
+      expect(gate.inUse).toBe(0);
+    });
+
+    it('ignora unitId desconhecido e jobId diferente', async () => {
+      const gate = createTranslationGate(1);
+      const { port, calls } = setup({ gate });
+      port.emit(unit('a'));
+      await flush();
+      const signal = calls[0]!.options!.signal!;
+
+      port.emit(cancel('outra'));
+      port.emit(cancel('a', OTHER_JOB_ID));
+      expect(signal.aborted).toBe(false);
+      // A vaga da port segue ocupada: a próxima ainda recebe busy.
+      port.emit(unit('b'));
+      expect(port.sent).toEqual([busy('b')]);
+
+      calls[0]!.resolve(ok('A'));
+      await flush();
+      expect(port.sent).toEqual([
+        busy('b'),
+        { type: 'job:result', jobId: JOB_ID, unitId: 'a', ok: true, text: 'A' },
+      ]);
+      expect(gate.inUse).toBe(0);
+      expect(port.disconnect).not.toHaveBeenCalled();
+    });
+
+    it('cancelamento antes de qualquer unidade não fixa o jobId', async () => {
+      const { port, calls, loadSettings } = setup();
+      port.emit(cancel('a', OTHER_JOB_ID));
+      await flush();
+      expect(loadSettings).not.toHaveBeenCalled();
+      expect(port.sent).toEqual([]);
+      port.emit(unit('a'));
+      await flush();
+      expect(calls).toHaveLength(1);
+    });
+
+    it('cancelar a mesma unidade duas vezes é inofensivo', async () => {
+      const gate = createTranslationGate(1);
+      const { port, calls } = setup({ gate });
+      port.emit(unit('a'));
+      await flush();
+      port.emit(cancel('a'));
+      port.emit(cancel('a'));
+      calls[0]!.resolve({ ok: false, error: 'cancelled', retryable: false });
+      await flush();
+      expect(port.sent).toEqual([]);
+      expect(gate.inUse).toBe(0);
+      expect(gate.waiting).toBe(0);
+    });
+  });
+
   it('limite por port inválido lança na criação', () => {
     for (const maxUnitsPerPort of [0, -1, 1.5, Number.NaN]) {
       expect(() =>

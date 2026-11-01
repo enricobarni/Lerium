@@ -11,8 +11,8 @@ import type { LanguageCode } from '../../src/core/types';
  * (ADR-007/ADR-009): requisição sem `Origin` passa; com `Origin` fora de
  * `allowedOrigins` recebe 403 SEM cabeçalhos CORS.
  *
- * Também serve as fixtures de capítulo em `GET /fixture/novel-chapter.html` e
- * `GET /fixture/long-chapter.html`: a origem já está em `host_permissions`,
+ * Também serve as fixtures de capítulo em `GET /fixture/*.html` (ver
+ * `FIXTURE_FILES`): a origem já está em `host_permissions`,
  * então `executeScript` funciona sem gesto do usuário. `POST /api/chat`
  * "traduz" com ROT13 (ver `fakeTranslate`).
  */
@@ -22,11 +22,20 @@ export const MOCK_PORT = 11434;
 export const FIXTURE_PATH = '/fixture/novel-chapter.html';
 /** Capítulo com mais de três alturas de viewport, nav, header, aside e footer de site. */
 export const LONG_FIXTURE_PATH = '/fixture/long-chapter.html';
+/** Capítulo curto por parágrafo, com um parágrafo longo (`LONG`) logo abaixo da viewport inicial. */
+export const LONG_PARAGRAPH_FIXTURE_PATH = '/fixture/long-paragraph-chapter.html';
+/** Capítulo num único `<div>`, com os parágrafos (`R01`…`R40`) separados por `<br><br>`. */
+export const BR_FIXTURE_PATH = '/fixture/br-chapter.html';
 
 /** Caminho servido → arquivo em `tests/fixtures`. */
 const FIXTURE_FILES: ReadonlyMap<string, string> = new Map([
   [FIXTURE_PATH, fileURLToPath(new URL('../fixtures/novel-chapter.html', import.meta.url))],
   [LONG_FIXTURE_PATH, fileURLToPath(new URL('../fixtures/long-chapter.html', import.meta.url))],
+  [
+    LONG_PARAGRAPH_FIXTURE_PATH,
+    fileURLToPath(new URL('../fixtures/long-paragraph-chapter.html', import.meta.url)),
+  ],
+  [BR_FIXTURE_PATH, fileURLToPath(new URL('../fixtures/br-chapter.html', import.meta.url))],
 ]);
 
 /** Par de idiomas que o mock espera no prompt (o mesmo gravado pelos testes). */
@@ -184,6 +193,14 @@ export interface MockOllama {
   configure(scenario: Partial<MockScenario>): Promise<void>;
   /** Novas e atuais requisições de chat esperam (sem cabeçalhos) até `releaseChat`. */
   holdChat(): void;
+  /**
+   * Retém (sem cabeçalhos) só as novas requisições de chat cujo texto do
+   * usuário casa com `predicate`; as outras são respondidas normalmente.
+   * Substitui um predicado anterior; `releaseChat` libera todas as retidas e
+   * desliga o predicado. Se o cliente fechar a conexão enquanto a requisição
+   * está retida, ela fica com `aborted: true` e não recebe nada.
+   */
+  holdChatWhere(predicate: (text: string) => boolean): void;
   /** Libera as requisições de chat retidas; as abortadas no meio-tempo não recebem nada. */
   releaseChat(): void;
   /**
@@ -259,18 +276,28 @@ export async function startMockOllama(initial: Partial<MockScenario> = {}): Prom
   let openChats = 0;
   let peakOpen = 0;
   let held = false;
+  let holdWhere: ((text: string) => boolean) | undefined;
   let releaseHeld: (() => void) | undefined;
   let heldGate: Promise<void> = Promise.resolve();
 
-  const holdChat = (): void => {
-    if (held) return;
-    held = true;
+  /** Um único portão para `holdChat` e `holdChatWhere`, aberto por `releaseChat`. */
+  const closeGate = (): void => {
+    if (releaseHeld !== undefined) return;
     heldGate = new Promise((resolve) => {
       releaseHeld = resolve;
     });
   };
+  const holdChat = (): void => {
+    held = true;
+    closeGate();
+  };
+  const holdChatWhere = (predicate: (text: string) => boolean): void => {
+    holdWhere = predicate;
+    closeGate();
+  };
   const releaseChat = (): void => {
     held = false;
+    holdWhere = undefined;
     releaseHeld?.();
     releaseHeld = undefined;
   };
@@ -314,7 +341,7 @@ export async function startMockOllama(initial: Partial<MockScenario> = {}): Prom
       sendJson(res, 404, { error: `model '${model}' not found` }, origin);
       return;
     }
-    if (held) await heldGate;
+    if (held || holdWhere?.(text) === true) await heldGate;
     if (chatDelayMs > 0) {
       const delay = chatDelayMs;
       await new Promise((resolve) => setTimeout(resolve, delay));
@@ -363,6 +390,9 @@ export async function startMockOllama(initial: Partial<MockScenario> = {}): Prom
       peakOpen = Math.max(peakOpen, openChats);
       for (const listener of [...chatListeners]) listener();
     }
+    // `close` da resposta também dispara quando o cliente derruba a conexão
+    // antes do fim (inclusive com a requisição retida, sem cabeçalhos): aí a
+    // resposta não terminou e a requisição conta como abortada.
     res.once('close', () => {
       record.open = false;
       if (!res.writableFinished) record.aborted = true;
@@ -477,6 +507,7 @@ export async function startMockOllama(initial: Partial<MockScenario> = {}): Prom
       else if (!server) await listen();
     },
     holdChat,
+    holdChatWhere,
     releaseChat,
     waitForChatRequest,
     setChatDelay(ms) {

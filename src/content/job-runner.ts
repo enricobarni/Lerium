@@ -30,12 +30,46 @@
  * Dentro de um lote, os movimentos são feitos em ordem de documento; os que
  * vão para a frente de uma classe (1 ou 2), do último para o primeiro, para
  * que a frente fique em ordem de documento. O callback só reordena: nunca envia
- * nem chama `pump`; a ordem nova vale na próxima vaga. O bloco deixa de ser
- * observado quando o grupo sai da fila (última unidade enviada) ou é
- * aplicado, e o observador é
+ * nem chama `pump`; a ordem nova vale na próxima vaga. O bloco continua
+ * observado enquanto resta unidade do segmento na fila OU em voo (inclusive do
+ * fallback), e deixa de ser observado quando o plano é aplicado com sucesso ou
+ * falha sem fallback (com `remaining > 0` há sempre unidade na fila ou em voo:
+ * a interrompida volta à fila no mesmo passo em que sai da janela). Com o grupo fora da fila (tudo em voo), a zona nova só
+ * atualiza a classe atual registrada do segmento, sem mexer na fila: é ela
+ * que decide se a unidade em voo pode ser interrompida. O observador é
  * desconectado em todo término; eventos depois disso são ignorados. Sem a
  * dependência, a ordem é a da classificação inicial. Periféricos nunca são
  * observados e a fila é finita, então eles sempre saem (sem aging).
+ *
+ * Interrupção (`deps.setTimeout`/`deps.clearTimeout`, opcionais): com a janela
+ * cheia, um segmento da classe 0 pode esperar uma unidade fora da tela
+ * terminar. Se um segmento entra na classe 0 com o grupo na fila e há em voo
+ * uma unidade interrompível, arma-se um timer de `PREEMPT_DEBOUNCE_MS`
+ * (do mais antigo dos que esperam). Quando ele dispara e esse segmento ainda
+ * está na classe 0 da fila, uma unidade é interrompida: `job:cancel-unit`,
+ * sai da janela e volta à fila, e `pump` envia o visível. Interrompível: a
+ * classe ATUAL do segmento é ≥ 2 (resto ou periférico) e a unidade nunca foi
+ * interrompida antes (no máximo uma vez por unidade; ao reenviar, ela termina
+ * normalmente). A classe do envio não conta: ela fica velha quando o leitor
+ * rola, e a regra é nunca cortar o que ele vai ler em seguida (classe 0 ou 1
+ * agora). Entre as interrompíveis, a de maior classe atual e, no empate, a
+ * enviada por último. Qualquer tamanho de texto. O timer é limpo quando o
+ * segmento sai da classe 0 ou da fila, quando não resta interrompível, e em
+ * todo término. Sem a dependência, nada é interrompido.
+ * Só com janela efetiva 1 (`maxInFlight === 1`, o padrão): com janela maior a
+ * interrupção fica desligada (ver `preemptEnabled`).
+ * Recolocação: a vítima volta à FRENTE da sua classe, porque já estava em
+ * andamento (era a próxima do seu grupo e já tinha passado à frente das
+ * demais da classe); é diferente de quem sai pelo topo por rolagem, que vai
+ * ao FIM da classe 2. Se o grupo do segmento ainda está na fila, a
+ * interrompida entra à frente das irmãs não enviadas (`prependToGroup`), sem
+ * mudar a classe nem a posição do grupo; senão, volta como grupo novo (mesma
+ * chave) na frente da classe atual do segmento.
+ * Resultado atrasado da interrompida (o service worker o postou antes de
+ * receber o cancelamento) chega com a unidade fora da janela e é descartado.
+ * Com janela 1 ele sempre chega antes do reenvio (a Port entrega em ordem e o
+ * reenvio só sai depois do resultado de uma unidade enviada depois do
+ * cancelamento).
  *
  * Sem `chrome`: a porta, o UUID, a geometria, os timers e o relógio são
  * injetados. Sem logs e sem texto no estado emitido (só contagens, tempos e
@@ -59,7 +93,7 @@
  *   timer é limpo em todo caminho de término.
  * - Cancelamento, fatal, interrupção e `dispose` esvaziam fila e janela;
  *   nada do job é aplicado depois.
- * - A janela (`InFlightWindow<SegmentTask>`) é o único registro do que está
+ * - A janela (`InFlightWindow<InFlightUnit>`) é o único registro do que está
  *   em voo. Unidade cujo `unitId` já está em voo vira resultado `null` sem
  *   envio (a resposta do primeiro seria a única). Se `tryAcquire` recusar
  *   mesmo com vaga e id novo, é erro de programação: o job falha com
@@ -82,6 +116,7 @@
  * `MAX_SEGMENT_CHARS`; `done` os aplicados; `failed` os que o applier
  * recusou (depois do fallback, se houve). Um segmento com fallback conta uma
  * vez só, pelo resultado final.
+ * `preempted` conta as unidades interrompidas (cada interrupção emite estado).
  *
  * Visualização (`view`): o que o DOM mostra. Começa em `original` (nada foi
  * aplicado); `start` passa a `translation`; `showOriginal` cancela o job em
@@ -136,6 +171,11 @@ export interface JobState {
   done: number;
   failed: number;
   skipped: number;
+  /**
+   * Unidades interrompidas neste job (`job:cancel-unit` enviado com sucesso);
+   * inteiro >= 0, zerado a cada `start`.
+   */
+  preempted: number;
   /** Código do erro (`JobFatalErrorKind` ou `interrupted`); nunca texto da página. */
   error?: JobErrorKind;
   /** Ms do início ao primeiro segmento visível aplicado; ausente até acontecer. */
@@ -156,10 +196,9 @@ export interface JobState {
    * visíveis desde o `start` não entram (são o `firstVisibleMs`). Sair da
    * tela com o grupo ainda na fila, ou falhar, descarta a medida.
    *
-   * Exceção: com `markers_invalid`, o fallback nó a nó não é observado de novo
-   * (o bloco deixa de ser observado quando o plano original é aplicado).
-   * Sair da tela com o fallback na fila NÃO descarta a medida; ela vai até o
-   * fallback ser aplicado.
+   * Com `markers_invalid`, o fallback nó a nó continua no mesmo bloco
+   * observado: a medida segue aberta até ele ser aplicado e, como em qualquer
+   * grupo, sair da tela com ele na fila a descarta.
    */
   visibleLatency?: VisibleLatency;
 }
@@ -174,6 +213,13 @@ export interface JobRunnerDeps {
   randomUUID(): string;
   setInterval: (fn: () => void, ms: number) => unknown;
   clearInterval: (id: unknown) => void;
+  /**
+   * Timer da interrupção de unidade fora da tela (no content real:
+   * `window.setTimeout`/`clearTimeout`). Opcionais: sem `setTimeout`, ou com
+   * `maxInFlight` > 1, nenhuma unidade é interrompida.
+   */
+  setTimeout?: (fn: () => void, ms: number) => unknown;
+  clearTimeout?: (id: unknown) => void;
   /** Geometria do bloco (no content real: `getBoundingClientRect`). */
   measure(block: Element): BlockRect;
   /** Altura da viewport (no content real: `window.innerHeight`). */
@@ -208,6 +254,9 @@ export interface JobRunner {
 
 export const PING_INTERVAL_MS = 20_000;
 
+/** Espera mínima de um segmento visível na fila antes de interromper uma unidade fora da tela. */
+export const PREEMPT_DEBOUNCE_MS = 500;
+
 /** Porta caiu ou não abriu com trabalho pendente. */
 export const INTERRUPTED = 'interrupted' as const;
 
@@ -220,7 +269,7 @@ interface SegmentTask {
   /** Classe da classificação inicial (base do `firstVisibleMs`). */
   readonly priority: SegmentPriority;
   readonly results: Map<string, string | null>;
-  /** Unidades do plano ainda sem resultado. */
+  /** Unidades do plano ainda sem resultado (na fila ou em voo). */
   remaining: number;
 }
 
@@ -230,12 +279,27 @@ interface QueuedUnit {
   readonly unit: TranslationUnit | null;
 }
 
+/** Unidade em voo e o plano a que pertence. */
+interface InFlightUnit {
+  readonly task: SegmentTask;
+  readonly unit: TranslationUnit;
+}
+
+/** Timer de interrupção armado para o segmento visível que espera há mais tempo. */
+interface PreemptTimer {
+  readonly segmentId: string;
+  timer: unknown;
+}
+
 /** Segmento não periférico acompanhado pelo observador de visibilidade. */
 interface TrackedSegment {
   readonly block: Element;
   /** Índice na ordem de documento. */
   readonly order: number;
-  /** Classe atual na fila (muda com a rolagem); o fallback herda esta. */
+  /**
+   * Classe atual (muda com a rolagem, também com tudo em voo); é a classe do
+   * grupo quando ele está na fila. Decide a interrupção; o fallback herda esta.
+   */
   priority: SegmentPriority;
   /** Última zona informada pelo observador (começa em `out`, como ele). */
   zone: VisibilityZone;
@@ -244,7 +308,7 @@ interface TrackedSegment {
    * nenhuma: a primeira que vier é comparada com `visible`, não com `zone`.
    */
   awaitingFirstZone: boolean;
-  /** Ainda observado: o grupo do segmento está na fila. */
+  /** Ainda observado: o plano (ou o fallback) não foi aplicado nem falhou. */
   observed: boolean;
   /** `clock()` de quando foi promovido por entrar na tela; some se sair dela. */
   promotedAt?: number;
@@ -262,8 +326,21 @@ interface ActiveJob {
   watcher: VisibilityWatcher | undefined;
   /** Latências medidas (ms), na ordem em que os segmentos foram aplicados. */
   readonly latencies: number[];
-  /** Única fonte do que está em voo: `unitId` → plano a que pertence. */
-  readonly window: InFlightWindow<SegmentTask>;
+  /** Única fonte do que está em voo: `unitId` → unidade e plano a que pertence. */
+  readonly window: InFlightWindow<InFlightUnit>;
+  /**
+   * Segmentos que entraram na classe 0 com o grupo na fila, do mais antigo ao
+   * mais novo. Podado sob demanda: quem saiu da classe 0 ou da fila sai daqui.
+   */
+  readonly visibleWaiting: Set<string>;
+  /**
+   * Em voo nunca interrompidas, em ordem de envio; a classe atual do segmento
+   * decide na hora. Só um índice: vale o que a janela diz.
+   */
+  readonly preemptible: Map<string, InFlightUnit>;
+  /** `unitId`s já interrompidos uma vez: nunca de novo. */
+  readonly preempted: Set<string>;
+  preempt: PreemptTimer | undefined;
   timer: unknown;
   readonly onMessage: (message: unknown) => void;
   readonly onDisconnect: () => void;
@@ -286,6 +363,7 @@ const IDLE: JobState = {
   done: 0,
   failed: 0,
   skipped: 0,
+  preempted: 0,
 };
 
 /** Cópia do estado, inclusive do resumo de latência (quem recebe não altera o interno). */
@@ -308,10 +386,15 @@ function summarize(latencies: readonly number[]): VisibleLatency {
 }
 
 function createTask(plan: SegmentPlan, priority: SegmentPriority): SegmentTask {
-  return { plan, priority, results: new Map(), remaining: plan.units.length };
+  return {
+    plan,
+    priority,
+    results: new Map(),
+    remaining: plan.units.length,
+  };
 }
 
-/** Itens do grupo do plano, em ordem; plano sem unidades vira um item `null`. */
+/** Itens do grupo do plano (as unidades, em ordem); plano sem unidades vira um item `null`. */
 function itemsOf(task: SegmentTask): QueuedUnit[] {
   if (task.plan.units.length === 0) return [{ task, unit: null }];
   return task.plan.units.map((unit) => ({ task, unit }));
@@ -357,6 +440,10 @@ function placementFor(
 export function createJobRunner(deps: JobRunnerDeps): JobRunner {
   const applier = createPageApplier();
   const maxInFlight = deps.maxInFlight ?? MAX_UNITS_IN_FLIGHT;
+  // O `unitId` é reusado no reenvio da interrompida. Com janela > 1, um
+  // resultado atrasado da tentativa abortada poderia chegar depois do reenvio
+  // e fechá-lo com o texto velho; com janela 1 a ordem da Port impede isso.
+  const preemptEnabled = maxInFlight === 1;
   let state: JobState = { ...IDLE };
   let active: ActiveJob | null = null;
   let disposed = false;
@@ -408,6 +495,108 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
   };
 
   /**
+   * Classe atual do segmento: a registrada pela rolagem (a da fila, se o
+   * grupo está nela); periférico, a da classificação.
+   */
+  const priorityOf = (job: ActiveJob, task: SegmentTask): SegmentPriority =>
+    job.tracked.get(task.plan.segmentId)?.priority ?? task.priority;
+
+  /** O segmento entrou na classe 0 com o grupo na fila: a espera dele recomeça. */
+  const markVisibleWaiting = (job: ActiveJob, segmentId: string): void => {
+    job.visibleWaiting.delete(segmentId);
+    job.visibleWaiting.add(segmentId);
+  };
+
+  const isWaitingVisible = (job: ActiveJob, segmentId: string): boolean =>
+    job.queue.priorityOf(segmentId) === PRIORITY_VISIBLE_MAIN;
+
+  /**
+   * A interrompível de maior classe atual; no empate, a enviada por último.
+   * Classe atual 0 ou 1 é o que o leitor vê ou vai ver: nunca é cortada.
+   */
+  const victimOf = (job: ActiveJob): InFlightUnit | undefined => {
+    let victim: InFlightUnit | undefined;
+    let victimPriority: SegmentPriority = PRIORITY_MAIN;
+    for (const [unitId, inFlight] of job.preemptible) {
+      if (job.window.get(unitId) !== inFlight) {
+        job.preemptible.delete(unitId);
+        continue;
+      }
+      const priority = priorityOf(job, inFlight.task);
+      if (priority >= victimPriority) {
+        victim = inFlight;
+        victimPriority = priority;
+      }
+    }
+    return victim;
+  };
+
+  const clearPreempt = (job: ActiveJob): void => {
+    if (job.preempt === undefined) return;
+    deps.clearTimeout?.(job.preempt.timer);
+    job.preempt = undefined;
+  };
+
+  /**
+   * Arma, mantém ou limpa o timer de interrupção conforme a fila e a janela.
+   * Só mexe no timer: não envia nem reordena.
+   */
+  const schedulePreempt = (job: ActiveJob): void => {
+    if (active !== job || !preemptEnabled || deps.setTimeout === undefined) return;
+    for (const segmentId of job.visibleWaiting) {
+      if (!isWaitingVisible(job, segmentId)) job.visibleWaiting.delete(segmentId);
+    }
+    const hasVictim = victimOf(job) !== undefined;
+    if (job.preempt !== undefined) {
+      if (hasVictim && job.visibleWaiting.has(job.preempt.segmentId)) return;
+      clearPreempt(job);
+    }
+    const [segmentId] = job.visibleWaiting;
+    if (!hasVictim || segmentId === undefined) return;
+    const preempt: PreemptTimer = { segmentId, timer: undefined };
+    job.preempt = preempt;
+    preempt.timer = deps.setTimeout(() => firePreempt(job, preempt), PREEMPT_DEBOUNCE_MS);
+  };
+
+  /**
+   * Devolve a interrompida à fila: à frente das irmãs se o grupo ainda está
+   * nela; senão, grupo novo na frente da classe atual (regras no topo do
+   * arquivo). A classe atual é ≥ 2 (`victimOf`): não há visível a marcar, e o
+   * bloco continua observado (o plano não foi aplicado).
+   */
+  const requeue = (job: ActiveJob, task: SegmentTask, unit: TranslationUnit): void => {
+    const { segmentId } = task.plan;
+    const item: QueuedUnit = { task, unit };
+    if (job.queue.prependToGroup(segmentId, [item])) return;
+    job.queue.pushFront(segmentId, [item], priorityOf(job, task));
+  };
+
+  /** Disparo do timer: interrompe uma unidade se o visível ainda espera. */
+  const firePreempt = (job: ActiveJob, preempt: PreemptTimer): void => {
+    if (active !== job || job.preempt !== preempt) return;
+    job.preempt = undefined;
+    if (!isWaitingVisible(job, preempt.segmentId)) {
+      schedulePreempt(job);
+      return;
+    }
+    const victim = victimOf(job);
+    if (victim === undefined) return;
+    const { unitId } = victim.unit;
+    job.preemptible.delete(unitId);
+    job.preempted.add(unitId);
+    job.window.release(unitId);
+    try {
+      job.port.postMessage({ type: 'job:cancel-unit', jobId: job.jobId, unitId });
+    } catch {
+      if (active === job) fail(job, INTERRUPTED);
+      return;
+    }
+    requeue(job, victim.task, victim.unit);
+    emit({ ...state, preempted: state.preempted + 1 });
+    pump(job);
+  };
+
+  /**
    * Reordena a fila conforme as zonas novas. Só mexe na fila: não envia, não
    * aplica e não chama `pump` (a próxima vaga que abrir já pega a ordem nova).
    */
@@ -430,13 +619,17 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       // Antes da primeira zona do observador, vale o que a medição viu.
       const from = segment.awaitingFirstZone ? 'visible' : segment.zone;
       segment.awaitingFirstZone = false;
-      const placement = job.queue.has(segmentId)
-        ? placementFor(segment.priority, from, zone)
-        : undefined;
+      const placement = placementFor(segment.priority, from, zone);
       // Saiu da tela antes de ser aplicado: a medida de latência não vale.
       if (from === 'visible' && zone !== 'visible') delete segment.promotedAt;
       segment.zone = zone;
       if (placement === undefined) continue;
+      if (!job.queue.has(segmentId)) {
+        // Tudo do segmento em voo: só a classe atual muda (ela decide a
+        // interrupção); nada se move na fila e a latência não é medida.
+        segment.priority = placement.priority;
+        continue;
+      }
       (placement.position === 'back' ? toBack : toFront).push({ segmentId, segment, placement });
     }
     // Fins em ordem de documento (FIFO entre lotes). As frentes (classes 1 e
@@ -451,11 +644,16 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       job.queue.move(segmentId, placement.priority, placement.position);
       segment.priority = placement.priority;
       if (placement.priority === PRIORITY_VISIBLE_MAIN) {
+        markVisibleWaiting(job, segmentId);
         const now = readClock();
         if (now === undefined) delete segment.promotedAt;
         else segment.promotedAt = now;
+      } else {
+        job.visibleWaiting.delete(segmentId);
       }
     }
+    // Só o timer: a interrupção, se vier, sai do disparo dele.
+    schedulePreempt(job);
   };
 
   /**
@@ -484,6 +682,10 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
     job.tracked.clear();
     job.queue.clear();
     job.window.clear();
+    clearPreempt(job);
+    job.preemptible.clear();
+    job.preempted.clear();
+    job.visibleWaiting.clear();
     if (job.timer !== undefined) deps.clearInterval(job.timer);
     job.timer = undefined;
     job.port.onMessage.removeListener(job.onMessage);
@@ -503,8 +705,9 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
   /** Aplica o plano completo; fallback volta à frente da classe atual do segmento. */
   const applyTask = (job: ActiveJob, task: SegmentTask): void => {
     const { segmentId } = task.plan;
-    unobserve(job, segmentId);
     const result = applier.apply(segmentId, task.results);
+    // Com fallback o plano continua (nó a nó): o bloco segue observado.
+    if (result.ok || result.fallback === undefined) unobserve(job, segmentId);
     if (result.ok) {
       const next: JobState = { ...state, done: state.done + 1 };
       if (task.priority === PRIORITY_VISIBLE_MAIN && state.firstVisibleMs === undefined) {
@@ -515,10 +718,13 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       if (visibleLatency !== undefined) next.visibleLatency = visibleLatency;
       emit(next);
     } else if (result.fallback !== undefined) {
-      // O fallback não é observado de novo: já sai à frente da classe atual.
-      // A medida de latência continua aberta até ele ser aplicado.
-      const priority = job.tracked.get(segmentId)?.priority ?? task.priority;
+      // O fallback sai à frente da classe atual e o bloco segue observado (sem
+      // evento inicial novo: a observação nunca parou), então a rolagem o move
+      // como a qualquer grupo. A medida de latência segue as mesmas regras.
+      // A chave está livre: o plano completou, nada dele resta na fila.
+      const priority = priorityOf(job, task);
       job.queue.pushFront(segmentId, itemsOf(createTask(result.fallback, task.priority)), priority);
+      if (priority === PRIORITY_VISIBLE_MAIN) markVisibleWaiting(job, segmentId);
     } else {
       const segment = job.tracked.get(segmentId);
       if (segment !== undefined) delete segment.promotedAt;
@@ -534,7 +740,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
   };
 
   /** Envia enquanto houver vaga e fila; termina o job quando não resta nada. */
-  const pump = (job: ActiveJob): void => {
+  const fill = (job: ActiveJob): void => {
     while (active === job) {
       if (job.window.available === 0) return;
       const item = job.queue.next();
@@ -546,8 +752,6 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         return;
       }
       const { task, unit } = item;
-      // Grupo esvaziado: a posição dele não muda mais, então para de observar.
-      if (!job.queue.has(task.plan.segmentId)) unobserve(job, task.plan.segmentId);
       if (unit === null) {
         applyTask(job, task);
         continue;
@@ -563,7 +767,8 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         settle(job, task, unit.unitId, null);
         continue;
       }
-      if (!job.window.tryAcquire(unit.unitId, task)) {
+      const inFlight: InFlightUnit = { task, unit };
+      if (!job.window.tryAcquire(unit.unitId, inFlight)) {
         // Inalcançável: há vaga (checado acima) e o id não está em voo. Se
         // acontecer, é erro de programação; falhar o job como `interrupted`
         // encerra tudo (porta, timer) em vez de lançar dentro de um ouvinte
@@ -582,7 +787,14 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         if (active === job) fail(job, INTERRUPTED);
         return;
       }
+      if (!job.preempted.has(unit.unitId)) job.preemptible.set(unit.unitId, inFlight);
     }
+  };
+
+  /** `fill` e, se o job segue, o timer de interrupção conforme o estado novo. */
+  const pump = (job: ActiveJob): void => {
+    fill(job);
+    schedulePreempt(job);
   };
 
   const handleMessage = (job: ActiveJob, raw: unknown): void => {
@@ -594,10 +806,12 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       return;
     }
     if (message.type !== 'job:result') return;
-    const task = job.window.get(message.unitId);
-    if (task === undefined) return;
+    // Interrompida ainda não reenviada está fora da janela: resultado atrasado dela cai aqui.
+    const inFlight = job.window.get(message.unitId);
+    if (inFlight === undefined) return;
     job.window.release(message.unitId);
-    settle(job, task, message.unitId, message.ok ? message.text : null);
+    job.preemptible.delete(message.unitId);
+    settle(job, inFlight.task, message.unitId, message.ok ? message.text : null);
     pump(job);
   };
 
@@ -628,6 +842,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
       const queue = createGroupedPriorityQueue<string, QueuedUnit>(PRIORITY_CLASSES);
       const tracked = new Map<string, TrackedSegment>();
       const blocks = new Map<Element, Set<string>>();
+      const visibleWaiting = new Set<string>();
       let skipped = 0;
       for (const { segment, priority, order } of classified) {
         const plan = applier.plan(segment);
@@ -636,6 +851,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
           continue;
         }
         queue.push(plan.segmentId, itemsOf(createTask(plan, priority)), priority);
+        if (priority === PRIORITY_VISIBLE_MAIN) visibleWaiting.add(plan.segmentId);
         // Periférico não é observado: a classe dele não depende da posição.
         if (priority === PRIORITY_PERIPHERAL) continue;
         tracked.set(plan.segmentId, {
@@ -657,6 +873,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         done: 0,
         failed: 0,
         skipped,
+        preempted: 0,
       };
       if (queue.size === 0) {
         emit(finished({ ...base, status: 'translated' }));
@@ -679,7 +896,11 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
         blocks,
         watcher: undefined,
         latencies: [],
-        window: createInFlightWindow<SegmentTask>(maxInFlight),
+        window: createInFlightWindow<InFlightUnit>(maxInFlight),
+        visibleWaiting,
+        preemptible: new Map(),
+        preempted: new Set(),
+        preempt: undefined,
         timer: undefined,
         onMessage: (message) => handleMessage(job, message),
         onDisconnect: () => {

@@ -738,7 +738,8 @@ comando (`src/shared/page-messages.ts`, `src/background/page-job.ts`,
   idiomas.
 - **Mensagens tipadas e validadas** nos dois sentidos, com allowlist de
   códigos de erro: `job:unit` (texto até `MAX_UNIT_CHARS`), `job:ping`,
-  `job:result`, `job:progress` (só contagem de caracteres) e `job:fatal`
+  `job:result`, `job:progress` (só contagem de caracteres), `job:cancel-unit`
+  (content → worker, ADR-017) e `job:fatal`
   (`invalid_config`, `model_missing`, `forbidden`, `settings_unavailable`).
   Nenhuma mensagem além do resultado leva texto.
 - **Sequência:** o content envia até `MAX_UNITS_IN_FLIGHT` unidades por vez
@@ -867,7 +868,8 @@ sem gerar rajada de requisições.
   frente da classe 2. Periféricos não são observados.
 - **Sem rajada, por construção:** o callback só reordena; requisições só
   saem no início do job e quando chega um resultado. O limite em voo continua
-  o da ADR-015.
+  o da ADR-015. Exceção: a interrupção da ADR-017 (um cancelamento por
+  timer, no máximo uma vez por unidade, sem passar do limite).
 - **Sem aging:** o job coleta tudo no início e nada novo entra; as classes 0
   a 2 se esgotam e o periférico sempre sai. Aging só fará sentido com conteúdo
   contínuo (Fase 7).
@@ -895,3 +897,65 @@ antes do visível no mesmo quadro, gerando zonas transitórias que inflavam a
   já passou pelo leitor.
 - A ordem relativa dos callbacks dos dois observadores não é garantida; o
   código não depende dela.
+
+**Medição no Chrome real** (responsável, 31/10/2026, `translategemma:4b` no
+i5-13420H, capítulo de novel, rolando durante a tradução): `firstVisibleMs`
+de 2 a 4 s e `visibleLatency` de 3 a 5 s, próximos do tempo de uma única
+tradução. Percepção: “um pouco mais rápido, mas sem grande diferença”. Houve
+uma pausa de alguns segundos em que a tela parou de mudar enquanto o popup
+seguia avançando; hipótese registrada: uma unidade longa fora da tela
+ocupando a única vaga (nenhuma unidade em voo é interrompida). Investigada
+em `perf/scroll-translation`.
+
+## ADR-017 — Interrupção de tradução fora da tela
+
+**Status:** Aceita (01/11/2026)
+
+**Contexto.** No Chrome real, o responsável viu a tela parar de mudar por
+alguns segundos enquanto o popup seguia avançando. Com uma unidade por vez
+(ADR-015) e nenhuma unidade em voo interrompida (ADR-016), um parágrafo que
+entra na tela espera a tradução em andamento de outro trecho terminar.
+Respostas do responsável: o popup continuou subindo, `visibleLatency.maxMs`
+ficou em até ~8 s e o site usa `<p>` (290 elementos). Dois testes E2E
+(`tests/e2e/scroll-pause.spec.ts`) reproduziram as hipóteses, cada um
+falhando na asserção do defeito: H1 (trecho fora da tela em voo atrasa o
+visível) e H2 (capítulo separado por `<br>` não prioriza o visível).
+
+**Decisão.** Interromper a unidade fora da tela quando há visível esperando.
+
+- **Protocolo:** nova mensagem `job:cancel-unit { jobId, unitId }`, sem
+  texto. O service worker aborta a unidade e libera a vaga da Port na hora; o
+  semáforo global só volta quando a geração abortada termina, e nada da
+  unidade cancelada é postado.
+- **Regras** (`src/content/job-runner.ts`): só interrompe se um segmento da
+  classe 0 espera há pelo menos `PREEMPT_DEBOUNCE_MS` (500 ms) e continua
+  nela; só unidades cujo segmento está **agora** na classe 2 ou 3 (nunca o
+  visível nem o que vem logo abaixo); qualquer tamanho de texto; no máximo uma
+  interrupção por unidade. A unidade interrompida volta à frente da sua
+  classe (`prependToGroup`), porque já estava em andamento.
+- **Classe atual, não a do envio:** o bloco segue observado enquanto houver
+  unidade do segmento na fila, em voo ou como fallback, e a decisão usa a
+  classe atual. A classe do envio fica velha quando o leitor rola.
+- **Só com janela 1:** o `unitId` é reusado no reenvio; com mais de uma
+  unidade em voo, um resultado atrasado da tentativa abortada poderia fechar
+  o reenvio. Com `MAX_UNITS_IN_FLIGHT = 1` (medido) a ordem da Port elimina
+  isso; com janela maior a interrupção fica desligada.
+- **Métrica:** `preempted` (contagem) no estado do job, lida como as demais.
+
+**Consequências.**
+
+- O trabalho parcial do Ollama é descartado em cada interrupção (no máximo
+  uma por unidade, uma a cada 500 ms). Em troca, a espera do visível cai de
+  "trecho em voo + o seu" para "o seu + 0,5 s": no E2E da H1, de ~25 s
+  (unidade longa retida) para ~0,54 s.
+- Com duas abas, a vaga liberada pela interrupção pode ir para a outra aba
+  (semáforo FIFO); a interrupção não ajuda a aba que interrompeu. Registrado
+  como limitação.
+- Com janela 1, a escolha entre várias vítimas (`victimOf`) e a interrupção
+  de periféricos não são alcançáveis; o código fica preparado para quando a
+  janela crescer, com nova medição.
+- A H2 (`<br>`) é um defeito real em outros sites de novel e fica para
+  `fix/shared-block-priority`; o teste continua marcado como falha esperada.
+- **Cache de trechos repetidos adiado** para as Fases 6/7, com aprovação do
+  responsável: numa página os repetidos são curtos e periféricos; entre
+  capítulos exigiria guardar texto de páginas na memória do service worker.

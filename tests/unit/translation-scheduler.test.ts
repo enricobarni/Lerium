@@ -189,6 +189,112 @@ describe('createGroupedPriorityQueue', () => {
     expect(drain(queue)).toEqual(['b1', 'c1', 'a2', 'a3']);
   });
 
+  describe('prependToGroup', () => {
+    it('põe os itens, em ordem, à frente do restante de um grupo parcialmente consumido', () => {
+      const queue = createGroupedPriorityQueue<string, string>(2);
+      queue.push('a', ['a1', 'a2', 'a3'], 1);
+      queue.push('b', ['b1'], 1);
+      expect(queue.next()).toBe('a1');
+      expect(queue.next()).toBe('a2');
+      expect(queue.prependToGroup('a', ['x1', 'x2'])).toBe(true);
+      expect(queue.size).toBe(4);
+      // A classe e a posição do grupo não mudam: ele continua à frente de 'b'.
+      expect(queue.priorityOf('a')).toBe(1);
+      expect(drain(queue)).toEqual(['x1', 'x2', 'a3', 'b1']);
+      expect(queue.has('a')).toBe(false);
+    });
+
+    it('vários prepends seguidos: o último fica à frente, cada lote em ordem', () => {
+      const queue = createGroupedPriorityQueue<string, string>(1);
+      queue.push('a', ['a1'], 0);
+      queue.prependToGroup('a', ['p1', 'p2']);
+      queue.prependToGroup('a', ['q1']);
+      expect(queue.size).toBe(4);
+      expect(drain(queue)).toEqual(['q1', 'p1', 'p2', 'a1']);
+    });
+
+    it('chave inexistente ou grupo já esvaziado devolve false sem alterar a fila', () => {
+      const queue = createGroupedPriorityQueue<string, string>(2);
+      queue.push('a', ['a1'], 0);
+      queue.push('b', ['b1'], 1);
+      expect(queue.prependToGroup('zz', ['z1'])).toBe(false);
+      expect(queue.next()).toBe('a1');
+      expect(queue.prependToGroup('a', ['late'])).toBe(false);
+      expect(queue.has('a')).toBe(false);
+      expect(queue.size).toBe(1);
+      expect(drain(queue)).toEqual(['b1']);
+    });
+
+    it('itens vazios não mudam nada', () => {
+      const queue = createGroupedPriorityQueue<string, string>(1);
+      queue.push('a', ['a1'], 0);
+      expect(queue.prependToGroup('a', [])).toBe(true);
+      expect(queue.size).toBe(1);
+      expect(drain(queue)).toEqual(['a1']);
+    });
+
+    it('copia os itens recebidos', () => {
+      const queue = createGroupedPriorityQueue<string, string>(1);
+      queue.push('a', ['a1'], 0);
+      const items = ['x1'];
+      queue.prependToGroup('a', items);
+      items.push('x2');
+      expect(drain(queue)).toEqual(['x1', 'a1']);
+    });
+
+    it('o grupo só esvazia quando saem os recolocados e os originais', () => {
+      const queue = createGroupedPriorityQueue<string, string>(1);
+      queue.push('a', ['a1'], 0);
+      queue.push('b', ['b1'], 0);
+      expect(queue.next()).toBe('a1');
+      // 'a' esvaziou e saiu; recolocar exige um grupo novo.
+      expect(queue.prependToGroup('a', ['x'])).toBe(false);
+      queue.pushFront('a', ['x'], 0);
+      queue.prependToGroup('a', ['y']);
+      expect(queue.next()).toBe('y');
+      expect(queue.has('a')).toBe(true);
+      expect(queue.next()).toBe('x');
+      expect(queue.has('a')).toBe(false);
+      expect(drain(queue)).toEqual(['b1']);
+    });
+
+    it('os recolocados andam com o grupo em move', () => {
+      const queue = createGroupedPriorityQueue<string, string>(3);
+      queue.push('a', ['a1', 'a2'], 2);
+      queue.push('b', ['b1'], 1);
+      expect(queue.next()).toBe('b1');
+      expect(queue.next()).toBe('a1');
+      queue.prependToGroup('a', ['x']);
+      queue.push('c', ['c1'], 0);
+      expect(queue.move('a', 0, 'front')).toBe(true);
+      expect(queue.priorityOf('a')).toBe(0);
+      expect(queue.size).toBe(3);
+      expect(drain(queue)).toEqual(['x', 'a2', 'c1']);
+    });
+
+    it('clear descarta os recolocados', () => {
+      const queue = createGroupedPriorityQueue<string, string>(1);
+      queue.push('a', ['a1'], 0);
+      queue.prependToGroup('a', ['x']);
+      queue.clear();
+      expect(queue.size).toBe(0);
+      expect(queue.next()).toBeUndefined();
+    });
+
+    it('10.000 prepends no mesmo grupo custam tempo linear', () => {
+      const queue = createGroupedPriorityQueue<string, number>(1);
+      queue.push('a', [-1], 0);
+      const started = performance.now();
+      for (let i = 0; i < 10_000; i += 1) queue.prependToGroup('a', [i]);
+      const elapsed = performance.now() - started;
+      expect(elapsed).toBeLessThan(200);
+      expect(queue.size).toBe(10_001);
+      const drained = drain(queue);
+      expect(drained[0]).toBe(9_999);
+      expect(drained.at(-1)).toBe(-1);
+    });
+  });
+
   it('libera a chave quando o grupo esvazia e permite reusá-la', () => {
     const queue = createGroupedPriorityQueue<string, string>(2);
     queue.push('a', ['a1'], 0);

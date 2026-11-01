@@ -88,6 +88,42 @@ describe('parseContentToWorker', () => {
     });
   });
 
+  it('aceita job:cancel-unit', () => {
+    expect(parseContentToWorker({ type: 'job:cancel-unit', jobId: JOB, unitId: UNIT })).toEqual({
+      type: 'job:cancel-unit',
+      jobId: JOB,
+      unitId: UNIT,
+    });
+  });
+
+  it('job:cancel-unit descarta campos extras (inclusive texto) e __proto__', () => {
+    const input = {
+      type: 'job:cancel-unit',
+      jobId: JOB,
+      unitId: UNIT,
+      text: 'leak',
+      reason: 'scroll',
+      __proto__: { polluted: true },
+    };
+    const parsed = parseContentToWorker(input);
+    expect(parsed).toEqual({ type: 'job:cancel-unit', jobId: JOB, unitId: UNIT });
+    expect(parsed).not.toBe(input);
+    expect(Object.keys(parsed ?? {})).toEqual(['type', 'jobId', 'unitId']);
+    expect(Object.getPrototypeOf(parsed)).toBe(Object.prototype);
+    expect((parsed as unknown as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it('job:cancel-unit recusa jobId ou unitId inválidos ou ausentes', () => {
+    for (const jobId of INVALID_JOB_IDS) {
+      expect(parseContentToWorker({ type: 'job:cancel-unit', jobId, unitId: UNIT })).toBeNull();
+    }
+    for (const unitId of INVALID_UNIT_IDS) {
+      expect(parseContentToWorker({ type: 'job:cancel-unit', jobId: JOB, unitId })).toBeNull();
+    }
+    expect(parseContentToWorker({ type: 'job:cancel-unit', jobId: JOB })).toBeNull();
+    expect(parseContentToWorker({ type: 'job:cancel-unit', unitId: UNIT })).toBeNull();
+  });
+
   it('aceita os formatos de unitId do page-applier e o limite exato', () => {
     for (const unitId of [
       'seg-0#text@1',
@@ -257,7 +293,14 @@ describe('parseWorkerToContent', () => {
   });
 
   it('recusa tipos desconhecidos, inclusive os do sentido oposto', () => {
-    for (const type of ['job:unit', 'job:ping', 'job:Result', 'result', undefined]) {
+    for (const type of [
+      'job:unit',
+      'job:ping',
+      'job:cancel-unit',
+      'job:Result',
+      'result',
+      undefined,
+    ]) {
       expect(
         parseWorkerToContent({ type, jobId: JOB, unitId: UNIT, ok: true, text: 'x', chars: 0 }),
       ).toBeNull();
