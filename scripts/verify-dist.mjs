@@ -52,6 +52,16 @@ const FORBIDDEN_CONTENT_ONLY = [
   ['console.', /(?<![\w$])console\s*\./],
 ];
 
+// A UI do Lerium na página vive num shadow root FECHADO (ADR-019, a
+// registrar): com `mode: 'open'`, `element.shadowRoot` expõe o interior e a
+// página poderia ler o texto traduzido ou estilizar e adulterar a UI. Se o
+// content.js chama `attachShadow`, nenhum `mode: 'open'` pode aparecer no
+// bundle. A checagem vale para o arquivo inteiro, não só para o literal dentro
+// da chamada, para pegar também o objeto de opções montado numa variável.
+// Tolera espaços e qualquer aspa (`'`, `"`, crase).
+const ATTACH_SHADOW = /attachShadow/;
+const OPEN_SHADOW_MODE = /mode\s*:\s*["'`]open["'`]/;
+
 // Arquivos de texto em que se procura "jsdom" (PNG e outros binários não).
 const TEXT_EXTENSIONS = ['.js', '.mjs', '.html', '.css', '.json', '.map'];
 const isTextFile = (file) => TEXT_EXTENSIONS.includes(extname(file));
@@ -107,6 +117,13 @@ function verifyContentScript() {
 
   for (const [label, pattern] of FORBIDDEN_CONTENT_ONLY) {
     if (pattern.test(code)) fail(`content.js contém "${label}", proibido no content script.`);
+  }
+
+  if (ATTACH_SHADOW.test(code) && OPEN_SHADOW_MODE.test(code)) {
+    fail(
+      'content.js usa attachShadow com mode "open": a UI na página exige shadow root ' +
+        'fechado (mode: "closed") para a página não ler nem estilizar o interior.',
+    );
   }
 
   const size = statSync(path).size;
