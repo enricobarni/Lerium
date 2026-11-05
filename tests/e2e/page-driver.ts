@@ -10,6 +10,7 @@ import {
   BR_FIXTURE_PATH,
   CHAT_SOURCE,
   CHAT_TARGET,
+  CSP_FIXTURE_PATH,
   FIXTURE_PATH,
   LONG_FIXTURE_PATH,
   LONG_PARAGRAPH_FIXTURE_PATH,
@@ -26,6 +27,7 @@ export const FIXTURE_URL = `${MOCK_ENDPOINT}${FIXTURE_PATH}`;
 export const LONG_FIXTURE_URL = `${MOCK_ENDPOINT}${LONG_FIXTURE_PATH}`;
 export const LONG_PARAGRAPH_FIXTURE_URL = `${MOCK_ENDPOINT}${LONG_PARAGRAPH_FIXTURE_PATH}`;
 export const BR_FIXTURE_URL = `${MOCK_ENDPOINT}${BR_FIXTURE_PATH}`;
+export const CSP_FIXTURE_URL = `${MOCK_ENDPOINT}${CSP_FIXTURE_PATH}`;
 
 /** Subconjunto de `chrome` usado nos callbacks (tipado à mão). */
 interface ChromeLike {
