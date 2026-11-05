@@ -1,7 +1,14 @@
 import type { Page, Worker } from '@playwright/test';
 import { EXTENSION_ORIGIN, expect, test } from './fixtures';
 import { fakeTranslate, type MockOllama } from './mock-ollama';
-import { openFixture, outerHtml, PageDriver, resetSettings, type FixtureTab } from './page-driver';
+import {
+  LERIUM_UI_SELECTOR,
+  openFixture,
+  outerHtml,
+  PageDriver,
+  resetSettings,
+  type FixtureTab,
+} from './page-driver';
 
 /**
  * Tradução de página de ponta a ponta (Fase 4): popup → service worker
@@ -57,8 +64,14 @@ async function translateAll(driver: PageDriver, tabId: number): Promise<void> {
 const textOf = (page: Page, selector: string): Promise<string> =>
   page.locator(selector).evaluate((element) => element.textContent ?? '');
 
+/** Elementos do documento, sem o host do indicador de progresso. */
 const elementCount = (page: Page): Promise<number> =>
-  page.evaluate(() => document.getElementsByTagName('*').length);
+  page.evaluate(
+    (selector) =>
+      [...document.getElementsByTagName('*')].filter((element) => !element.matches(selector))
+        .length,
+    LERIUM_UI_SELECTOR,
+  );
 
 const hrefs = (page: Page): Promise<Array<string | null>> =>
   page.evaluate(() => [...document.querySelectorAll('a')].map((a) => a.getAttribute('href')));

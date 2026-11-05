@@ -10,6 +10,7 @@ import {
   BR_FIXTURE_PATH,
   CHAT_SOURCE,
   CHAT_TARGET,
+  CSP_FIXTURE_PATH,
   FIXTURE_PATH,
   LONG_FIXTURE_PATH,
   LONG_PARAGRAPH_FIXTURE_PATH,
@@ -26,6 +27,7 @@ export const FIXTURE_URL = `${MOCK_ENDPOINT}${FIXTURE_PATH}`;
 export const LONG_FIXTURE_URL = `${MOCK_ENDPOINT}${LONG_FIXTURE_PATH}`;
 export const LONG_PARAGRAPH_FIXTURE_URL = `${MOCK_ENDPOINT}${LONG_PARAGRAPH_FIXTURE_PATH}`;
 export const BR_FIXTURE_URL = `${MOCK_ENDPOINT}${BR_FIXTURE_PATH}`;
+export const CSP_FIXTURE_URL = `${MOCK_ENDPOINT}${CSP_FIXTURE_PATH}`;
 
 /** Subconjunto de `chrome` usado nos callbacks (tipado à mão). */
 interface ChromeLike {
@@ -132,6 +134,41 @@ export class PageDriver {
   }
 }
 
-/** `outerHTML` do documento inteiro (só leitura, para comparar byte a byte). */
+/** Atributo do host do indicador de progresso (o mesmo de `src/content/dom-collector.ts`). */
+export const LERIUM_UI_SELECTOR = '[data-lerium-ui]';
+
+/**
+ * `outerHTML` do documento sem o host do indicador de progresso (só leitura,
+ * para comparar byte a byte): clona `documentElement`, tira do clone os hosts
+ * que são filhos diretos dele e serializa o clone. A página não é alterada.
+ * O indicador vive à parte do conteúdo e tem a própria cobertura
+ * (`progress-overlay.spec.ts`), que também compara o documento inteiro com
+ * `fullOuterHtml`.
+ */
 export const outerHtml = (page: Page): Promise<string> =>
+  page.evaluate((selector) => {
+    const clone = document.documentElement.cloneNode(true) as Element;
+    for (const host of clone.querySelectorAll(`:scope > ${selector}`)) host.remove();
+    return clone.outerHTML;
+  }, LERIUM_UI_SELECTOR);
+
+/** `outerHTML` do documento inteiro, sem exclusão nenhuma. */
+export const fullOuterHtml = (page: Page): Promise<string> =>
   page.evaluate(() => document.documentElement.outerHTML);
+
+export interface OverlayHosts {
+  /** Quantos elementos `[data-lerium-ui]` há no documento (em qualquer lugar). */
+  count: number;
+  /** Todos são filhos diretos de `documentElement`. */
+  allDirectChildren: boolean;
+}
+
+/** Hosts do indicador de progresso na página. */
+export const overlayHosts = (page: Page): Promise<OverlayHosts> =>
+  page.evaluate((selector) => {
+    const hosts = [...document.querySelectorAll(selector)];
+    return {
+      count: hosts.length,
+      allDirectChildren: hosts.every((host) => host.parentNode === document.documentElement),
+    };
+  }, LERIUM_UI_SELECTOR);

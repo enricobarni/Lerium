@@ -6,7 +6,7 @@
 ## Estado atual
 
 - **Fase:** 5 — Experiência progressiva e desempenho (em andamento)
-- **Tarefa:** `fix/shared-block-priority` (prioridade por trecho em capítulos separados por `<br>`)
+- **Tarefa:** `feat/progress-overlay` (indicador de progresso acessível na página)
 - **Aceite manual de `feat/viewport-priority`** (31/10/2026): `firstVisibleMs` 2–4 s e `visibleLatency` 3–5 s no Chrome real; pausa ocasional da tela com o popup avançando (ver ADR-016)
 - **Fase 4:** concluída — PRs #17–#22 mesclados; Gate cumprido (E2E de ida e volta byte a byte e aceite manual do responsável no Chrome real)
 - **Fase 3:** concluída — PRs #13–#16 mesclados; gate cumprido (18/18 execuções com o modelo real); ADR-011 aceita após conferência do model card pelo responsável
@@ -14,6 +14,42 @@
 - **Fase 2:** concluída — PRs #9 e #10 mesclados; aceite manual do responsável no Chrome estável (conexão, modelos listados, Ollama fechado)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
+
+## Fase 5 — `feat/progress-overlay`
+
+| Commit | Mensagem |
+|---|---|
+| `f32cd4e` | `refactor(popup): move textos de estado da página para shared` |
+| `9804546` | `feat(content): adiciona modelo do indicador de progresso` |
+| `e13fb91` | `feat(content): renderiza indicador em shadow root fechado` |
+| `aefafec` | `feat(content): liga indicador ao estado do job` |
+| `07daf56` | `build(security): proíbe shadow root aberto no content script` |
+| `2392df1` | `test(e2e): isola o host do indicador no snapshot da página` |
+| `040df30` | `test(e2e): cobre indicador de progresso na página` |
+| `bd92db8` | `fix(content): exibe o indicador na top layer do navegador` |
+| `8579b91` | `fix(content): melhora anúncio, tema e foco do indicador` |
+| `e3f7684` | `test(content): cobre falha do indicador e exclusão do host` |
+| `2e1e90d` | `build(security): amplia a detecção de shadow root aberto` |
+| `02cb2f8` | `test(e2e): traz a página para a frente no teste do indicador` |
+| (este commit) | `docs: registra adr-019 do indicador de progresso` |
+
+Quinta branch da Fase 5.
+
+**O que foi feito:**
+
+- `src/shared/page-status-text.ts`: textos de estado compartilhados entre popup e página.
+- `src/content/progress-view.ts` e `src/content/progress-overlay.ts`: indicador na página em shadow root fechado, top layer, acessível (ADR-019).
+- `src/content/index.ts` e `controller.ts`: ligação ao estado do job, sem que uma falha do indicador interrompa a tradução.
+- `scripts/verify-dist.mjs`: o build falha se o `content.js` criar shadow root aberto.
+- E2E do indicador (`tests/e2e/progress-overlay.spec.ts`), com fixture servida sob CSP estrita; o snapshot da ida e volta exclui o host, e um teste compara a página inteira depois que o indicador some.
+
+**Revisão:** reviewer aprovou com ressalvas. Aplicadas: top layer (o Dark Reader no modo filtro tirava a pílula da tela), primeiro anúncio atrasado para o leitor de tela, `color-scheme`, foco devolvido ao fechar, testes de falha do indicador e de exclusão do host, regex do `verify-dist` ampliada. A decisão do popover contraria a recomendação inicial do architect; o motivo está na ADR-019.
+
+**Falha investigada pelo debugger:** depois das correções, o E2E “a)” mostrava só 2 contagens. Causa medida: atrás da aba do driver o Chrome limitava os quadros da fixture a ~1/s; o commit anterior às correções também falhava nessas condições. Corrigido no teste (fixture à frente, como o usuário a veria), com a asserção de pelo menos 3 contagens mantida.
+
+**Validações executadas** (códigos de saída conferidos): `npm run lint`, `typecheck`, `test` (2068/2068; eram 1979), `build` (`verify-dist` ok) e `test:e2e` (35/35, três rodadas).
+
+**Pendências:** smoke manual do indicador no Chrome real (Dark Reader, leitor de tela, tema escuro); Gate da Fase 5 (roteiro em TEST_PLAN); opção para desligar o indicador (P1).
 
 ## Fase 5 — `fix/shared-block-priority`
 
@@ -751,4 +787,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 5 — `feat/progress-overlay`: indicação de progresso acessível e não intrusiva na página. Depois, fechar o Gate da Fase 5 com as medições de memória e de long tasks no hardware real.
+Fase 5 — Gate: o responsável executa o roteiro “Gate da Fase 5” do TEST_PLAN (memória, tarefas longas e tempos no hardware real) e o smoke do indicador; com o resultado, registrar o Gate e versionar 0.3.0.

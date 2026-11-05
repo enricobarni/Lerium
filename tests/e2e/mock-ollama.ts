@@ -26,6 +26,10 @@ export const LONG_FIXTURE_PATH = '/fixture/long-chapter.html';
 export const LONG_PARAGRAPH_FIXTURE_PATH = '/fixture/long-paragraph-chapter.html';
 /** Capítulo num único `<div>`, com os parágrafos (`R01`…`R40`) separados por `<br><br>`. */
 export const BR_FIXTURE_PATH = '/fixture/br-chapter.html';
+/** O capítulo de `FIXTURE_PATH` sob CSP estrita (`CSP_FIXTURE_POLICY`). */
+export const CSP_FIXTURE_PATH = '/fixture/csp-chapter.html';
+/** Bloqueia toda folha de estilo da página, inclusive a `<style>` da própria fixture. */
+export const CSP_FIXTURE_POLICY = "style-src 'none'";
 
 /** Caminho servido → arquivo em `tests/fixtures`. */
 const FIXTURE_FILES: ReadonlyMap<string, string> = new Map([
@@ -36,6 +40,12 @@ const FIXTURE_FILES: ReadonlyMap<string, string> = new Map([
     fileURLToPath(new URL('../fixtures/long-paragraph-chapter.html', import.meta.url)),
   ],
   [BR_FIXTURE_PATH, fileURLToPath(new URL('../fixtures/br-chapter.html', import.meta.url))],
+  [CSP_FIXTURE_PATH, fileURLToPath(new URL('../fixtures/novel-chapter.html', import.meta.url))],
+]);
+
+/** Cabeçalhos extras de algumas fixtures. */
+const FIXTURE_HEADERS: ReadonlyMap<string, Readonly<Record<string, string>>> = new Map([
+  [CSP_FIXTURE_PATH, { 'content-security-policy': CSP_FIXTURE_POLICY }],
 ]);
 
 /** Par de idiomas que o mock espera no prompt (o mesmo gravado pelos testes). */
@@ -407,6 +417,7 @@ export async function startMockOllama(initial: Partial<MockScenario> = {}): Prom
       res.writeHead(200, {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
+        ...FIXTURE_HEADERS.get(path),
       });
       res.end(html);
       return;

@@ -20,6 +20,8 @@
  * - Eventos DOM são compartilhados com a página: `handlePageHide` só repassa
  *   `pagehide` confiável (`isTrusted`), gerado pelo navegador. Um evento
  *   sintético (`dispatchEvent`) da página é ignorado e não desativa o Lerium.
+ * - `createOverlayStateListener`: liga o estado do job ao indicador de
+ *   progresso; uma falha no indicador nunca interrompe o job.
  */
 
 import {
@@ -29,6 +31,7 @@ import {
   type PageStateView,
 } from '../shared/page-control';
 import type { JobRunner, JobState } from './job-runner';
+import type { ProgressOverlay } from './progress-overlay';
 
 export interface ContentControllerDeps {
   runner: JobRunner;
@@ -68,6 +71,22 @@ export function toPageStateView(state: JobState): PageStateView {
     if (latency !== null) view.visibleLatency = latency;
   }
   return view;
+}
+
+/**
+ * Ouvinte `onState` do executor que repassa o estado ao indicador. O
+ * indicador é acessório: uma exceção nele é engolida e o job segue.
+ */
+export function createOverlayStateListener(
+  overlay: Pick<ProgressOverlay, 'update'>,
+): (state: JobState) => void {
+  return (state) => {
+    try {
+      overlay.update(toPageStateView(state));
+    } catch {
+      // O indicador é acessório: uma falha nele nunca interrompe o job.
+    }
+  };
 }
 
 export function createContentController(deps: ContentControllerDeps): ContentController {
