@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { handlePageHide, toPageStateView } from '../../src/content/controller';
 import { collectTextNodes, LERIUM_UI_ATTRIBUTE } from '../../src/content/dom-collector';
 import { createJobRunner, type JobRunner } from '../../src/content/job-runner';
-import { createProgressOverlay, type ProgressOverlay } from '../../src/content/progress-overlay';
+import {
+  ANNOUNCE_DELAY_MS,
+  createProgressOverlay,
+  type ProgressOverlay,
+} from '../../src/content/progress-overlay';
 import { segmentTextNodes } from '../../src/content/segmenter';
 import { PAGE_JOB_PORT_NAME, type JobUnitMessage } from '../../src/shared/page-messages';
 import { TRANSLATED_MESSAGE, translatingMessage } from '../../src/shared/page-status-text';
@@ -37,18 +41,23 @@ function setup(): Harness {
   let nextId = 1;
   const timers = new Map<number, () => void>();
   const frames = new Map<number, () => void>();
+  /** Esperas do anúncio: rodam junto com os quadros em `flush`. */
+  const announces = new Map<number, () => void>();
   const inFlight: JobUnitMessage[] = [];
   const listeners = new Set<(message: unknown) => void>();
   let jobs = 0;
 
   const overlay = createProgressOverlay({
     doc: document,
-    setTimeout: (fn) => {
+    setTimeout: (fn, ms) => {
       const id = nextId++;
-      timers.set(id, fn);
+      (ms === ANNOUNCE_DELAY_MS ? announces : timers).set(id, fn);
       return id;
     },
-    clearTimeout: (id) => timers.delete(id as number),
+    clearTimeout: (id) => {
+      timers.delete(id as number);
+      announces.delete(id as number);
+    },
     requestFrame: (cb) => {
       const id = nextId++;
       frames.set(id, cb);
@@ -113,9 +122,10 @@ function setup(): Harness {
     timers,
     frames,
     flush() {
-      for (let guard = 0; frames.size > 0 && guard < 10; guard += 1) {
-        const pending = [...frames.values()];
+      for (let guard = 0; frames.size + announces.size > 0 && guard < 10; guard += 1) {
+        const pending = [...frames.values(), ...announces.values()];
         frames.clear();
+        announces.clear();
         for (const cb of pending) cb();
       }
     },

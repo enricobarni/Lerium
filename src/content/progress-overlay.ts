@@ -17,7 +17,14 @@ import { describeProgress, type ProgressViewModel } from './progress-view';
  *   traz de volta.
  * - "Fechar" só aceita clique confiável (`isTrusted`) e não cancela o job.
  * - A contagem do sucesso para com o ponteiro ou o foco dentro do indicador e
- *   recomeça inteira quando os dois saem. Nunca chama `focus()`.
+ *   recomeça inteira quando os dois saem.
+ * - Foco: nunca roubar o foco; devolver o foco é permitido. O indicador nunca
+ *   se foca sozinho. Se o foco entrou nele vindo da página e ainda está dentro
+ *   quando ele some (ou no "Fechar"), volta ao elemento de onde veio, se ainda
+ *   conectado (`preventScroll`).
+ * - A região `role=status` só recebe a primeira escrita ~150 ms depois de o
+ *   host entrar no DOM, para o leitor de tela já a conhecer; as mudanças
+ *   seguintes saem no quadro seguinte.
  * - Fica na top layer (`popover="manual"` + `showPopover()`), contido pela
  *   viewport mesmo com `filter`/`transform`/`contain` em `<html>` (ex.: Dark
  *   Reader no modo filtro), que prenderiam um `position: fixed` comum. Sem a
@@ -31,6 +38,8 @@ import { describeProgress, type ProgressViewModel } from './progress-view';
  */
 
 export const AUTO_HIDE_MS = 5000;
+/** Atraso da primeira escrita na região viva depois de o host entrar no DOM. */
+export const ANNOUNCE_DELAY_MS = 150;
 
 export interface ProgressOverlayDeps {
   doc: Document;
@@ -72,6 +81,7 @@ export const OVERLAY_CSS = `
   --hover: #eaeef2;
   --accent: #0969da;
   box-sizing: border-box;
+  color-scheme: light dark;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -221,6 +231,11 @@ export function createProgressOverlay(deps: ProgressOverlayDeps): ProgressOverla
   let announced: string | null = null;
   let frame: unknown = null;
   let announceFrame: unknown = null;
+  let announceTimer: unknown = null;
+  /** O host acabou de entrar no DOM: a próxima escrita na região viva espera. */
+  let freshInDom = false;
+  /** Elemento da página que tinha o foco antes de ele entrar no indicador. */
+  let focusOrigin: HTMLElement | null = null;
   let hideTimer: unknown = null;
   /** Visto um `translating` e o indicador ainda não sumiu de vez. */
   let session = false;
@@ -256,6 +271,7 @@ export function createProgressOverlay(deps: ProgressOverlayDeps): ProgressOverla
     // A página pode ter tirado o host do DOM (o que também o tira da top layer).
     if (!host.isConnected) {
       inTopLayer = false;
+      freshInDom = true;
       doc.documentElement.append(host);
     }
     if (inTopLayer || !supportsPopover(host)) return;
@@ -273,23 +289,39 @@ export function createProgressOverlay(deps: ProgressOverlayDeps): ProgressOverla
     hideTimer = null;
   }
 
+  function cancelAnnounce(): void {
+    if (announceFrame !== null) deps.cancelFrame(announceFrame);
+    if (announceTimer !== null) deps.clearTimeout(announceTimer);
+    announceFrame = null;
+    announceTimer = null;
+  }
+
   function cancelFrames(): void {
     if (frame !== null) deps.cancelFrame(frame);
-    if (announceFrame !== null) deps.cancelFrame(announceFrame);
     frame = null;
-    announceFrame = null;
+    cancelAnnounce();
   }
 
   function removeHost(): void {
     clearHideTimer();
-    if (announceFrame !== null) deps.cancelFrame(announceFrame);
-    announceFrame = null;
+    cancelAnnounce();
+    // Nunca roubar o foco; devolver o foco é permitido: só se ele está dentro
+    // do indicador, que vai sumir, e para o elemento da página de onde veio.
+    const restore = focusInside ? focusOrigin : null;
     if (elements !== null) unplace(elements.host);
     elements = null;
     shown = null;
     announced = null;
     pointerInside = false;
     focusInside = false;
+    focusOrigin = null;
+    if (restore?.isConnected === true) {
+      try {
+        restore.focus({ preventScroll: true });
+      } catch {
+        // Foco é acessório: sem devolução, segue.
+      }
+    }
   }
 
   /** Some de vez: só um novo início o traz de volta. */
@@ -379,7 +411,18 @@ export function createProgressOverlay(deps: ProgressOverlayDeps): ProgressOverla
       pointerInside = false;
       syncHideTimer();
     });
-    pill.addEventListener('focusin', () => {
+    pill.addEventListener('focusin', (event) => {
+      // Sem `instanceof`: o alvo pode vir de outro realm.
+      const from = event.relatedTarget as HTMLElement | null;
+      const fromPage =
+        from !== null &&
+        'nodeType' in from &&
+        from.nodeType === 1 &&
+        from !== host &&
+        !pill.contains(from) &&
+        typeof from.focus === 'function';
+      // Foco vindo de fora: guarda a origem (ou nenhuma, se não era um elemento).
+      if (!focusInside || fromPage) focusOrigin = fromPage ? from : null;
       focusInside = true;
       syncHideTimer();
     });
@@ -393,16 +436,29 @@ export function createProgressOverlay(deps: ProgressOverlayDeps): ProgressOverla
     return { host, pill, message, progress, status };
   }
 
+  /** Escreve o anúncio atual (o mais recente, se mudou durante a espera). */
+  function writeAnnouncement(): void {
+    announceFrame = null;
+    announceTimer = null;
+    if (elements !== null && announced !== null) elements.status.textContent = announced;
+  }
+
   function announce(status: HTMLElement, text: string): void {
     if (text === announced) return;
     announced = text;
-    // Limpa e reescreve no quadro seguinte, para o leitor de tela anunciar.
+    // Limpa e reescreve depois, para o leitor de tela anunciar.
     status.textContent = '';
+    // Primeira escrita ainda esperando: ela já usará o texto novo.
+    if (announceTimer !== null) return;
     if (announceFrame !== null) deps.cancelFrame(announceFrame);
-    announceFrame = deps.requestFrame(() => {
-      announceFrame = null;
-      if (elements !== null && announced === text) elements.status.textContent = text;
-    });
+    announceFrame = null;
+    if (freshInDom) {
+      // Região recém-inserida: escrever na hora costuma não ser anunciado.
+      freshInDom = false;
+      announceTimer = deps.setTimeout(writeAnnouncement, ANNOUNCE_DELAY_MS);
+    } else {
+      announceFrame = deps.requestFrame(writeAnnouncement);
+    }
   }
 
   function render(): void {

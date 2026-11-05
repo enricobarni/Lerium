@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { collectTextNodes, LERIUM_UI_ATTRIBUTE } from '../../src/content/dom-collector';
 import {
+  ANNOUNCE_DELAY_MS,
   AUTO_HIDE_MS,
   createProgressOverlay,
   OVERLAY_CSS,
@@ -136,12 +137,23 @@ function setup(overrides: Partial<ProgressOverlayDeps> = {}) {
   const overlay = createProgressOverlay(deps);
   overlays.push(overlay);
 
-  /** Roda os quadros pendentes até não sobrar nenhum. */
+  const announceTimers = (): number[] =>
+    [...timers.entries()].filter(([, timer]) => timer.ms === ANNOUNCE_DELAY_MS).map(([id]) => id);
+  /** Roda os quadros e as esperas do anúncio pendentes até não sobrar nenhum. */
   const flush = (): void => {
-    for (let guard = 0; frames.size > 0 && guard < 10; guard += 1) {
+    for (
+      let guard = 0;
+      (frames.size > 0 || announceTimers().length > 0) && guard < 10;
+      guard += 1
+    ) {
       const pending = [...frames.entries()];
       frames.clear();
       for (const [, cb] of pending) cb();
+      for (const id of announceTimers()) {
+        const timer = timers.get(id);
+        timers.delete(id);
+        timer?.fn();
+      }
     }
   };
   const runTimers = (): void => {
@@ -395,7 +407,10 @@ describe('progress overlay: sucesso some sozinho', () => {
     t.show(translating(3));
     t.show(translated());
     t.show(translated());
-    expect(t.deps.setTimeout).toHaveBeenCalledTimes(1);
+    const hideCalls = vi
+      .mocked(t.deps.setTimeout)
+      .mock.calls.filter(([, ms]) => ms === AUTO_HIDE_MS);
+    expect(hideCalls).toHaveLength(1);
   });
 
   it('pausa com o foco dentro e recomeça quando ele sai', () => {
@@ -436,7 +451,7 @@ describe('progress overlay: sucesso some sozinho', () => {
     expect(t.timers.size).toBe(1);
   });
 
-  it('nunca chama focus()', () => {
+  it('sem foco dentro, nunca chama focus()', () => {
     const focus = vi.spyOn(HTMLElement.prototype, 'focus');
     const t = setup();
     t.show(translating(1));
@@ -444,6 +459,153 @@ describe('progress overlay: sucesso some sozinho', () => {
     t.trustedClick(t.closeButton());
     t.show(translating(0));
     t.show(state({ status: 'error', error: 'forbidden' }));
+    expect(focus).not.toHaveBeenCalled();
+  });
+});
+
+describe('progress overlay: anúncio', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Tempo e quadros reais do vitest (falsos): quadro = 16 ms. */
+  const fakeDeps = (): Partial<ProgressOverlayDeps> => ({
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (id) => clearTimeout(id as ReturnType<typeof setTimeout>),
+    requestFrame: (cb) => setTimeout(cb, 16),
+    cancelFrame: (id) => clearTimeout(id as ReturnType<typeof setTimeout>),
+  });
+
+  it(`primeira escrita só ${ANNOUNCE_DELAY_MS} ms depois de o host entrar no DOM`, () => {
+    const t = setup(fakeDeps());
+    t.overlay.update(translating(0));
+    vi.advanceTimersByTime(16);
+    expect(t.hosts()).toHaveLength(1);
+    expect(t.status().textContent).toBe('');
+    vi.advanceTimersByTime(ANNOUNCE_DELAY_MS - 1);
+    expect(t.status().textContent).toBe('');
+    vi.advanceTimersByTime(1);
+    expect(t.status().textContent).toBe(TRANSLATING_ANNOUNCE);
+
+    // Mudanças seguintes: limpa e reescreve no quadro seguinte.
+    t.overlay.update(translated({ failed: 1, done: 3 }));
+    vi.advanceTimersByTime(16);
+    expect(t.status().textContent).toBe('');
+    vi.advanceTimersByTime(16);
+    expect(t.status().textContent).toBe(partialMessage(1));
+  });
+
+  it('mudança durante a espera inicial: a primeira escrita já usa o texto novo', () => {
+    const t = setup(fakeDeps());
+    t.overlay.update(translating(0));
+    vi.advanceTimersByTime(16);
+    t.overlay.update(state({ status: 'error', error: 'network', total: 4 }));
+    vi.advanceTimersByTime(16);
+    expect(t.status().textContent).toBe('');
+    vi.advanceTimersByTime(ANNOUNCE_DELAY_MS);
+    expect(t.status().textContent).toBe(STATE_ERROR_MESSAGES.network);
+  });
+
+  it('sumir durante a espera cancela a escrita', () => {
+    const t = setup(fakeDeps());
+    t.overlay.update(translating(0));
+    vi.advanceTimersByTime(16);
+    t.overlay.update(state({ status: 'cancelled', total: 4 }));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('progress overlay: foco', () => {
+  /** Botão da página com o foco, de onde o foco entra no indicador. */
+  function pageButton(): HTMLButtonElement {
+    const button = document.body.appendChild(document.createElement('button'));
+    button.textContent = 'Página';
+    return button;
+  }
+  const focusIn = (target: Element, from: Element | null): void => {
+    target.dispatchEvent(new FocusEvent('focusin', { bubbles: true, relatedTarget: from }));
+  };
+
+  it('Fechar com o foco dentro devolve o foco à origem, sem rolar', () => {
+    const origin = pageButton();
+    const focus = vi.spyOn(origin, 'focus');
+    const t = setup();
+    t.show(translating(1));
+    focusIn(t.closeButton(), origin);
+    t.trustedClick(t.closeButton());
+    expect(t.hosts()).toEqual([]);
+    expect(focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+  });
+
+  it('sumir com o foco dentro (cancelado) devolve o foco', () => {
+    const origin = pageButton();
+    const focus = vi.spyOn(origin, 'focus');
+    const t = setup();
+    t.show(translating(1));
+    focusIn(t.closeButton(), origin);
+    t.show(state({ status: 'cancelled', total: 4, done: 1 }));
+    expect(focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
+  });
+
+  it('foco que passa dentro do indicador não troca a origem', () => {
+    const origin = pageButton();
+    const focus = vi.spyOn(origin, 'focus');
+    const t = setup();
+    t.show(translating(1));
+    focusIn(t.closeButton(), origin);
+    focusIn(t.q('.message'), t.closeButton());
+    t.trustedClick(t.closeButton());
+    expect(focus).toHaveBeenCalledOnce();
+  });
+
+  it('origem desconectada: não foca nada', () => {
+    const origin = pageButton();
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    const t = setup();
+    t.show(translating(1));
+    focusIn(t.closeButton(), origin);
+    origin.remove();
+    t.trustedClick(t.closeButton());
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it('sem origem (relatedTarget nulo): não foca nada', () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    const t = setup();
+    t.show(translating(1));
+    focusIn(t.closeButton(), null);
+    t.trustedClick(t.closeButton());
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it('com o foco já fora ao sumir: não foca nada', () => {
+    const origin = pageButton();
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    const t = setup();
+    t.show(translating(3));
+    focusIn(t.closeButton(), origin);
+    t.closeButton().dispatchEvent(
+      new FocusEvent('focusout', { bubbles: true, relatedTarget: origin }),
+    );
+    t.show(translated());
+    t.runTimers();
+    expect(t.hosts()).toEqual([]);
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it('nunca foca o indicador por conta própria', () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    const t = setup();
+    t.show(translating(1));
+    t.show(translated({ failed: 1, done: 3 }));
+    t.show(translating(0));
+    t.show(translated());
+    t.runTimers();
+    t.show(translating(0));
+    t.trustedClick(t.closeButton());
     expect(focus).not.toHaveBeenCalled();
   });
 });
@@ -520,6 +682,7 @@ describe('progress overlay: estilos', () => {
       'inset: auto 16px 16px auto !important',
       'z-index: 2147483647 !important',
       'max-width: min(320px',
+      'color-scheme: light dark',
       '@media (prefers-color-scheme: dark)',
       '@media (forced-colors: active)',
       '@media (prefers-reduced-motion: reduce)',
