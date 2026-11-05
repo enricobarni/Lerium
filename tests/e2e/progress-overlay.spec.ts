@@ -198,6 +198,10 @@ async function setUp(
   await resetSettings(serviceWorker);
   const fixture = await openFixture(context, serviceWorker, url);
   const driver = await PageDriver.open(context, extensionId);
+  // O driver abriu por último e ficou na frente; atrás dele o Chrome limita
+  // os quadros da fixture a ~1/s e o indicador (um render por quadro) pularia
+  // contagens. Na frente, como o usuário a veria.
+  await fixture.page.bringToFront();
   const probe = await OverlayProbe.attach(context, fixture.page);
   const pristine = await fullOuterHtml(fixture.page);
   const injected = await driver.inject(fixture.tabId);
