@@ -58,9 +58,10 @@ const FORBIDDEN_CONTENT_ONLY = [
 // content.js chama `attachShadow`, nenhum `mode: 'open'` pode aparecer no
 // bundle. A checagem vale para o arquivo inteiro, não só para o literal dentro
 // da chamada, para pegar também o objeto de opções montado numa variável.
-// Tolera espaços e qualquer aspa (`'`, `"`, crase).
+// Tolera espaços e qualquer aspa (`'`, `"`, crase) no valor e também na
+// chave (`{"mode":"open"}`, `{'mode': 'open'}`).
 const ATTACH_SHADOW = /attachShadow/;
-const OPEN_SHADOW_MODE = /mode\s*:\s*["'`]open["'`]/;
+const OPEN_SHADOW_MODE = /["'`]?mode["'`]?\s*:\s*["'`]open["'`]/;
 
 // Arquivos de texto em que se procura "jsdom" (PNG e outros binários não).
 const TEXT_EXTENSIONS = ['.js', '.mjs', '.html', '.css', '.json', '.map'];
