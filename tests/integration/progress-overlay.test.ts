@@ -4,6 +4,7 @@ import {
   AUTO_HIDE_MS,
   createProgressOverlay,
   OVERLAY_CSS,
+  type ProgressOverlay,
   type ProgressOverlayDeps,
 } from '../../src/content/progress-overlay';
 import type { PageStateView } from '../../src/shared/page-control';
@@ -34,6 +35,8 @@ const translated = (overrides: Partial<PageStateView> = {}): PageStateView =>
 let roots: ShadowRoot[];
 let attachSpy: ReturnType<typeof vi.spyOn>;
 let withAdoptedSheets: boolean;
+/** Indicadores criados no teste: descartados no fim (o ouvinte de tela cheia fica no documento). */
+let overlays: ProgressOverlay[] = [];
 
 beforeEach(() => {
   document.documentElement.replaceChildren(
@@ -63,8 +66,46 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const overlay of overlays) overlay.dispose();
+  overlays = [];
   vi.restoreAllMocks();
+  // Simulações de Popover API e tela cheia (o jsdom não tem nenhuma das duas).
+  Reflect.deleteProperty(HTMLElement.prototype, 'showPopover');
+  Reflect.deleteProperty(HTMLElement.prototype, 'hidePopover');
+  Reflect.deleteProperty(document, 'fullscreenElement');
 });
+
+/** Simula a Popover API no protótipo; `open` guarda quem está na top layer. */
+function stubPopover() {
+  const open = new Set<HTMLElement>();
+  const showPopover = vi.fn(function (this: HTMLElement) {
+    if (!this.isConnected) throw new DOMException('fora do documento', 'InvalidStateError');
+    open.add(this);
+  });
+  const hidePopover = vi.fn(function (this: HTMLElement) {
+    open.delete(this);
+  });
+  for (const [name, value] of [
+    ['showPopover', showPopover],
+    ['hidePopover', hidePopover],
+  ] as const) {
+    Object.defineProperty(HTMLElement.prototype, name, {
+      value,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return { open, showPopover, hidePopover };
+}
+
+/** Simula `document.fullscreenElement` e dispara `fullscreenchange`. */
+function setFullscreen(element: Element | null): void {
+  Object.defineProperty(document, 'fullscreenElement', {
+    get: () => element,
+    configurable: true,
+  });
+  document.dispatchEvent(new Event('fullscreenchange'));
+}
 
 function setup(overrides: Partial<ProgressOverlayDeps> = {}) {
   let nextId = 1;
@@ -93,6 +134,7 @@ function setup(overrides: Partial<ProgressOverlayDeps> = {}) {
     ...overrides,
   };
   const overlay = createProgressOverlay(deps);
+  overlays.push(overlay);
 
   /** Roda os quadros pendentes até não sobrar nenhum. */
   const flush = (): void => {
@@ -486,6 +528,136 @@ describe('progress overlay: estilos', () => {
     ]) {
       expect(OVERLAY_CSS).toContain(rule);
     }
-    expect(OVERLAY_CSS).not.toMatch(/popover|rem\b|em;/);
+    expect(OVERLAY_CSS).not.toMatch(/rem\b|em;/);
+  });
+
+  it('o CSS do host neutraliza os estilos padrão de popover', () => {
+    const host = /:host \{([^}]*)\}/.exec(OVERLAY_CSS)?.[1] ?? '';
+    for (const rule of [
+      'inset: auto 16px 16px auto !important',
+      'margin: 0 !important',
+      'padding: 0 !important',
+      'border: 0 !important',
+      'background: transparent !important',
+      'color: inherit !important',
+      'overflow: visible !important',
+    ]) {
+      expect(host).toContain(rule);
+    }
+    expect(OVERLAY_CSS).toContain(':host::backdrop { display: none !important; }');
+  });
+});
+
+describe('progress overlay: top layer', () => {
+  it('com Popover API: popover manual mostrado ao aparecer e escondido ao sumir', () => {
+    const popover = stubPopover();
+    const t = setup();
+    t.show(translating(1));
+    const host = t.host() as HTMLElement;
+    expect(host.getAttribute('popover')).toBe('manual');
+    expect(popover.showPopover).toHaveBeenCalledTimes(1);
+    expect(popover.open.has(host)).toBe(true);
+
+    // Atualizações seguintes não repetem o showPopover.
+    t.show(translating(2));
+    expect(popover.showPopover).toHaveBeenCalledTimes(1);
+
+    t.show(state({ status: 'cancelled', total: 4, done: 2 }));
+    expect(popover.hidePopover).toHaveBeenCalledTimes(1);
+    expect(popover.open.size).toBe(0);
+    expect(t.hosts()).toEqual([]);
+  });
+
+  it('host removido pela página volta à top layer', () => {
+    const popover = stubPopover();
+    const t = setup();
+    t.show(translating(1));
+    t.host()?.remove();
+    t.show(translating(2));
+    expect(t.hosts()).toHaveLength(1);
+    expect(popover.showPopover).toHaveBeenCalledTimes(2);
+  });
+
+  it('showPopover que falha: fica no documento como antes', () => {
+    stubPopover();
+    HTMLElement.prototype.showPopover = vi.fn(() => {
+      throw new DOMException('falhou', 'NotSupportedError');
+    });
+    const t = setup();
+    t.show(translating(1));
+    expect(t.hosts()).toHaveLength(1);
+    expect(t.message()).toBe(translatingMessage(1, 4));
+  });
+
+  it('sem Popover API: sem atributo popover, host no fim do documento', () => {
+    const t = setup();
+    t.show(translating(1));
+    const host = t.host();
+    expect(host?.hasAttribute('popover')).toBe(false);
+    expect(document.documentElement.lastElementChild).toBe(host);
+  });
+});
+
+describe('progress overlay: tela cheia', () => {
+  it('some em tela cheia e volta ao sair, com o estado atual', () => {
+    const popover = stubPopover();
+    const t = setup();
+    t.show(translating(1));
+    const video = document.body.appendChild(document.createElement('video'));
+
+    setFullscreen(video);
+    expect(t.hosts()).toEqual([]);
+    expect(popover.open.size).toBe(0);
+
+    // Atualizações em tela cheia não o trazem de volta.
+    t.show(translating(2));
+    expect(t.hosts()).toEqual([]);
+
+    setFullscreen(null);
+    expect(t.hosts()).toHaveLength(1);
+    expect(popover.open.has(t.host() as HTMLElement)).toBe(true);
+    expect(t.message()).toBe(translatingMessage(2, 4));
+  });
+
+  it('sem Popover API também some e volta', () => {
+    const t = setup();
+    t.show(translating(1));
+    setFullscreen(document.body);
+    expect(t.hosts()).toEqual([]);
+    setFullscreen(null);
+    expect(t.hosts()).toHaveLength(1);
+  });
+
+  it('começar em tela cheia: aparece só ao sair dela', () => {
+    const t = setup();
+    setFullscreen(document.body);
+    t.show(translating(1));
+    expect(t.hosts()).toEqual([]);
+    setFullscreen(null);
+    expect(t.hosts()).toHaveLength(1);
+  });
+
+  it('não volta se sumiu de vez durante a tela cheia', () => {
+    const t = setup();
+    t.show(translating(1));
+    setFullscreen(document.body);
+    t.show(state({ status: 'cancelled', total: 4, done: 1 }));
+    setFullscreen(null);
+    expect(t.hosts()).toEqual([]);
+  });
+
+  it('dispose remove o ouvinte de fullscreenchange', () => {
+    const add = vi.spyOn(document, 'addEventListener');
+    const remove = vi.spyOn(document, 'removeEventListener');
+    const t = setup();
+    const listener = add.mock.calls.find(([type]) => type === 'fullscreenchange')?.[1];
+    expect(listener).toBeDefined();
+    t.show(translating(1));
+    t.overlay.dispose();
+    expect(remove).toHaveBeenCalledWith('fullscreenchange', listener);
+
+    setFullscreen(document.body);
+    setFullscreen(null);
+    expect(t.hosts()).toEqual([]);
   });
 });

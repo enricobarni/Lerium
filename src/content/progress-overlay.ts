@@ -18,6 +18,12 @@ import { describeProgress, type ProgressViewModel } from './progress-view';
  * - "Fechar" só aceita clique confiável (`isTrusted`) e não cancela o job.
  * - A contagem do sucesso para com o ponteiro ou o foco dentro do indicador e
  *   recomeça inteira quando os dois saem. Nunca chama `focus()`.
+ * - Fica na top layer (`popover="manual"` + `showPopover()`), contido pela
+ *   viewport mesmo com `filter`/`transform`/`contain` em `<html>` (ex.: Dark
+ *   Reader no modo filtro), que prenderiam um `position: fixed` comum. Sem a
+ *   Popover API, fica como `fixed` no fim do documento.
+ * - Sai do DOM enquanto houver tela cheia (`fullscreenElement`) e volta ao
+ *   sair dela, se ainda devia estar visível.
  * - Atualizações são agrupadas em um render por quadro.
  * - DOM só com `createElement`/`textContent`/`append`; do estado só entram
  *   contagens (ver `progress-view.ts`). O host tem `data-lerium-ui`, que a
@@ -53,8 +59,12 @@ export const OVERLAY_CSS = `
   margin: 0 !important;
   padding: 0 !important;
   border: 0 !important;
+  background: transparent !important;
+  color: inherit !important;
+  overflow: visible !important;
   pointer-events: auto !important;
 }
+:host::backdrop { display: none !important; }
 .pill {
   --bg: #ffffff;
   --fg: #1f2328;
@@ -183,6 +193,11 @@ interface OverlayElements {
   status: HTMLElement;
 }
 
+/** Popover API (top layer); ausente em navegadores antigos e no jsdom. */
+function supportsPopover(host: HTMLElement): boolean {
+  return typeof (host as { showPopover?: unknown }).showPopover === 'function';
+}
+
 function defaultCreateSheet(doc: Document): CSSStyleSheet | null {
   const Sheet = doc.defaultView?.CSSStyleSheet;
   if (Sheet === undefined) return null;
@@ -214,6 +229,43 @@ export function createProgressOverlay(deps: ProgressOverlayDeps): ProgressOverla
   let pointerInside = false;
   let focusInside = false;
   let disposed = false;
+  /** O host foi posto na top layer por `showPopover()`. */
+  let inTopLayer = false;
+
+  const isFullscreen = (): boolean => (doc.fullscreenElement ?? null) !== null;
+
+  /** Tira o host da top layer e do DOM. */
+  function unplace(host: HTMLElement): void {
+    if (inTopLayer) {
+      inTopLayer = false;
+      try {
+        host.hidePopover();
+      } catch {
+        // A remoção abaixo já o tira da top layer.
+      }
+    }
+    host.remove();
+  }
+
+  /** Põe o host no fim do documento e na top layer; em tela cheia, tira-o. */
+  function place(host: HTMLElement): void {
+    if (isFullscreen()) {
+      unplace(host);
+      return;
+    }
+    // A página pode ter tirado o host do DOM (o que também o tira da top layer).
+    if (!host.isConnected) {
+      inTopLayer = false;
+      doc.documentElement.append(host);
+    }
+    if (inTopLayer || !supportsPopover(host)) return;
+    try {
+      host.showPopover();
+      inTopLayer = true;
+    } catch {
+      // Fica como `position: fixed` comum.
+    }
+  }
 
   function clearHideTimer(): void {
     if (hideTimer === null) return;
@@ -232,7 +284,7 @@ export function createProgressOverlay(deps: ProgressOverlayDeps): ProgressOverla
     clearHideTimer();
     if (announceFrame !== null) deps.cancelFrame(announceFrame);
     announceFrame = null;
-    elements?.host.remove();
+    if (elements !== null) unplace(elements.host);
     elements = null;
     shown = null;
     announced = null;
@@ -282,6 +334,7 @@ export function createProgressOverlay(deps: ProgressOverlayDeps): ProgressOverla
   function build(): OverlayElements {
     const host = doc.createElement('div');
     host.setAttribute(LERIUM_UI_ATTRIBUTE, '');
+    if (supportsPopover(host)) host.setAttribute('popover', 'manual');
     // Referência ao shadow root só nesta closure: a página não o alcança.
     const root = host.attachShadow({ mode: 'closed' });
     applyStyles(root);
@@ -360,8 +413,7 @@ export function createProgressOverlay(deps: ProgressOverlayDeps): ProgressOverla
       return;
     }
     if (elements === null) elements = build();
-    // A página pode ter tirado o host do DOM: volta ao fim do documento.
-    if (!elements.host.isConnected) doc.documentElement.append(elements.host);
+    place(elements.host);
 
     const { pill, message, progress, status } = elements;
     message.textContent = next.message;
@@ -378,6 +430,19 @@ export function createProgressOverlay(deps: ProgressOverlayDeps): ProgressOverla
     announce(status, next.announce);
     syncHideTimer();
   }
+
+  /** Tela cheia: o indicador sai do DOM e volta ao fim dela, se ainda visível. */
+  function onFullscreenChange(): void {
+    if (elements === null) return;
+    if (isFullscreen()) {
+      // Fora do DOM, ponteiro e foco não ficam mais dentro.
+      pointerInside = false;
+      focusInside = false;
+    }
+    place(elements.host);
+    syncHideTimer();
+  }
+  doc.addEventListener('fullscreenchange', onFullscreenChange);
 
   return {
     update(state) {
@@ -403,6 +468,7 @@ export function createProgressOverlay(deps: ProgressOverlayDeps): ProgressOverla
     dispose() {
       if (disposed) return;
       disposed = true;
+      doc.removeEventListener('fullscreenchange', onFullscreenChange);
       session = false;
       pending = null;
       cancelFrames();
