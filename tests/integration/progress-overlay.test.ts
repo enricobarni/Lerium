@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { collectTextNodes, LERIUM_UI_ATTRIBUTE } from '../../src/content/dom-collector';
+import {
+  collectTextNodes,
+  isExcludedElement,
+  LERIUM_UI_ATTRIBUTE,
+} from '../../src/content/dom-collector';
 import {
   ANNOUNCE_DELAY_MS,
   AUTO_HIDE_MS,
@@ -619,6 +623,18 @@ describe('progress overlay: isolamento da página', () => {
     const after = collectTextNodes(document);
     expect(after).toEqual(before);
     expect(after.map((node) => node.data)).toEqual(['Capítulo um.']);
+  });
+
+  it('texto no light DOM do host fica fora da coleta', () => {
+    const t = setup();
+    t.show(translating(1));
+    const host = t.host();
+    if (host === undefined) throw new Error('sem host');
+    // A página pode pôr nós no host; eles não viram trechos a traduzir.
+    host.append(document.createTextNode('Inserido pela página.'));
+    host.append(Object.assign(document.createElement('span'), { textContent: 'Também.' }));
+    expect(isExcludedElement(host)).toBe(true);
+    expect(collectTextNodes(document).map((node) => node.data)).toEqual(['Capítulo um.']);
   });
 
   it('dispose remove o host e não deixa timers nem quadros', () => {

@@ -8,7 +8,7 @@
  */
 
 import { PAGE_JOB_PORT_NAME } from '../shared/page-messages';
-import { createContentController, handlePageHide, toPageStateView } from './controller';
+import { createContentController, createOverlayStateListener, handlePageHide } from './controller';
 import { installOnce } from './install-once';
 import { createJobRunner } from './job-runner';
 import { createProgressOverlay } from './progress-overlay';
@@ -89,13 +89,7 @@ installOnce(globalThis, INSTALL_KEY, () => {
         },
         onChange,
       ),
-    onState: (state) => {
-      try {
-        overlay.update(toPageStateView(state));
-      } catch {
-        // O indicador é acessório: uma falha nele nunca interrompe o job.
-      }
-    },
+    onState: createOverlayStateListener(overlay),
   });
 
   const controller = createContentController({

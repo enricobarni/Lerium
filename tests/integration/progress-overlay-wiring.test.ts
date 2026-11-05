@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { handlePageHide, toPageStateView } from '../../src/content/controller';
+import { createOverlayStateListener, handlePageHide } from '../../src/content/controller';
 import { collectTextNodes, LERIUM_UI_ATTRIBUTE } from '../../src/content/dom-collector';
 import { createJobRunner, type JobRunner } from '../../src/content/job-runner';
 import {
@@ -14,7 +14,7 @@ import type { PortLike } from '../../src/shared/port-like';
 
 /**
  * Executor real e indicador real ligados como em `src/content/index.ts`
- * (`onState` → `update(toPageStateView(state))`; `pagehide` definitivo →
+ * (`onState` → `createOverlayStateListener(overlay)`; `pagehide` definitivo →
  * `dispose`). A porta é falsa e responde quando o teste manda; tempo e
  * quadros são manuais. O indicador não pode mudar o que a coleta, a
  * segmentação, a aplicação e a restauração fazem com a página.
@@ -37,7 +37,8 @@ interface Harness {
   pageHide(event: { isTrusted: boolean; persisted: boolean }): void;
 }
 
-function setup(): Harness {
+/** `failingUpdate`: o indicador ligado ao job lança em todo `update`. */
+function setup(options: { failingUpdate?: boolean } = {}): Harness {
   let nextId = 1;
   const timers = new Map<number, () => void>();
   const frames = new Map<number, () => void>();
@@ -104,7 +105,15 @@ function setup(): Harness {
     measure: () => ({ top: 0, bottom: 20, width: 100, height: 20 }),
     viewportHeight: () => 600,
     clock: () => Number.NaN,
-    onState: (state) => overlay.update(toPageStateView(state)),
+    onState: createOverlayStateListener(
+      options.failingUpdate === true
+        ? {
+            update() {
+              throw new Error('indicador quebrado');
+            },
+          }
+        : overlay,
+    ),
   });
 
   const controller = {
@@ -260,6 +269,18 @@ describe('indicador ligado ao job', () => {
     t.runner.start();
     t.flush();
     expect(t.hosts()).toEqual([]);
+  });
+
+  it('indicador que lança em update: o job segue até o fim', () => {
+    const t = setup({ failingUpdate: true });
+    t.runner.start();
+    expect(t.runner.getState().status).toBe('translating');
+    t.replyOne();
+    t.replyAll();
+    expect(t.runner.getState().status).toBe('translated');
+    expect(bodyText()).toEqual(PARAGRAPHS.map(upperCase));
+    t.runner.showOriginal();
+    expect(new XMLSerializer().serializeToString(document.body)).toBe(originalBody);
   });
 
   it('pagehide para o bfcache cancela, e o indicador some pelo estado', () => {
