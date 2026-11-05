@@ -31,6 +31,8 @@ literária de [PLAN.md §9](PLAN.md). Arquitetura em
 | Unitário + integração | Vitest | Interrupção (ADR-017): `job:cancel-unit` no service worker (vaga liberada na hora, semáforo só depois), `prependToGroup`, debounce de 500 ms, classe atual, uma vez por unidade, só com janela 1, fallback observado, timer limpo em todos os términos, contagem `preempted` | Fase 5 |
 | E2E | Playwright + Chromium | Pausa na rolagem (`tests/e2e/scroll-pause.spec.ts`): H1 (trecho fora da tela em voo não atrasa o visível) passa; H2 (capítulo em `<br>`: o próximo pedido é o trecho visível) passa desde `fix/shared-block-priority` | Fase 5 |
 | Integração | Vitest + jsdom | Bloco compartilhado (ADR-018): classificação por trecho, rastreador com busca binária, teto de 64 medidas e continuação, revezamento de blocos, trechos acima marcados `out` durante rolagem contínua, filtro por alvo da rolagem, vizinhos sem área, desconexão em todos os términos | Fase 5 |
+| Unitário + integração | Vitest | Indicador de progresso (ADR-019): modelo de estado, shadow root fechado, top layer e tela cheia, anúncio sem repetição, foco devolvido, falha do indicador sem interromper o job, host fora da coleta | Fase 5 |
+| E2E | Playwright + Chromium | Indicador (`tests/e2e/progress-overlay.spec.ts`): aparece e conta, some no sucesso sem deixar resto na página, persiste no erro e fecha, nunca é enviado ao Ollama, estilo aplicado sob CSP estrita | Fase 5 |
 | Manual (opt-in) | Vitest + Ollama real | Concorrência (`tests/manual/concurrency.manual.test.ts`): 1/2/4 simultâneas, tempo total, primeiro resultado e latência; resultados na ADR-015 | Fase 5 |
 | E2E | Playwright + Chromium | Tradução de página (`tests/e2e/page-translation.spec.ts`): injeção do `content.js` na fixture servida pelo mock, ida e volta byte a byte, Ollama fora, cancelamento no meio, injeção dupla, página não suportada, nenhum texto no console | Fase 4 |
 | E2E | Playwright + Chromium | Extensão MV3 carregada; iniciar/parar; seleção; menu de contexto; opções; alternar original; Ollama mock indisponível, HTTP 404 de modelo e resposta lenta | Fases 4–6 |
@@ -229,6 +231,33 @@ durante ou depois de uma tradução:
    espera dos parágrafos que entraram na tela por rolagem).
 
 A resposta traz só números e códigos, nunca texto da página.
+
+## Roteiro para o Gate da Fase 5 (hardware real)
+
+Com o Lerium traduzindo um capítulo longo (a fixture
+`tests/fixtures/long-chapter.html` servida localmente e um site real):
+
+1. **Memória:** abra o Gerenciador de Tarefas do Chrome (Shift+Esc) e anote a
+   memória da aba e de “Extensão: Lerium” antes de traduzir, no pico, ao
+   terminar e 30 s depois de “Mostrar original”. Anote também a memória do
+   `ollama` no Gerenciador de Tarefas do Windows.
+2. **Travamentos:** antes de traduzir, cole no console da página:
+
+   ```js
+   let n = 0, m = 0;
+   new PerformanceObserver((l) => l.getEntries().forEach((e) => { n++; m = Math.max(m, e.duration); }))
+     .observe({ type: 'longtask', buffered: true });
+   ```
+
+   Traduza, role por 30 s e depois leia `n` (quantas tarefas longas) e `m`
+   (a maior, em ms). Repita sem traduzir, só rolando, para separar o efeito
+   da página e do Ollama na CPU.
+3. **Tempos:** anote `firstVisibleMs`, `durationMs`, `visibleLatency` e
+   `preempted` (roteiro em “Como ler as métricas de prioridade”).
+
+Critério proposto: nenhuma tarefa longa atribuível ao Lerium acima de 50 ms
+durante a rolagem, memória estável depois de terminar, e nenhuma pausa
+perceptível na tela.
 
 ## Desempenho
 

@@ -1008,3 +1008,52 @@ depois de rolar até R20, o próximo pedido era R02.
   normal); `float`/`position` dentro do bloco degradam só a prioridade.
 - Uma sequência de trechos ocultos ou desconectados no fim do bloco é medida
   a cada passada (limitado pelo teto).
+
+## ADR-019 — Indicador de progresso na página
+
+**Status:** Aceita (05/11/2026)
+
+**Contexto.** A Fase 5 pede uma UI de progresso acessível e não intrusiva. É
+o primeiro elemento que o Lerium insere na página; até aqui ele só trocava o
+texto de nós existentes (ADR-014).
+
+**Decisão.**
+
+- **O que mostra:** uma pílula no canto inferior direito com "Traduzindo… x
+  de y trechos.", uma barra de progresso e o botão "Fechar". Só textos fixos e
+  contagens (`src/shared/page-status-text.ts`, compartilhado com o popup);
+  nenhum texto da página ou do modelo.
+- **Quando:** aparece no primeiro `translating`; sucesso completo some em 5 s
+  (pausa com ponteiro ou foco dentro); parcial e erro ficam até "Fechar" ou um
+  novo início; cancelar e mostrar o original escondem. "Fechar" não cancela a
+  tradução. Sem controles do job (Fase 6) e sem opção para desligar (P1).
+- **Isolamento:** host `div` só com `data-lerium-ui` (sem elemento
+  customizado, que a página poderia registrar antes), criado ao aparecer e
+  removido ao sumir; shadow root **fechado**; estilos por
+  `adoptedStyleSheets` (não passam pela CSP de estilo da página), com
+  `<style>` de reserva; `:host { all: initial !important; … }`. O build falha
+  se o `content.js` criar shadow root aberto (`verify-dist`).
+- **Top layer:** o host vira `popover="manual"` e é mostrado com
+  `showPopover()`. Sem isso, um `filter`/`transform` no `<html>` (por exemplo,
+  o Dark Reader no modo filtro) faz o `position: fixed` ser contido pelo
+  `<html>` e a pílula sai da tela. Contraponto aceito: a pílula fica acima de
+  modais da página; em tela cheia ela se esconde.
+- **Acessibilidade:** região `role="status"` só com mudanças de estado (sem
+  anunciar cada contagem), com a primeira escrita atrasada ~150 ms para o
+  leitor de tela registrar a região; `<progress>` rotulado; `lang="pt-BR"`;
+  contraste ≥ 4,5:1 nos dois temas, `color-scheme: light dark`,
+  `forced-colors` com cores do sistema, `prefers-reduced-motion`, alvo do
+  botão ≥ 24 px. **Foco:** nunca é roubado; ao fechar com o foco dentro, ele
+  volta ao elemento da página onde estava, se ainda existir.
+- **Robustez:** um render por quadro; uma falha do indicador não interrompe a
+  tradução (`createOverlayStateListener`); `pagehide` definitivo descarta.
+
+**Consequências.**
+
+- A página percebe o host (`div[data-lerium-ui]`) enquanto o indicador está
+  visível, e eventos de clique e foco chegam a ela com o host como alvo; não
+  vê o conteúdo. Aceito: ela já vê o próprio texto mudar.
+- Em aba em segundo plano o indicador atualiza menos (o navegador reduz os
+  quadros); na aba em primeiro plano, cada contagem aparece.
+- Os E2E de ida e volta excluem o host do snapshot; um teste dedicado
+  compara a página inteira depois que o indicador some.
