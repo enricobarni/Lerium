@@ -6,6 +6,25 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e o 
 
 ## [Não lançado]
 
+Fase 5 — o texto que você está lendo é traduzido primeiro.
+
+### Adicionado
+
+- Fila com prioridade: o texto visível vai antes, depois o que está perto da tela, o resto e por fim cabeçalhos, rodapés e menus ([ADR-015](docs/DECISIONS.md)).
+- A ordem se ajusta enquanto você rola a página ([ADR-016](docs/DECISIONS.md)).
+- Um trecho fora da tela é interrompido quando o texto visível espera mais de meio segundo ([ADR-017](docs/DECISIONS.md)).
+- Capítulos separados por `<br>` também priorizam o trecho na tela ([ADR-018](docs/DECISIONS.md)).
+- Indicador de progresso na própria página, acessível e discreto, que some sozinho ao terminar ([ADR-019](docs/DECISIONS.md)).
+- Métricas locais no estado do job, sem texto: tempo até a primeira tradução visível, duração, espera do visível e interrupções.
+
+### Alterado
+
+- Uma tradução por vez no Ollama, entre todas as abas: no CPU, traduzir em paralelo quase não ganhou tempo ([ADR-015](docs/DECISIONS.md)).
+
+### Segurança
+
+- O indicador fica num shadow root fechado, nunca mostra texto da página e o build recusa shadow root aberto no script da página.
+
 ## [0.2.0] - 2026-10-31
 
 Primeira versão que **traduz páginas**: clique no ícone do Lerium e em **Traduzir página**. A tradução roda no Ollama do seu computador.
