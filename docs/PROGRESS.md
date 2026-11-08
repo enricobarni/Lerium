@@ -5,12 +5,13 @@
 
 ## Estado atual
 
-- **Fase:** 5 — Experiência progressiva e desempenho (em andamento)
-- **Tarefa:** `feat/progress-overlay` (indicador de progresso acessível na página)
+- **Fase:** 5 — Experiência progressiva e desempenho: código concluído (PRs #24–#28 mesclados); **falta o Gate** (medições do responsável no Chrome real, roteiro em TEST_PLAN)
+- **Tarefa:** nenhuma em andamento; sessão encerrada em 08/11/2026 a pedido do responsável. Retomar por [HANDOFF.md](HANDOFF.md)
+- **Repositório:** `main` em `7ff72e4`; só `main` local; sem worktrees; 2068 testes e 35 E2E passando
 - **Aceite manual de `feat/viewport-priority`** (31/10/2026): `firstVisibleMs` 2–4 s e `visibleLatency` 3–5 s no Chrome real; pausa ocasional da tela com o popup avançando (ver ADR-016)
-- **Fase 4:** concluída — PRs #17–#22 mesclados; Gate cumprido (E2E de ida e volta byte a byte e aceite manual do responsável no Chrome real)
+- **Fase 4:** concluída — PRs #17–#23 mesclados; Gate cumprido (E2E de ida e volta byte a byte e aceite manual do responsável no Chrome real)
 - **Fase 3:** concluída — PRs #13–#16 mesclados; gate cumprido (18/18 execuções com o modelo real); ADR-011 aceita após conferência do model card pelo responsável
-- **Versão:** `0.2.0` (primeira que traduz páginas; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.2.0` pendente de criação pelo responsável. Versão anterior: `0.1.0`. Tag `v0.1.0` em `ab06507` (validado: lint, typecheck, 398 testes, build, 8 E2E) e release [Lerium 0.1.0](https://github.com/enricobarni/Lerium/releases/tag/v0.1.0) publicadas pelo responsável.
+- **Versão:** `0.2.0` (primeira que traduz páginas; ver [CHANGELOG.md](../CHANGELOG.md)). Tag `v0.2.0` em `1ed9d20`, criada pelo responsável. Versão anterior: `0.1.0`, tag `v0.1.0` em `ab06507` (validado: lint, typecheck, 398 testes, build, 8 E2E) e release [Lerium 0.1.0](https://github.com/enricobarni/Lerium/releases/tag/v0.1.0) publicadas pelo responsável. Próxima: `0.3.0`, depois do Gate da Fase 5
 - **Fase 2:** concluída — PRs #9 e #10 mesclados; aceite manual do responsável no Chrome estável (conexão, modelos listados, Ollama fechado)
 - **Fase 0:** concluída (PRs #1–#4)
 - **Fase 1:** concluída — PRs #5–#8 mesclados; aceite manual do popup e das opções pelo responsável (teclado, abertura da aba de opções, tema escuro)
@@ -787,4 +788,4 @@ Ordem de merge: `docs/product-scope` → `docs/architecture` → `docs/agent-rul
 
 ## Próxima tarefa
 
-Fase 5 — Gate: o responsável executa o roteiro “Gate da Fase 5” do TEST_PLAN (memória, tarefas longas e tempos no hardware real) e o smoke do indicador; com o resultado, registrar o Gate e versionar 0.3.0.
+Ver [HANDOFF.md](HANDOFF.md), seção 4. Fase 5 — Gate: o responsável executa o roteiro “Gate da Fase 5” do TEST_PLAN (memória, tarefas longas e tempos no hardware real) e o smoke do indicador; com o resultado, registrar o Gate e versionar 0.3.0.

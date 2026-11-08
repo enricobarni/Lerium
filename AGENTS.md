@@ -8,6 +8,7 @@ Guia para agentes de IA que trabalham neste repositório.
 
 ## Documentos
 
+- [docs/HANDOFF.md](docs/HANDOFF.md) — **leia primeiro numa sessão nova**: onde o projeto parou, próximos passos, regras do responsável e lições aprendidas.
 - [docs/PLAN.md](docs/PLAN.md) — **contrato de execução**. Em caso de conflito com qualquer outro documento, o plano prevalece.
 - [docs/SCOPE.md](docs/SCOPE.md) — escopo do MVP, questões em aberto e situação de licença da referência.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — arquitetura e fluxo MV3.
