@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import {
   createContentController,
+  createOverlayStateListener,
   handlePageHide,
   toPageStateView,
   type ContentController,
@@ -438,6 +439,26 @@ describe('createContentController — comandos', () => {
     });
     expect(parsePageCommandResponse(response)).toEqual(response);
     expect(calls).toEqual([]);
+  });
+});
+
+describe('createOverlayStateListener', () => {
+  it('repassa ao indicador só a visão do estado', () => {
+    const update = vi.fn();
+    const listener = createOverlayStateListener({ update });
+    const state = { ...IDLE_STATE, status: 'translating' as const, total: 3, done: 1 };
+    listener(state);
+    expect(update).toHaveBeenCalledExactlyOnceWith(toPageStateView(state));
+  });
+
+  it('engole a exceção do indicador', () => {
+    const update = vi.fn(() => {
+      throw new Error('indicador quebrado');
+    });
+    const listener = createOverlayStateListener({ update });
+    expect(() => listener(IDLE_STATE)).not.toThrow();
+    expect(() => listener(IDLE_STATE)).not.toThrow();
+    expect(update).toHaveBeenCalledTimes(2);
   });
 });
 
